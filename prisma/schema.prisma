@@ -1,0 +1,329 @@
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider = "sqlite"
+  url      = env("DATABASE_URL")
+}
+
+// -------------------------------------------------------------
+// 1. GESTÃO DE TENANTS (EXPERTS) E USUÁRIOS
+// -------------------------------------------------------------
+model User {
+  id           String             @id @default(cuid())
+  name         String
+  email        String             @unique
+  passwordHash String
+  role         String             @default("OPERATOR") // ADMIN, MANAGER, EXPERT, OPERATOR
+  createdAt    DateTime           @default(now())
+  updatedAt    DateTime           @updatedAt
+  memberships  TenantMembership[]
+  auditLogs    AuditLog[]
+}
+
+model Tenant {
+  id                 String             @id @default(cuid())
+  name               String
+  slug               String             @unique
+  description        String?
+  emailSender        String?            @default("contato@expertlaunch.com.br")
+  whatsappNumber     String?
+  hotmartHottok      String?            // Token secreto Hotmart do expert
+  hotmartAccountId   String?
+  status             String             @default("ACTIVE") // ACTIVE, SUSPENDED
+  createdAt          DateTime           @default(now())
+  updatedAt          DateTime           @updatedAt
+
+  memberships        TenantMembership[]
+  contacts           Contact[]
+  tags               Tag[]
+  automations        Automation[]
+  scheduledJobs      ScheduledJob[]
+  messageLogs        MessageLog[]
+  webhookLogs        HotmartWebhookLog[]
+  productRules       HotmartProductRule[]
+  campaigns          Campaign[]
+  auditLogs          AuditLog[]
+  whatsappInstance   WhatsappInstance?
+}
+
+model TenantMembership {
+  id        String   @id @default(cuid())
+  tenantId  String
+  userId    String
+  role      String   @default("OPERATOR") // MANAGER, EXPERT, OPERATOR
+  createdAt DateTime @default(now())
+
+  tenant    Tenant   @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+  user      User     @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@unique([tenantId, userId])
+}
+
+// -------------------------------------------------------------
+// 2. CRM, CONTATOS E SEGMENTAÇÃO
+// -------------------------------------------------------------
+model Contact {
+  id             String          @id @default(cuid())
+  tenantId       String
+  name           String
+  email          String
+  phone          String?         // Formato internacional +55...
+  status         String          @default("ACTIVE") // ACTIVE, UNSUBSCRIBED, BOUNCED
+  utmSource      String?
+  utmMedium      String?
+  utmCampaign    String?
+  utmContent     String?
+  utmTerm        String?
+  customFields   String?         // JSON com dados adicionais
+  consentGiven   Boolean         @default(true) // LGPD
+  consentDate    DateTime?       @default(now())
+  createdAt      DateTime        @default(now())
+  updatedAt      DateTime        @updatedAt
+
+  tenant         Tenant          @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+  tags           ContactTag[]
+  enrollments    AutomationEnrollment[]
+  stepLogs       AutomationStepLog[]
+  scheduledJobs  ScheduledJob[]
+  messageLogs    MessageLog[]
+
+  @@unique([tenantId, email])
+  @@index([tenantId, phone])
+  @@index([tenantId, status])
+}
+
+model Tag {
+  id          String       @id @default(cuid())
+  tenantId    String
+  name        String
+  color       String       @default("#6366f1")
+  description String?
+  createdAt   DateTime     @default(now())
+
+  tenant      Tenant       @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+  contacts    ContactTag[]
+
+  @@unique([tenantId, name])
+}
+
+model ContactTag {
+  id        String   @id @default(cuid())
+  contactId String
+  tagId     String
+  addedAt   DateTime @default(now())
+
+  contact   Contact  @relation(fields: [contactId], references: [id], onDelete: Cascade)
+  tag       Tag      @relation(fields: [tagId], references: [id], onDelete: Cascade)
+
+  @@unique([contactId, tagId])
+}
+
+// -------------------------------------------------------------
+// 3. EDITOR VISUAL E MOTOR DE AUTOMAÇÃO
+// -------------------------------------------------------------
+model Automation {
+  id          String                 @id @default(cuid())
+  tenantId    String
+  name        String
+  description String?
+  status      String                 @default("DRAFT") // DRAFT, ACTIVE, PAUSED
+  triggerType String                 @default("TAG_ADDED") // CONTACT_CREATED, TAG_ADDED, HOTMART_EVENT, WEBHOOK, MANUAL
+  triggerConfig String?              // JSON com detalhes do gatilho
+  nodes       String                 @default("[]") // JSON do React Flow (nós, coordenadas, configurações)
+  edges       String                 @default("[]") // JSON do React Flow (conexões)
+  createdAt   DateTime               @default(now())
+  updatedAt   DateTime               @updatedAt
+
+  tenant      Tenant                 @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+  enrollments AutomationEnrollment[]
+  scheduledJobs ScheduledJob[]
+}
+
+model AutomationEnrollment {
+  id             String              @id @default(cuid())
+  automationId   String
+  contactId      String
+  currentNodeId  String?
+  status         String              @default("ACTIVE") // ACTIVE, WAITING, COMPLETED, CANCELLED, FAILED
+  enteredAt      DateTime            @default(now())
+  completedAt    DateTime?
+  metadata       String?             // JSON com variáveis de execução
+
+  automation     Automation          @relation(fields: [automationId], references: [id], onDelete: Cascade)
+  contact        Contact             @relation(fields: [contactId], references: [id], onDelete: Cascade)
+  stepLogs       AutomationStepLog[]
+  scheduledJobs  ScheduledJob[]
+
+  @@index([automationId, status])
+  @@index([contactId, status])
+}
+
+model AutomationStepLog {
+  id           String                @id @default(cuid())
+  enrollmentId String
+  contactId    String
+  nodeId       String
+  nodeType     String                // trigger, action, condition, delay
+  action       String                // SEND_EMAIL, SEND_WHATSAPP, ADD_TAG, WAIT_DELAY, CHECK_CONDITION, etc.
+  status       String                @default("SUCCESS") // SUCCESS, SKIPPED, FAILED
+  details      String?               // JSON com detalhes
+  executedAt   DateTime              @default(now())
+
+  enrollment   AutomationEnrollment  @relation(fields: [enrollmentId], references: [id], onDelete: Cascade)
+  contact      Contact               @relation(fields: [contactId], references: [id], onDelete: Cascade)
+
+  @@index([enrollmentId])
+  @@index([contactId])
+}
+
+model ScheduledJob {
+  id              String               @id @default(cuid())
+  tenantId        String
+  enrollmentId    String
+  contactId       String
+  automationId    String
+  targetNodeId    String
+  executeAt       DateTime
+  status          String               @default("PENDING") // PENDING, PROCESSING, COMPLETED, CANCELLED, FAILED
+  cancelCondition String?              // Ex: PURCHASE_APPROVED, TAG_ADDED:Cliente, etc.
+  attempts        Int                  @default(0)
+  maxAttempts     Int                  @default(3)
+  lastError       String?
+  createdAt       DateTime             @default(now())
+
+  tenant          Tenant               @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+  enrollment      AutomationEnrollment @relation(fields: [enrollmentId], references: [id], onDelete: Cascade)
+  contact         Contact              @relation(fields: [contactId], references: [id], onDelete: Cascade)
+  automation      Automation           @relation(fields: [automationId], references: [id], onDelete: Cascade)
+
+  @@index([status, executeAt])
+  @@index([tenantId, contactId, status])
+}
+
+// -------------------------------------------------------------
+// 4. MENSAGENS (WHATSAPP E E-MAIL)
+// -------------------------------------------------------------
+model MessageLog {
+  id                String    @id @default(cuid())
+  tenantId          String
+  contactId         String
+  channel           String    // WHATSAPP, EMAIL
+  provider          String    // SIMULATED, META_CLOUD, RESEND, BREVO
+  recipient         String
+  subject           String?
+  content           String
+  templateName      String?
+  status            String    @default("SENT") // QUEUED, SENT, DELIVERED, READ, FAILED, BOUNCED
+  externalMessageId String?
+  costEstimate      Float?    @default(0.0)
+  error             String?
+  sentAt            DateTime  @default(now())
+  deliveredAt       DateTime?
+  readAt            DateTime?
+
+  tenant            Tenant    @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+  contact           Contact   @relation(fields: [contactId], references: [id], onDelete: Cascade)
+
+  @@index([tenantId, channel, status])
+  @@index([contactId])
+}
+
+// -------------------------------------------------------------
+// 5. INTEGRAÇÃO HOTMART E REGRAS DE PRODUTO
+// -------------------------------------------------------------
+model HotmartWebhookLog {
+  id             String    @id @default(cuid())
+  tenantId       String
+  eventType      String    // PURCHASE_APPROVED, PURCHASE_WAITING_PAYMENT, PURCHASE_CANCELED, PURCHASE_REFUNDED, etc.
+  transactionId  String?
+  buyerEmail     String
+  buyerName      String?
+  buyerPhone     String?
+  productName    String?
+  productId      String?
+  paymentType    String?   // PIX, BILLET, CREDIT_CARD
+  priceValue     Float?
+  idempotencyKey String    @unique // Garante que webhooks duplicados da Hotmart sejam descartados com segurança
+  processed      Boolean   @default(false)
+  payload        String    // JSON original completo recebido
+  receivedAt     DateTime  @default(now())
+
+  tenant         Tenant    @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+
+  @@index([tenantId, buyerEmail])
+  @@index([transactionId])
+}
+
+model HotmartProductRule {
+  id                String   @id @default(cuid())
+  tenantId          String
+  productId         String
+  productName       String
+  eventType         String   // PURCHASE_APPROVED, PURCHASE_WAITING_PAYMENT, etc.
+  addTags           String   @default("[]") // JSON Array com tags a adicionar
+  removeTags        String   @default("[]") // JSON Array com tags a remover
+  startAutomationId String?  // ID do fluxo a iniciar
+  cancelAutomations String   @default("[]") // JSON Array com IDs de fluxos a cancelar imediatamente
+  createdAt         DateTime @default(now())
+
+  tenant            Tenant   @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+}
+
+// -------------------------------------------------------------
+// 6. CAMPANHAS E MODELOS DE LANÇAMENTO
+// -------------------------------------------------------------
+model Campaign {
+  id          String    @id @default(cuid())
+  tenantId    String
+  name        String
+  modelType   String    // SEMENTE, CLASSICO, PERPETUO, WEBINAR, RECUPERACAO_PIX, POS_VENDA
+  startDate   DateTime?
+  endDate     DateTime?
+  status      String    @default("ACTIVE") // ACTIVE, DRAFT, FINISHED
+  goalLeads   Int?      @default(1000)
+  notes       String?
+  createdAt   DateTime  @default(now())
+
+  tenant      Tenant    @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+}
+
+// -------------------------------------------------------------
+// 7. TRILHA DE AUDITORIA E LGPD
+// -------------------------------------------------------------
+model AuditLog {
+  id         String   @id @default(cuid())
+  tenantId   String?
+  userId     String?
+  action     String   // CONTACT_DELETED, EXPORT_CSV, WEBHOOK_PROCESSED, AUTOMATION_TRIGGERED, etc.
+  resource   String
+  details    String?  // JSON
+  ipAddress  String?
+  createdAt  DateTime @default(now())
+
+  tenant     Tenant?  @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+  user       User?    @relation(fields: [userId], references: [id], onDelete: SetNull)
+
+  @@index([tenantId, createdAt])
+}
+
+// -------------------------------------------------------------
+// 8. MULTI-TENANT EVOLUTION API (INSTÂNCIA EXCLUSIVA POR EXPERT)
+// -------------------------------------------------------------
+model WhatsappInstance {
+  id              String    @id @default(cuid())
+  tenantId        String    @unique
+  instanceName    String    @unique
+  instanceToken   String
+  phone           String?
+  profileName     String?
+  profilePicUrl   String?
+  status          String    @default("DISCONNECTED") // CONNECTED, DISCONNECTED, CONNECTING
+  qrcode          String?   // Base64 para exibição única no frontend
+  lastConnectedAt DateTime?
+  createdAt       DateTime  @default(now())
+  updatedAt       DateTime  @updatedAt
+
+  tenant          Tenant    @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+}
