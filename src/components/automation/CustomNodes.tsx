@@ -18,14 +18,16 @@ import {
 // NÍVEL 1: NÓS DO FLUXO PRINCIPAL (MACRO)
 // ============================================================
 
-// 1. Nó de Tag (Gatilho de Entrada / Saída) - Suporta Múltiplas Tags e Validação E/OU
+// 1. Nó de Tag (Gatilho de Entrada / Saída) - Suporta Tags de Entrada e Exclusão
 export const TagNode = memo(({ data, selected }: any) => {
   const count = data.config?.leadsCount ?? data.leadsCount ?? 0;
-  const tagNames: string[] =
+  const entryTags: string[] =
+    data.config?.entryTags ||
     data.config?.tagNames ||
     (data.config?.tagName ? [data.config.tagName] : data.tagName ? [data.tagName] : []);
-  const hasConfig = tagNames.length > 0;
-  const matchMode = data.config?.matchMode || 'ALL'; // 'ALL' = E (todas obrigatórias), 'ANY' = OU (qualquer uma)
+  const exclusionTags: string[] = data.config?.exclusionTags || [];
+  const hasConfig = entryTags.length > 0;
+  const matchMode = data.config?.matchMode || 'ALL'; // 'ALL' = TODAS simultâneas
 
   return (
     <div className="flex flex-col items-center group cursor-pointer select-none">
@@ -63,27 +65,43 @@ export const TagNode = memo(({ data, selected }: any) => {
       </div>
 
       {/* Legenda abaixo do nó */}
-      <div className="text-center mt-1.5 max-w-[190px]">
+      <div className="text-center mt-1.5 max-w-[210px]">
         <div className="flex items-center justify-center gap-1 flex-wrap">
           <span className="text-[12px] font-medium text-slate-200 tracking-wide block">
-            Tags{tagNames.length > 1 ? ` (${tagNames.length})` : ''} | {count} lead{count === 1 ? '' : 's'}
+            Tags{entryTags.length > 1 ? ` (${entryTags.length})` : ''} | {count} lead{count === 1 ? '' : 's'}
           </span>
-          {tagNames.length > 1 && (
+          {entryTags.length > 1 && (
             <span className="text-[9px] font-bold px-1.5 py-0.2 rounded bg-indigo-950 text-indigo-300 border border-indigo-800">
               {matchMode === 'ALL' ? 'TODAS (E)' : 'QUALQUER (OU)'}
             </span>
           )}
         </div>
 
-        {tagNames.length > 0 && (
+        {/* Tags de Entrada */}
+        {entryTags.length > 0 && (
           <div className="flex flex-wrap items-center justify-center gap-1 mt-1">
-            {tagNames.map((tn: string, idx: number) => (
+            {entryTags.map((tn: string, idx: number) => (
               <span
                 key={idx}
-                className="text-[10px] font-semibold text-purple-300 bg-purple-950/70 px-2 py-0.5 rounded-md border border-purple-800/60 truncate max-w-[170px] inline-block"
+                className="text-[10px] font-semibold text-purple-300 bg-purple-950/70 px-2 py-0.5 rounded-md border border-purple-800/60 truncate max-w-[190px] inline-block"
                 title={tn}
               >
                 {tn}
+              </span>
+            ))}
+          </div>
+        )}
+
+        {/* Tags de Exclusão (se houver) */}
+        {exclusionTags.length > 0 && (
+          <div className="flex flex-wrap items-center justify-center gap-1 mt-1">
+            {exclusionTags.map((ex: string, idx: number) => (
+              <span
+                key={idx}
+                className="text-[9px] font-medium text-red-300 bg-red-950/60 px-1.5 py-0.2 rounded border border-red-800/60 truncate max-w-[190px] inline-block"
+                title={`Exclui: ${ex}`}
+              >
+                Bloqueia: {ex}
               </span>
             ))}
           </div>

@@ -372,11 +372,32 @@ export class AutomationEngine {
     );
     currentTags.add(tagName.toLowerCase().trim());
 
-    // Helper para verificar se um nó de Tag satisfaz os critérios (individual ou multi-tag AND/OR)
+    // Helper para verificar se um nó de Tag satisfaz os critérios (Tags de Entrada, Tags de Exclusão e Data Limite)
     const isTagNodeSatisfied = (tagNode: WorkflowNode): boolean => {
       const cfg = tagNode.data.config || {};
+
+      // 1. Agendar data e hora limite? (Se expirou, não libera)
+      if (cfg.hasDateLimit && cfg.dateLimit) {
+        const limitDate = new Date(cfg.dateLimit);
+        if (!isNaN(limitDate.getTime()) && new Date() > limitDate) {
+          return false;
+        }
+      }
+
+      // 2. Tag(s) que impossibilitam a entrada dos leads (Exclusão)
+      const exclusionList: string[] = cfg.exclusionTags || [];
+      if (exclusionList.length > 0) {
+        const hasAllExclusions = exclusionList.every((t) => currentTags.has(t.toLowerCase().trim()));
+        if (hasAllExclusions) {
+          return false; // Bloqueado: possui todas as tags de exclusão
+        }
+      }
+
+      // 3. Tag(s) de entrada dos leads
       const tagList: string[] =
-        cfg.tagNames && Array.isArray(cfg.tagNames) && cfg.tagNames.length > 0
+        cfg.entryTags && Array.isArray(cfg.entryTags) && cfg.entryTags.length > 0
+          ? cfg.entryTags
+          : cfg.tagNames && Array.isArray(cfg.tagNames) && cfg.tagNames.length > 0
           ? cfg.tagNames
           : cfg.tagName
           ? [cfg.tagName]
@@ -386,7 +407,7 @@ export class AutomationEngine {
 
       if (tagList.length === 0) return false;
 
-      // O evento disparador atual (tagName) precisa ser uma das tags do nó
+      // O evento disparador atual (tagName) precisa ser uma das tags de entrada
       const matchesTrigger = tagList.some(
         (t) => t.toLowerCase().trim() === tagName.toLowerCase().trim()
       );
@@ -395,10 +416,10 @@ export class AutomationEngine {
       const matchMode: 'ALL' | 'ANY' = cfg.matchMode || 'ALL';
 
       if (matchMode === 'ALL') {
-        // Todas as tags do nó precisam estar presentes no contato
+        // Para o lead entrar, deve possuir TODAS as tags de entrada simultaneamente
         return tagList.every((t) => currentTags.has(t.toLowerCase().trim()));
       } else {
-        // Qualquer uma basta (já que matchesTrigger é true, está satisfeito)
+        // Qualquer uma basta
         return true;
       }
     };

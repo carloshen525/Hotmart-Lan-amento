@@ -48,6 +48,7 @@ import {
   Settings,
   HelpCircle,
   RotateCw,
+  RotateCcw,
   Share2,
   Users,
   Flame,
@@ -103,9 +104,12 @@ export default function AutomationCanvasPage() {
   // Seleção de nó e modais
   const [selectedNode, setSelectedNode] = useState<Node | null>(null);
   const [isTagModalOpen, setIsTagModalOpen] = useState(false);
-  const [tagModalSelectedNames, setTagModalSelectedNames] = useState<string[]>([]);
-  const [tagModalMatchMode, setTagModalMatchMode] = useState<'ALL' | 'ANY'>('ALL');
-  const [tagSearchQuery, setTagSearchQuery] = useState('');
+  const [tagEntryTags, setTagEntryTags] = useState<string[]>([]);
+  const [tagExclusionTags, setTagExclusionTags] = useState<string[]>([]);
+  const [tagHasDateLimit, setTagHasDateLimit] = useState(false);
+  const [tagDateLimit, setTagDateLimit] = useState('');
+  const [currentEntrySelect, setCurrentEntrySelect] = useState('');
+  const [currentExclusionSelect, setCurrentExclusionSelect] = useState('');
   const [isMessageDrawerOpen, setIsMessageDrawerOpen] = useState(false);
   const [isCreateTagOpen, setIsCreateTagOpen] = useState(false);
   const [newTagName, setNewTagName] = useState('');
@@ -808,45 +812,74 @@ export default function AutomationCanvasPage() {
     setIsTimerModalOpen(false);
   };
 
-  // Tag Selection Modal Handlers (Suporte a Multi-Tags e E/OU - Denis Dominique)
+  // Tag Selection Modal Handlers (Idêntico à ferramenta de referência)
   const openTagModal = (nodeToConfigure?: Node) => {
     const target = nodeToConfigure || selectedNode;
     if (!target) return;
     setSelectedNode(target);
     const cfg = (target.data.config as any) || {};
-    const existingList: string[] =
-      cfg.tagNames && Array.isArray(cfg.tagNames) && cfg.tagNames.length > 0
+
+    const existingEntries: string[] =
+      cfg.entryTags && Array.isArray(cfg.entryTags) && cfg.entryTags.length > 0
+        ? cfg.entryTags
+        : cfg.tagNames && Array.isArray(cfg.tagNames) && cfg.tagNames.length > 0
         ? cfg.tagNames
         : cfg.tagName
         ? [cfg.tagName]
-        : target.data.tagName
-        ? [target.data.tagName]
+        : (target.data as any).tagName
+        ? [(target.data as any).tagName]
         : [];
-    setTagModalSelectedNames(existingList);
-    setTagModalMatchMode(cfg.matchMode || 'ALL');
-    setTagSearchQuery('');
+
+    setTagEntryTags(existingEntries);
+    setTagExclusionTags(cfg.exclusionTags || []);
+    setTagHasDateLimit(!!cfg.hasDateLimit);
+    setTagDateLimit(cfg.dateLimit || '');
+    setCurrentEntrySelect('');
+    setCurrentExclusionSelect('');
     setIsCreateTagOpen(false);
     setIsTagModalOpen(true);
   };
 
-  const handleToggleTagSelection = (name: string) => {
-    setTagModalSelectedNames((prev) =>
-      prev.includes(name) ? prev.filter((n) => n !== name) : [...prev, name]
-    );
+  const handleAddEntryTag = () => {
+    if (!currentEntrySelect.trim()) return;
+    if (!tagEntryTags.includes(currentEntrySelect.trim())) {
+      setTagEntryTags((prev) => [...prev, currentEntrySelect.trim()]);
+    }
+    setCurrentEntrySelect('');
+  };
+
+  const handleRemoveEntryTag = (name: string) => {
+    setTagEntryTags((prev) => prev.filter((t) => t !== name));
+  };
+
+  const handleAddExclusionTag = () => {
+    if (!currentExclusionSelect.trim()) return;
+    if (!tagExclusionTags.includes(currentExclusionSelect.trim())) {
+      setTagExclusionTags((prev) => [...prev, currentExclusionSelect.trim()]);
+    }
+    setCurrentExclusionSelect('');
+  };
+
+  const handleRemoveExclusionTag = (name: string) => {
+    setTagExclusionTags((prev) => prev.filter((t) => t !== name));
   };
 
   const handleSaveTagConfig = () => {
     if (!selectedNode) return;
 
     const count = availableTags
-      .filter((t) => tagModalSelectedNames.includes(t.name))
+      .filter((t) => tagEntryTags.includes(t.name))
       .reduce((acc, t) => acc + (t._count?.contacts || 0), 0);
 
     const updatedCfg: any = {
       ...((selectedNode.data.config as object) || {}),
-      tagNames: tagModalSelectedNames,
-      tagName: tagModalSelectedNames[0] || '',
-      matchMode: tagModalMatchMode,
+      entryTags: tagEntryTags,
+      tagNames: tagEntryTags,
+      tagName: tagEntryTags[0] || '',
+      exclusionTags: tagExclusionTags,
+      hasDateLimit: tagHasDateLimit,
+      dateLimit: tagDateLimit,
+      matchMode: 'ALL',
       leadsCount: count,
     };
 
@@ -857,9 +890,11 @@ export default function AutomationCanvasPage() {
               ...n,
               data: {
                 ...n.data,
-                tagName: tagModalSelectedNames[0] || '',
-                tagNames: tagModalSelectedNames,
-                matchMode: tagModalMatchMode,
+                tagName: tagEntryTags[0] || '',
+                tagNames: tagEntryTags,
+                entryTags: tagEntryTags,
+                exclusionTags: tagExclusionTags,
+                matchMode: 'ALL',
                 leadsCount: count,
                 config: updatedCfg,
               },
@@ -884,9 +919,7 @@ export default function AutomationCanvasPage() {
       const data = await res.json();
       if (res.ok && data.tag) {
         setAvailableTags((prev) => [...prev, data.tag]);
-        setTagModalSelectedNames((prev) =>
-          prev.includes(data.tag.name) ? prev : [...prev, data.tag.name]
-        );
+        setCurrentEntrySelect(data.tag.name);
         setNewTagName('');
         setIsCreateTagOpen(false);
       }
@@ -1259,109 +1292,148 @@ export default function AutomationCanvasPage() {
       </div>
 
       {/* ============================================================ */}
-      {/* MODAL / DRAWER DE CONFIGURAÇÃO DE TAGS (MULTI-TAGS E/OU) */}
+      {/* MODAL DE CONFIGURAÇÃO DE TAG (IDÊNTICO À FERRAMENTA DE REFERÊNCIA) */}
       {/* ============================================================ */}
       {isTagModalOpen && (
-        <div className="fixed inset-0 bg-black/70 backdrop-blur-sm z-50 flex items-center justify-center p-4">
-          <div className="bg-[#181c25] rounded-2xl shadow-2xl border border-slate-800 max-w-lg w-full p-6 text-xs text-slate-200">
-            <div className="flex items-center justify-between pb-3 border-b border-slate-800">
-              <div className="flex items-center gap-2">
-                <TagIcon className="w-4 h-4 text-purple-400" />
-                <h3 className="font-bold text-white text-sm">Configurar Gatilho de Tags</h3>
+        <div className="fixed inset-0 bg-black/75 backdrop-blur-sm z-50 flex items-center justify-center p-4">
+          <div className="bg-[#12141a] rounded-2xl shadow-2xl border border-[#232734] max-w-lg w-full p-6 text-xs text-slate-200">
+            {/* Header: ID - xxx | Configurar Tag + Ícones à direita */}
+            <div className="flex items-start justify-between pb-4 border-b border-slate-800/80">
+              <div>
+                <h3 className="font-bold text-white text-base tracking-wide">
+                  ID - {selectedNode?.id?.replace(/[^0-9]/g, '').slice(-7) || '8719590'}
+                </h3>
+                <p className="text-slate-400 text-xs mt-0.5">Configurar Tag</p>
               </div>
-              <button
-                onClick={() => setIsTagModalOpen(false)}
-                className="text-slate-400 hover:text-white"
-              >
-                <X className="w-4 h-4" />
-              </button>
-            </div>
-
-            {/* Regra de Validação E / OU (Multi-tags para produto + situação) */}
-            <div className="mt-3.5 p-3 bg-[#12141a] rounded-xl border border-slate-800 space-y-2">
-              <span className="text-[11px] font-bold text-slate-300 block uppercase tracking-wider">
-                Regra de Ativação Multi-Tags:
-              </span>
-              <div className="grid grid-cols-2 gap-2">
+              <div className="flex items-center gap-3">
                 <button
                   type="button"
-                  onClick={() => setTagModalMatchMode('ALL')}
-                  className={`p-2.5 rounded-lg border text-left transition-all ${
-                    tagModalMatchMode === 'ALL'
-                      ? 'bg-purple-950/60 border-purple-500 text-purple-200 ring-1 ring-purple-500'
-                      : 'bg-[#181c25] border-slate-800 text-slate-400 hover:border-slate-700'
-                  }`}
+                  title="Histórico de alterações"
+                  className="text-slate-400 hover:text-white transition-colors"
                 >
-                  <div className="flex items-center justify-between mb-1">
-                    <span className="font-bold text-xs text-white">TODAS as tags (E / AND)</span>
-                    {tagModalMatchMode === 'ALL' && <Check className="w-3.5 h-3.5 text-purple-400" />}
-                  </div>
-                  <p className="text-[10px] text-slate-400 leading-tight">
-                    O lead precisa ter <b>todas</b> as tags (ex: #Produto E #Compra Aprovada).
-                  </p>
+                  <RotateCcw className="w-4 h-4" />
                 </button>
-
-                <button
-                  type="button"
-                  onClick={() => setTagModalMatchMode('ANY')}
-                  className={`p-2.5 rounded-lg border text-left transition-all ${
-                    tagModalMatchMode === 'ANY'
-                      ? 'bg-purple-950/60 border-purple-500 text-purple-200 ring-1 ring-purple-500'
-                      : 'bg-[#181c25] border-slate-800 text-slate-400 hover:border-slate-700'
-                  }`}
-                >
-                  <div className="flex items-center justify-between mb-1">
-                    <span className="font-bold text-xs text-white">QUALQUER uma (OU / OR)</span>
-                    {tagModalMatchMode === 'ANY' && <Check className="w-3.5 h-3.5 text-purple-400" />}
+                <div className="relative group">
+                  <div className="absolute -top-7 left-1/2 -translate-x-1/2 bg-black px-2 py-0.5 rounded text-[10px] font-bold text-white shadow pointer-events-none opacity-0 group-hover:opacity-100 transition-opacity whitespace-nowrap">
+                    Tutorial
                   </div>
-                  <p className="text-[10px] text-slate-400 leading-tight">
-                    O gatilho dispara se o lead receber <b>qualquer uma</b> das tags marcadas.
-                  </p>
-                </button>
-              </div>
-            </div>
-
-            {/* Tags Selecionadas */}
-            <div className="mt-3">
-              <div className="flex items-center justify-between mb-1.5">
-                <span className="text-[11px] font-semibold text-slate-300">
-                  Tags Selecionadas ({tagModalSelectedNames.length}):
-                </span>
-                {tagModalSelectedNames.length > 0 && (
                   <button
                     type="button"
-                    onClick={() => setTagModalSelectedNames([])}
-                    className="text-[10px] text-slate-400 hover:text-red-400"
+                    title="Tutorial"
+                    className="text-slate-400 hover:text-white transition-colors"
                   >
-                    Limpar todas
+                    <HelpCircle className="w-4 h-4" />
                   </button>
-                )}
+                </div>
+                <button
+                  type="button"
+                  title="Duplicar nó"
+                  className="text-slate-400 hover:text-white transition-colors"
+                >
+                  <Copy className="w-4 h-4" />
+                </button>
+                <button
+                  type="button"
+                  onClick={() => setIsTagModalOpen(false)}
+                  className="text-slate-400 hover:text-white transition-colors ml-1"
+                >
+                  <X className="w-5 h-5" />
+                </button>
+              </div>
+            </div>
+
+            {/* Card: Agendar data e hora limite? */}
+            <div className="mt-4 p-3.5 rounded-xl bg-[#0e1726]/70 border border-cyan-900/40">
+              <div className="flex items-center justify-between">
+                <div className="flex items-center gap-3">
+                  <div className="w-8 h-8 rounded-full bg-cyan-950/80 border border-cyan-800/50 flex items-center justify-center text-cyan-400">
+                    <Clock className="w-4 h-4" />
+                  </div>
+                  <div>
+                    <h4 className="font-semibold text-white text-xs">Agendar data e hora limite?</h4>
+                    <p className="text-slate-400 text-[11px] mt-0.5">
+                      A etapa vai liberar os leads até uma data e hora determinada.
+                    </p>
+                  </div>
+                </div>
+                <label className="relative inline-flex items-center cursor-pointer">
+                  <input
+                    type="checkbox"
+                    checked={tagHasDateLimit}
+                    onChange={(e) => setTagHasDateLimit(e.target.checked)}
+                    className="sr-only peer"
+                  />
+                  <div className="w-11 h-6 bg-slate-800 peer-focus:outline-none rounded-full peer peer-checked:after:translate-x-full peer-checked:after:border-white after:content-[''] after:absolute after:top-[2px] after:left-[2px] after:bg-white after:rounded-full after:h-5 after:w-5 after:transition-all peer-checked:bg-cyan-600"></div>
+                </label>
               </div>
 
-              {tagModalSelectedNames.length === 0 ? (
-                <div className="p-2.5 rounded-lg bg-[#12141a] border border-dashed border-slate-800 text-center text-slate-500 text-[11px]">
-                  Nenhuma tag selecionada. Marque as tags na lista abaixo:
+              {tagHasDateLimit && (
+                <div className="mt-3 pt-3 border-t border-cyan-900/40">
+                  <label className="text-[11px] text-slate-300 block mb-1">Data e hora limite de liberação:</label>
+                  <input
+                    type="datetime-local"
+                    value={tagDateLimit}
+                    onChange={(e) => setTagDateLimit(e.target.value)}
+                    className="w-full p-2 bg-[#101217] border border-cyan-900/50 rounded-lg text-xs text-white focus:outline-none focus:border-cyan-500"
+                  />
                 </div>
-              ) : (
-                <div className="flex flex-wrap gap-1.5 p-2 bg-[#12141a] rounded-lg border border-slate-800 max-h-24 overflow-y-auto">
-                  {tagModalSelectedNames.map((name) => {
+              )}
+            </div>
+
+            {/* Seção 1: Tag(s) de entrada dos leads */}
+            <div className="mt-5 space-y-1.5">
+              <h4 className="font-bold text-white text-xs">Tag(s) de entrada dos leads</h4>
+              <p className="text-slate-400 text-[11px]">
+                Para o lead entrar nesta tag, o mesmo deve possuir TODAS as tags abaixo, simultaneamente.
+              </p>
+
+              <div className="flex items-center gap-2 pt-1">
+                <select
+                  value={currentEntrySelect}
+                  onChange={(e) => setCurrentEntrySelect(e.target.value)}
+                  className="flex-1 bg-[#101217] border border-[#2b2b3b] hover:border-slate-600 rounded-xl px-3 py-2.5 text-xs text-white focus:outline-none focus:border-purple-500 transition-colors"
+                >
+                  <option value="" disabled>
+                    Selecione uma tag para adicionar...
+                  </option>
+                  {availableTags.map((t) => (
+                    <option key={t.id} value={t.name}>
+                      {t.name} ({t._count?.contacts || 0} leads)
+                    </option>
+                  ))}
+                </select>
+
+                <button
+                  type="button"
+                  onClick={handleAddEntryTag}
+                  disabled={!currentEntrySelect}
+                  className="w-10 h-10 border border-[#2b2b3b] hover:border-purple-500 hover:bg-[#1a1c24] rounded-xl flex items-center justify-center text-slate-200 hover:text-white text-lg font-bold bg-[#101217] transition-all disabled:opacity-40 disabled:cursor-not-allowed"
+                >
+                  +
+                </button>
+              </div>
+
+              {/* Tags de entrada adicionadas */}
+              {tagEntryTags.length > 0 && (
+                <div className="flex flex-wrap gap-1.5 pt-2">
+                  {tagEntryTags.map((name) => {
                     const tagObj = availableTags.find((t) => t.name === name);
                     return (
                       <span
                         key={name}
-                        className="inline-flex items-center gap-1.5 px-2 py-0.5 rounded-md bg-purple-900/60 text-purple-200 border border-purple-700 text-xs font-semibold"
+                        className="inline-flex items-center gap-1.5 px-2.5 py-1 rounded-lg bg-[#181c25] text-purple-200 border border-purple-800/60 text-xs font-semibold shadow-sm"
                       >
                         <span
                           className="w-2 h-2 rounded-full"
                           style={{ backgroundColor: tagObj?.color || '#a855f7' }}
                         />
-                        <span className="truncate max-w-[200px]">{name}</span>
+                        <span>{name}</span>
                         <button
                           type="button"
-                          onClick={() => handleToggleTagSelection(name)}
-                          className="text-purple-300 hover:text-white"
+                          onClick={() => handleRemoveEntryTag(name)}
+                          className="text-slate-400 hover:text-red-400 transition-colors ml-1"
                         >
-                          <X className="w-3 h-3" />
+                          <X className="w-3.5 h-3.5" />
                         </button>
                       </span>
                     );
@@ -1370,120 +1442,125 @@ export default function AutomationCanvasPage() {
               )}
             </div>
 
-            {/* Campo de Busca de Tags */}
-            <div className="mt-3 relative">
-              <Search className="w-3.5 h-3.5 text-slate-500 absolute left-2.5 top-2.5" />
-              <input
-                type="text"
-                value={tagSearchQuery}
-                onChange={(e) => setTagSearchQuery(e.target.value)}
-                placeholder="Buscar tags cadastradas..."
-                className="w-full pl-8 pr-3 py-1.5 bg-[#12141a] border border-slate-800 rounded-lg text-xs text-white placeholder-slate-500 focus:outline-none focus:border-purple-500"
-              />
-            </div>
+            {/* Seção 2: Tag(s) que impossibilitam a entrada dos leads */}
+            <div className="mt-5 space-y-1.5">
+              <h4 className="font-bold text-white text-xs">
+                Tag(s) que impossibilitam a entrada dos leads
+              </h4>
+              <p className="text-slate-400 text-[11px]">
+                Se o lead possuir TODAS as tags abaixo, ele não entrará nesta etapa.
+              </p>
 
-            {/* Lista de Tags com Checkbox */}
-            <div className="mt-2 space-y-1.5 max-h-40 overflow-y-auto pr-1">
-              {availableTags.length === 0 ? (
-                <div className="text-center py-4 text-slate-500">
-                  Nenhuma tag cadastrada ainda. Crie uma abaixo:
-                </div>
-              ) : (
-                availableTags
-                  .filter((t) =>
-                    t.name.toLowerCase().includes(tagSearchQuery.toLowerCase().trim())
-                  )
-                  .map((t) => {
-                    const isSelected = tagModalSelectedNames.includes(t.name);
-                    return (
-                      <div
-                        key={t.id}
-                        onClick={() => handleToggleTagSelection(t.name)}
-                        className={`p-2.5 rounded-xl border flex items-center justify-between cursor-pointer transition-all ${
-                          isSelected
-                            ? 'bg-purple-950/40 border-purple-600/80 text-white'
-                            : 'bg-[#12141a] hover:bg-slate-800/80 border-slate-800 text-slate-300'
-                        }`}
+              <div className="flex items-center gap-2 pt-1">
+                <select
+                  value={currentExclusionSelect}
+                  onChange={(e) => setCurrentExclusionSelect(e.target.value)}
+                  className="flex-1 bg-[#101217] border border-[#2b2b3b] hover:border-slate-600 rounded-xl px-3 py-2.5 text-xs text-white focus:outline-none focus:border-red-500 transition-colors"
+                >
+                  <option value="" disabled>
+                    Selecione uma tag que impossibilita a entrada...
+                  </option>
+                  {availableTags.map((t) => (
+                    <option key={t.id} value={t.name}>
+                      {t.name} ({t._count?.contacts || 0} leads)
+                    </option>
+                  ))}
+                </select>
+
+                <button
+                  type="button"
+                  onClick={handleAddExclusionTag}
+                  disabled={!currentExclusionSelect}
+                  className="w-10 h-10 border border-[#2b2b3b] hover:border-red-500 hover:bg-[#1a1c24] rounded-xl flex items-center justify-center text-slate-200 hover:text-white text-lg font-bold bg-[#101217] transition-all disabled:opacity-40 disabled:cursor-not-allowed"
+                >
+                  +
+                </button>
+              </div>
+
+              {/* Tags de exclusão adicionadas */}
+              {tagExclusionTags.length > 0 && (
+                <div className="flex flex-wrap gap-1.5 pt-2">
+                  {tagExclusionTags.map((name) => (
+                    <span
+                      key={name}
+                      className="inline-flex items-center gap-1.5 px-2.5 py-1 rounded-lg bg-red-950/40 text-red-200 border border-red-800/60 text-xs font-semibold shadow-sm"
+                    >
+                      <span>Bloquear se possuir: {name}</span>
+                      <button
+                        type="button"
+                        onClick={() => handleRemoveExclusionTag(name)}
+                        className="text-slate-400 hover:text-white transition-colors ml-1"
                       >
-                        <div className="flex items-center gap-2.5">
-                          <div
-                            className={`w-4 h-4 rounded border flex items-center justify-center transition-all ${
-                              isSelected
-                                ? 'bg-purple-600 border-purple-500 text-white'
-                                : 'border-slate-700 bg-slate-900'
-                            }`}
-                          >
-                            {isSelected && <Check className="w-3 h-3 stroke-[3]" />}
-                          </div>
-                          <div
-                            className="w-2.5 h-2.5 rounded-full"
-                            style={{ backgroundColor: t.color }}
-                          />
-                          <span className="font-semibold text-xs">{t.name}</span>
-                        </div>
-                        <span className="text-[10px] text-slate-400 font-mono">
-                          {t._count?.contacts || 0} leads
-                        </span>
-                      </div>
-                    );
-                  })
+                        <X className="w-3.5 h-3.5" />
+                      </button>
+                    </span>
+                  ))}
+                </div>
               )}
             </div>
 
             {/* Criar Nova Tag Rápida */}
-            {!isCreateTagOpen ? (
-              <button
-                type="button"
-                onClick={() => setIsCreateTagOpen(true)}
-                className="w-full mt-3 py-2 border border-dashed border-slate-700 hover:border-purple-500 text-purple-300 rounded-xl text-xs font-semibold flex items-center justify-center gap-1.5 transition-colors"
-              >
-                <Plus className="w-3.5 h-3.5" />
-                <span>Criar Nova Tag</span>
-              </button>
-            ) : (
-              <form onSubmit={handleQuickCreateTag} className="mt-3 p-3 rounded-xl bg-[#12141a] border border-slate-700 space-y-2">
-                <input
-                  type="text"
-                  required
-                  value={newTagName}
-                  onChange={(e) => setNewTagName(e.target.value)}
-                  placeholder="Nome da tag (ex: VIP Lançamento)"
-                  className="w-full p-2 bg-[#181c25] border border-slate-700 rounded-lg text-xs text-white focus:outline-none focus:border-purple-500"
-                />
-                <div className="flex items-center justify-between">
-                  <div className="flex items-center gap-1.5">
-                    {['#8b5cf6', '#10b981', '#f59e0b', '#ef4444', '#3b82f6'].map((c) => (
-                      <div
-                        key={c}
-                        onClick={() => setNewTagColor(c)}
-                        style={{ backgroundColor: c }}
-                        className={`w-5 h-5 rounded-full cursor-pointer transition-transform ${
-                          newTagColor === c ? 'scale-125 ring-2 ring-white' : ''
-                        }`}
-                      />
-                    ))}
+            <div className="mt-4 pt-3 border-t border-slate-800/70">
+              {!isCreateTagOpen ? (
+                <button
+                  type="button"
+                  onClick={() => setIsCreateTagOpen(true)}
+                  className="w-full py-2 border border-dashed border-slate-700 hover:border-purple-500 text-purple-300 rounded-xl text-xs font-semibold flex items-center justify-center gap-1.5 transition-colors"
+                >
+                  <Plus className="w-3.5 h-3.5" />
+                  <span>Cadastrar Nova Tag no Sistema</span>
+                </button>
+              ) : (
+                <form
+                  onSubmit={handleQuickCreateTag}
+                  className="p-3 rounded-xl bg-[#101217] border border-slate-800 space-y-2.5"
+                >
+                  <span className="text-[11px] font-bold text-slate-300 block">Criar Nova Tag:</span>
+                  <input
+                    type="text"
+                    required
+                    value={newTagName}
+                    onChange={(e) => setNewTagName(e.target.value)}
+                    placeholder="Nome da tag (ex: Boleto Gerado, Cliente VIP)"
+                    className="w-full p-2 bg-[#181c25] border border-slate-700 rounded-lg text-xs text-white focus:outline-none focus:border-purple-500"
+                  />
+                  <div className="flex items-center justify-between">
+                    <div className="flex items-center gap-1.5">
+                      {['#8b5cf6', '#10b981', '#f59e0b', '#ef4444', '#3b82f6'].map((c) => (
+                        <div
+                          key={c}
+                          onClick={() => setNewTagColor(c)}
+                          style={{ backgroundColor: c }}
+                          className={`w-5 h-5 rounded-full cursor-pointer transition-transform ${
+                            newTagColor === c ? 'scale-125 ring-2 ring-white' : ''
+                          }`}
+                        />
+                      ))}
+                    </div>
+                    <div className="flex items-center gap-1.5">
+                      <button
+                        type="button"
+                        onClick={() => setIsCreateTagOpen(false)}
+                        className="px-2.5 py-1 text-slate-400 hover:text-white"
+                      >
+                        Cancelar
+                      </button>
+                      <button
+                        type="submit"
+                        className="px-3 py-1 bg-purple-600 hover:bg-purple-500 text-white rounded-lg font-semibold"
+                      >
+                        Salvar e Selecionar
+                      </button>
+                    </div>
                   </div>
-                  <div className="flex items-center gap-1.5">
-                    <button
-                      type="button"
-                      onClick={() => setIsCreateTagOpen(false)}
-                      className="px-2.5 py-1 text-slate-400 hover:text-white"
-                    >
-                      Cancelar
-                    </button>
-                    <button
-                      type="submit"
-                      className="px-3 py-1 bg-purple-600 hover:bg-purple-500 text-white rounded-lg font-semibold"
-                    >
-                      Criar e Adicionar
-                    </button>
-                  </div>
-                </div>
-              </form>
-            )}
+                </form>
+              )}
+            </div>
 
+            {/* Rodapé com Ações */}
             <div className="pt-4 mt-4 border-t border-slate-800 flex items-center justify-between">
               <button
+                type="button"
                 onClick={handleDeleteCurrentNode}
                 className="text-red-400 hover:text-red-300 flex items-center gap-1 text-xs"
               >
@@ -1494,16 +1571,16 @@ export default function AutomationCanvasPage() {
                 <button
                   type="button"
                   onClick={() => setIsTagModalOpen(false)}
-                  className="px-4 py-1.5 border border-slate-700 hover:bg-slate-800 rounded-lg text-slate-300 font-semibold text-xs"
+                  className="px-4 py-2 border border-slate-700 hover:bg-slate-800 rounded-xl text-slate-300 font-semibold text-xs"
                 >
                   Cancelar
                 </button>
                 <button
                   type="button"
                   onClick={handleSaveTagConfig}
-                  className="px-4 py-1.5 bg-purple-600 hover:bg-purple-500 text-white rounded-lg font-bold text-xs shadow-lg shadow-purple-600/30"
+                  className="px-5 py-2 bg-purple-600 hover:bg-purple-500 text-white rounded-xl font-bold text-xs shadow-lg shadow-purple-600/30"
                 >
-                  Salvar Gatilho
+                  Salvar
                 </button>
               </div>
             </div>
