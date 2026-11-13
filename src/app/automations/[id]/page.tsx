@@ -50,12 +50,14 @@ import {
   RotateCw,
   Share2,
   Users,
+  Flame,
 } from 'lucide-react';
 
 import {
   TagNode,
   SequenceLeadNode,
   TimerNode,
+  WarmupNode,
   StartNode,
   WhatsAppNode,
   EmailNode,
@@ -119,6 +121,24 @@ export default function AutomationCanvasPage() {
   const [timerHasWeekDays, setTimerHasWeekDays] = useState(false);
   const [timerWeekDays, setTimerWeekDays] = useState<string[]>(['seg', 'ter', 'qua', 'qui', 'sex']);
 
+  // Modal de Aquecimento (Throttle / Warmup)
+  const [isWarmupModalOpen, setIsWarmupModalOpen] = useState(false);
+  const [warmupRateLimit, setWarmupRateLimit] = useState<number>(1);
+  const [warmupHasInterval, setWarmupHasInterval] = useState(false);
+  const [warmupIntervalStart, setWarmupIntervalStart] = useState('08:00');
+  const [warmupIntervalEnd, setWarmupIntervalEnd] = useState('20:00');
+  const [warmupHasWeekDays, setWarmupHasWeekDays] = useState(false);
+  const [warmupWeekDays, setWarmupWeekDays] = useState<string[]>([
+    'Domingo',
+    'Segunda-feira',
+    'Terça-feira',
+    'Quarta-feira',
+    'Quinta-feira',
+    'Sexta-feira',
+    'Sábado',
+  ]);
+  const [warmupAdvancedOpen, setWarmupAdvancedOpen] = useState(false);
+
   // Modal de Simulação
   const [isSimulateOpen, setIsSimulateOpen] = useState(false);
   const [simClientStatus, setSimClientStatus] = useState(false);
@@ -149,6 +169,8 @@ export default function AutomationCanvasPage() {
       tag: TagNode,
       sequence_lead: SequenceLeadNode,
       timer: TimerNode,
+      aquecimento: WarmupNode,
+      warmup: WarmupNode,
       delay: TimerNode,
       start: StartNode,
       whatsapp: WhatsAppNode,
@@ -491,8 +513,8 @@ export default function AutomationCanvasPage() {
     }
   };
 
-  // Adicionar blocos dentro da Sequência (Timer, WhatsApp, E-mail)
-  const addSequenceBlock = (type: 'timer' | 'whatsapp' | 'email') => {
+  // Adicionar blocos dentro da Sequência (Timer, Aquecimento, WhatsApp, E-mail)
+  const addSequenceBlock = (type: 'timer' | 'aquecimento' | 'whatsapp' | 'email') => {
     const id = `seq_${type}_${Date.now()}`;
     let newN: Node;
 
@@ -529,6 +551,35 @@ export default function AutomationCanvasPage() {
           },
         },
       };
+    } else if (type === 'aquecimento') {
+      newN = {
+        id,
+        type: 'aquecimento',
+        position: { x: 340 + Math.random() * 40, y: 100 + sequenceNodes.length * 40 },
+        data: {
+          label: 'Aquecimento',
+          config: {
+            rateLimitPerMinute: 1,
+            releasesPerMinute: 1,
+            hasInterval: false,
+            intervalStart: '',
+            intervalEnd: '',
+            hasWeekDays: false,
+            weekDays: [
+              'Domingo',
+              'Segunda-feira',
+              'Terça-feira',
+              'Quarta-feira',
+              'Quinta-feira',
+              'Sexta-feira',
+              'Sábado',
+            ],
+            waitingCount: 0,
+            successCount: 0,
+            failedCount: 0,
+          },
+        },
+      };
     } else {
       newN = {
         id,
@@ -552,6 +603,8 @@ export default function AutomationCanvasPage() {
 
     if (type === 'timer') {
       openTimerModal(newN);
+    } else if (type === 'aquecimento') {
+      openWarmupModal(newN);
     } else {
       setIsMessageDrawerOpen(true);
     }
@@ -621,8 +674,67 @@ export default function AutomationCanvasPage() {
         setIsMessageDrawerOpen(true);
       } else if (node.type === 'timer') {
         openTimerModal(node);
+      } else if (node.type === 'aquecimento' || node.type === 'warmup') {
+        openWarmupModal(node);
       }
     }
+  };
+
+  // Aquecimento Modal Handler
+  const openWarmupModal = (nodeToConfigure?: Node) => {
+    const target = nodeToConfigure || selectedNode;
+    if (!target) return;
+    const cfg = (target.data.config as any) || {};
+
+    setWarmupRateLimit(Number(cfg.rateLimitPerMinute ?? cfg.releasesPerMinute ?? 1));
+    setWarmupHasInterval(!!cfg.hasInterval);
+    setWarmupIntervalStart(cfg.intervalStart || '');
+    setWarmupIntervalEnd(cfg.intervalEnd || '');
+    setWarmupHasWeekDays(!!cfg.hasWeekDays);
+    setWarmupWeekDays(
+      cfg.weekDays || [
+        'Domingo',
+        'Segunda-feira',
+        'Terça-feira',
+        'Quarta-feira',
+        'Quinta-feira',
+        'Sexta-feira',
+        'Sábado',
+      ]
+    );
+    setWarmupAdvancedOpen(false);
+    setIsWarmupModalOpen(true);
+  };
+
+  const handleSaveWarmupConfig = () => {
+    if (!selectedNode) return;
+
+    const updatedCfg: any = {
+      ...((selectedNode.data.config as object) || {}),
+      rateLimitPerMinute: warmupRateLimit,
+      releasesPerMinute: warmupRateLimit,
+      hasInterval: warmupHasInterval,
+      intervalStart: warmupIntervalStart,
+      intervalEnd: warmupIntervalEnd,
+      hasWeekDays: warmupHasWeekDays,
+      weekDays: warmupWeekDays,
+    };
+
+    setSequenceNodes((nds) =>
+      nds.map((n) =>
+        n.id === selectedNode.id
+          ? {
+              ...n,
+              data: {
+                ...n.data,
+                config: updatedCfg,
+              },
+            }
+          : n
+      )
+    );
+
+    setIsWarmupModalOpen(false);
   };
 
   // Timer Modal Handler
@@ -989,13 +1101,26 @@ export default function AutomationCanvasPage() {
                   <span className="text-[10px] text-slate-500 px-1 font-medium block mb-2">
                     Controladores
                   </span>
-                  {/* Timer */}
-                  <div
-                    onClick={() => addSequenceBlock('timer')}
-                    className="flex flex-col items-center justify-center p-3 rounded-xl bg-[#1b1e27] hover:bg-[#232733] border border-slate-800 hover:border-slate-700 cursor-pointer transition-all group"
-                  >
-                    <Clock className="w-6 h-6 text-slate-300 group-hover:text-white mb-1.5 transition-colors" />
-                    <span className="text-xs font-medium text-slate-300 group-hover:text-white">Timer</span>
+                  <div className="grid grid-cols-2 gap-2">
+                    {/* Timer */}
+                    <div
+                      onClick={() => addSequenceBlock('timer')}
+                      className="flex flex-col items-center justify-center p-3 rounded-xl bg-[#1b1e27] hover:bg-[#232733] border border-slate-800 hover:border-slate-700 cursor-pointer transition-all group"
+                      title="Temporizador: programa a espera ou horário de disparo"
+                    >
+                      <Clock className="w-5 h-5 text-slate-300 group-hover:text-white mb-1.5 transition-colors" />
+                      <span className="text-[11px] font-medium text-slate-300 group-hover:text-white">Timer</span>
+                    </div>
+
+                    {/* Aquecimento */}
+                    <div
+                      onClick={() => addSequenceBlock('aquecimento')}
+                      className="flex flex-col items-center justify-center p-3 rounded-xl bg-[#1b1e27] hover:bg-[#232733] border border-slate-800 hover:border-rose-500/50 cursor-pointer transition-all group"
+                      title="AQUECIMENTO: Cria uma limitação controlada no fluxo de leads reduzindo o volume de disparos por minuto, ideal para aquecimento de e-mails ou WhatsApp."
+                    >
+                      <Flame className="w-5 h-5 text-rose-400 fill-rose-400 group-hover:scale-110 mb-1.5 transition-all" />
+                      <span className="text-[11px] font-medium text-slate-300 group-hover:text-white">Aquecimento</span>
+                    </div>
                   </div>
                 </div>
 
@@ -1534,6 +1659,262 @@ export default function AutomationCanvasPage() {
                   className="px-6 py-2 bg-emerald-600 hover:bg-emerald-500 text-white rounded-xl font-bold uppercase tracking-wider text-xs shadow-lg shadow-emerald-600/30"
                 >
                   Salvar
+                </button>
+              </div>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* ============================================================ */}
+      {/* MODAL DE AQUECIMENTO (THROTTLE / LIMITAÇÃO POR MINUTO) */}
+      {/* ============================================================ */}
+      {isWarmupModalOpen && (
+        <div className="fixed inset-0 bg-black/75 backdrop-blur-sm z-50 flex items-center justify-center p-4">
+          <div className="bg-[#14161d] rounded-2xl shadow-2xl border border-slate-800 max-w-lg w-full p-6 text-xs text-slate-200 animate-in fade-in zoom-in-95 duration-150">
+            {/* Cabeçalho */}
+            <div className="flex items-center justify-between pb-3 border-b border-slate-800/80">
+              <div>
+                <span className="text-[10px] text-slate-400 font-mono block">
+                  ID - {selectedNode?.id?.replace('seq_', '') || '8719604'}
+                </span>
+                <h3 className="font-bold text-white text-base">Aquecimento</h3>
+              </div>
+              <div className="flex items-center gap-2 text-slate-400">
+                <button
+                  type="button"
+                  onClick={() => setIsWarmupModalOpen(false)}
+                  className="p-1 hover:text-white rounded-lg hover:bg-slate-800 transition-colors"
+                >
+                  <X className="w-5 h-5" />
+                </button>
+              </div>
+            </div>
+
+            {/* Texto Explicativo */}
+            <p className="text-slate-400 text-xs mt-3 leading-relaxed">
+              A etapa Aquecimento serve para limitar a quantidade de leads que passará para a próxima etapa a cada 1 minuto. Número máximo de liberações por minuto é 300 leads.
+            </p>
+
+            {/* Campo: Liberações por minuto */}
+            <div className="mt-4 p-4 rounded-xl bg-[#1b1e27] border border-slate-800 space-y-1.5">
+              <label className="block text-slate-200 font-semibold text-xs">
+                Liberações por minuto
+              </label>
+              <p className="text-[11px] text-slate-400">
+                A quantidade de leads que serão liberados por minuto para a próxima etapa
+              </p>
+              <div className="pt-1.5">
+                <input
+                  type="number"
+                  min={1}
+                  max={300}
+                  value={warmupRateLimit}
+                  onChange={(e) =>
+                    setWarmupRateLimit(Math.min(300, Math.max(1, parseInt(e.target.value) || 1)))
+                  }
+                  className="w-full p-2.5 bg-[#14161d] border border-slate-700/80 rounded-xl text-white font-bold text-sm focus:outline-none focus:border-indigo-500"
+                />
+                <span className="text-[10px] text-slate-500 block mt-1">
+                  {300 - warmupRateLimit} restantes até o limite de 300
+                </span>
+              </div>
+            </div>
+
+            {/* Opção 1: Determinar um intervalo de tempo? */}
+            <div className="mt-3 p-4 rounded-xl bg-[#1b1e27] border border-slate-800 space-y-3">
+              <div className="flex items-start justify-between gap-3">
+                <div className="flex items-start gap-2.5">
+                  <div className="p-1.5 rounded-lg bg-sky-500/10 text-sky-400 shrink-0 mt-0.5">
+                    <Calendar className="w-4 h-4" />
+                  </div>
+                  <div>
+                    <span className="font-semibold text-slate-200 block text-xs">
+                      Determinar um intervalo de tempo?
+                    </span>
+                    <span className="text-[11px] text-slate-400 block mt-0.5">
+                      O aquecimento vai ser utilizado entre os horários de início e fim.
+                    </span>
+                  </div>
+                </div>
+
+                {/* Switch */}
+                <button
+                  type="button"
+                  onClick={() => setWarmupHasInterval(!warmupHasInterval)}
+                  className={`w-10 h-5 flex items-center rounded-full p-0.5 transition-colors cursor-pointer shrink-0 mt-1 ${
+                    warmupHasInterval ? 'bg-indigo-600' : 'bg-slate-700'
+                  }`}
+                >
+                  <div
+                    className={`bg-white w-4 h-4 rounded-full shadow-md transform transition-transform ${
+                      warmupHasInterval ? 'translate-x-5' : 'translate-x-0'
+                    }`}
+                  />
+                </button>
+              </div>
+
+              {warmupHasInterval && (
+                <div className="grid grid-cols-2 gap-3 pt-2 border-t border-slate-800">
+                  <div>
+                    <label className="block text-[11px] text-slate-300 font-medium mb-1">
+                      Iniciar às:
+                    </label>
+                    <div className="relative">
+                      <input
+                        type="time"
+                        value={warmupIntervalStart}
+                        onChange={(e) => setWarmupIntervalStart(e.target.value)}
+                        className="w-full p-2 bg-[#14161d] border border-slate-700 rounded-lg text-white text-xs focus:outline-none focus:border-indigo-500"
+                      />
+                    </div>
+                  </div>
+                  <div>
+                    <label className="block text-[11px] text-slate-300 font-medium mb-1">
+                      Terminar às:
+                    </label>
+                    <div className="relative">
+                      <input
+                        type="time"
+                        value={warmupIntervalEnd}
+                        onChange={(e) => setWarmupIntervalEnd(e.target.value)}
+                        className="w-full p-2 bg-[#14161d] border border-slate-700 rounded-lg text-white text-xs focus:outline-none focus:border-indigo-500"
+                      />
+                    </div>
+                  </div>
+                </div>
+              )}
+            </div>
+
+            {/* Opção 2: Selecionar os dias da semana? */}
+            <div className="mt-3 p-4 rounded-xl bg-[#1b1e27] border border-slate-800 space-y-3">
+              <div className="flex items-start justify-between gap-3">
+                <div className="flex items-start gap-2.5">
+                  <div className="p-1.5 rounded-lg bg-sky-500/10 text-sky-400 shrink-0 mt-0.5">
+                    <Clock className="w-4 h-4" />
+                  </div>
+                  <div>
+                    <span className="font-semibold text-slate-200 block text-xs">
+                      Selecionar os dias da semana?
+                    </span>
+                    <span className="text-[11px] text-slate-400 block mt-0.5">
+                      Determine quais dias da semana o aquecimento vai ser acionado, por padrão o aquecimento funciona todos os dias.
+                    </span>
+                  </div>
+                </div>
+
+                {/* Switch */}
+                <button
+                  type="button"
+                  onClick={() => setWarmupHasWeekDays(!warmupHasWeekDays)}
+                  className={`w-10 h-5 flex items-center rounded-full p-0.5 transition-colors cursor-pointer shrink-0 mt-1 ${
+                    warmupHasWeekDays ? 'bg-indigo-600' : 'bg-slate-700'
+                  }`}
+                >
+                  <div
+                    className={`bg-white w-4 h-4 rounded-full shadow-md transform transition-transform ${
+                      warmupHasWeekDays ? 'translate-x-5' : 'translate-x-0'
+                    }`}
+                  />
+                </button>
+              </div>
+
+              {warmupHasWeekDays && (
+                <div className="pt-2 border-t border-slate-800 space-y-1.5 max-h-48 overflow-y-auto pr-1">
+                  {[
+                    'Domingo',
+                    'Segunda-feira',
+                    'Terça-feira',
+                    'Quarta-feira',
+                    'Quinta-feira',
+                    'Sexta-feira',
+                    'Sábado',
+                  ].map((day) => {
+                    const active = warmupWeekDays.includes(day);
+                    return (
+                      <div
+                        key={day}
+                        onClick={() => {
+                          if (active) {
+                            setWarmupWeekDays(warmupWeekDays.filter((d) => d !== day));
+                          } else {
+                            setWarmupWeekDays([...warmupWeekDays, day]);
+                          }
+                        }}
+                        className="flex items-center gap-2.5 py-1 px-2 rounded-lg hover:bg-slate-800/60 cursor-pointer transition-colors"
+                      >
+                        <Check
+                          className={`w-4 h-4 ${
+                            active ? 'text-emerald-400 stroke-[3]' : 'text-slate-600'
+                          }`}
+                        />
+                        <span
+                          className={`text-xs ${
+                            active ? 'text-white font-medium' : 'text-slate-500'
+                          }`}
+                        >
+                          {day}
+                        </span>
+                      </div>
+                    );
+                  })}
+                </div>
+              )}
+            </div>
+
+            {/* Configurações Avançadas (Accordion) */}
+            <div className="mt-3 border border-slate-800 rounded-xl overflow-hidden bg-[#1b1e27]">
+              <button
+                type="button"
+                onClick={() => setWarmupAdvancedOpen(!warmupAdvancedOpen)}
+                className="w-full p-3 flex items-center justify-between text-left text-xs font-semibold text-slate-300 hover:text-white"
+              >
+                <span>Configurações avançadas</span>
+                <ChevronDown
+                  className={`w-4 h-4 text-slate-400 transition-transform ${
+                    warmupAdvancedOpen ? 'rotate-180' : ''
+                  }`}
+                />
+              </button>
+              {warmupAdvancedOpen && (
+                <div className="p-3 pt-0 border-t border-slate-800/80 text-[11px] text-slate-400 space-y-2">
+                  <div className="flex items-center justify-between">
+                    <span>Fuso horário:</span>
+                    <span className="font-semibold text-slate-200">América/São Paulo</span>
+                  </div>
+                  <div className="flex items-center justify-between">
+                    <span>Tratamento de fila cheia:</span>
+                    <span className="font-semibold text-emerald-400">Escalonamento por minuto</span>
+                  </div>
+                </div>
+              )}
+            </div>
+
+            {/* Rodapé com botão SALVAR */}
+            <div className="pt-4 mt-4 border-t border-slate-800/80 flex items-center justify-between">
+              <button
+                type="button"
+                onClick={handleDeleteCurrentNode}
+                className="text-red-400 hover:text-red-300 flex items-center gap-1 text-xs"
+              >
+                <Trash2 className="w-3.5 h-3.5" />
+                <span>Excluir Bloco</span>
+              </button>
+
+              <div className="flex items-center gap-2">
+                <button
+                  type="button"
+                  onClick={() => setIsWarmupModalOpen(false)}
+                  className="px-4 py-2 border border-slate-700 hover:bg-slate-800 rounded-xl text-slate-300 font-semibold"
+                >
+                  Cancelar
+                </button>
+                <button
+                  type="button"
+                  onClick={handleSaveWarmupConfig}
+                  className="px-6 py-2 bg-[#1db954] hover:bg-[#1aa34a] text-black font-bold uppercase tracking-wider text-xs rounded-xl shadow-lg shadow-green-900/30 transition-all cursor-pointer"
+                >
+                  SALVAR
                 </button>
               </div>
             </div>

@@ -373,3 +373,61 @@ export const EmailNode = memo(({ data, selected }: any) => {
   );
 });
 EmailNode.displayName = 'EmailNode';
+
+// 7. Nó de Aquecimento (Throttle / Warmup) - Coral/Vermelho com Ícone de Chama 🔥
+export const WarmupNode = memo(({ data, selected }: any) => {
+  const count = data.config?.leadsCount ?? data.leadsCount ?? 0;
+  const waiting = data.config?.waitingCount ?? 0;
+  const success = data.config?.successCount ?? 0;
+  const failed = data.config?.failedCount ?? 0;
+  const rateLimit = data.config?.rateLimitPerMinute ?? data.config?.releasesPerMinute ?? 1;
+
+  return (
+    <div className="flex flex-col items-center group cursor-pointer select-none">
+      <div
+        className={`relative w-14 h-14 rounded-2xl flex items-center justify-center transition-all duration-200 ${
+          selected
+            ? 'bg-[#e05260] ring-2 ring-rose-400 shadow-xl shadow-rose-950/40'
+            : 'bg-[#d94d5c] hover:bg-[#e05260] shadow-lg'
+        }`}
+      >
+        <Handle
+          type="target"
+          position={Position.Left}
+          className="!w-3 !h-3 !bg-slate-300 !border-2 !border-[#181a20] -ml-1 hover:!bg-white"
+        />
+
+        <Flame className="w-6 h-6 text-white fill-white stroke-[1.5]" />
+
+        <Handle
+          type="source"
+          position={Position.Right}
+          className="!w-3 !h-3 !bg-slate-300 !border-2 !border-[#181a20] -mr-1 hover:!bg-white"
+        />
+      </div>
+
+      <div className="text-center mt-1.5">
+        <span className="text-[12px] font-medium text-slate-200 tracking-wide block">
+          Aquecimento | {count} lead{count === 1 ? '' : 's'}
+        </span>
+        <span className="text-[10px] text-slate-400 block mt-0.5">
+          {rateLimit} por minuto
+        </span>
+
+        {/* Pílulas de status */}
+        <div className="flex items-center justify-center gap-1 mt-1">
+          <span className="px-2 py-0.2 rounded-md bg-[#848c26] text-black font-bold text-[10px] min-w-[20px] text-center">
+            {waiting}
+          </span>
+          <span className="px-2 py-0.2 rounded-md bg-[#1db954] text-black font-bold text-[10px] min-w-[20px] text-center">
+            {success}
+          </span>
+          <span className="px-2 py-0.2 rounded-md bg-[#b83b3b] text-white font-bold text-[10px] min-w-[20px] text-center">
+            {failed}
+          </span>
+        </div>
+      </div>
+    </div>
+  );
+});
+WarmupNode.displayName = 'WarmupNode';
