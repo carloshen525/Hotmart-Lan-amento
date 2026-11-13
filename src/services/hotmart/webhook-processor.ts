@@ -132,6 +132,25 @@ export class HotmartWebhookProcessor {
         update: {},
       });
       actionSummaries.push(`Tag "${tagName}" adicionada`);
+
+      // Dispara transição inteligente de saída de sequências ou entrada em novas sequências
+      try {
+        const flowResult = await automationEngine.handleContactTagAdded(
+          tenant.id,
+          contact.id,
+          tagName
+        );
+        if (flowResult.exitedSequences.length > 0) {
+          actionSummaries.push(
+            `Lead ejetado das sequências: ${flowResult.exitedSequences.join(', ')}`
+          );
+        }
+        if (flowResult.enteredSequences.length > 0) {
+          actionSummaries.push(
+            `Lead ingressou nas novas sequências: ${flowResult.enteredSequences.join(', ')}`
+          );
+        }
+      } catch {}
     };
 
     // Helper para remover tag

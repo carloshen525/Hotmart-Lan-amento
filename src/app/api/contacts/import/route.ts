@@ -290,6 +290,9 @@ export async function POST(request: Request) {
             update: {},
             create: { contactId, tagId: tag.id },
           });
+
+          // Dispara transições de tags (saídas de sequências antigas e entradas em novas)
+          await automationEngine.handleContactTagAdded(tenantId, contactId, tagName).catch(() => {});
         }
 
         // Opcional: disparar automações ativas

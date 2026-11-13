@@ -136,6 +136,7 @@ export async function POST(request: Request) {
           create: { contactId: contact.id, tagId: tag.id },
           update: {},
         });
+        await automationEngine.handleContactTagAdded(tenantId, contact.id, tagName).catch(() => {});
       }
     }
 

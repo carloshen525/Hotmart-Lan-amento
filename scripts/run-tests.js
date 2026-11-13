@@ -8,7 +8,7 @@ async function runTestSuite() {
   console.log('=====================================================\n');
 
   let passed = 0;
-  let total = 13;
+  let total = 14;
 
   // Setup de tenant de teste limpo
   const testTenant = await prisma.tenant.upsert({
@@ -415,6 +415,154 @@ async function runTestSuite() {
     });
     assert.strictEqual(otherTenantInstance, null, 'Outro tenant não deve enxergar instância alheia');
     console.log('✔ PASSOU: Instância 1:1 isolada por tenant com bloqueio estrito contra vazamento.');
+    passed++;
+
+    // -------------------------------------------------------------
+    // TESTE 14: Ejeção e Transição de Sequência por Tags de Saída
+    // -------------------------------------------------------------
+    console.log('\n[TESTE 14] Ejeção e Transição de Sequência por Tags de Saída...');
+
+    // Cria contato de teste
+    const transContact = await prisma.contact.create({
+      data: {
+        tenantId: testTenant.id,
+        name: 'Lead Transicao',
+        email: `transicao_${Date.now()}@teste.com`,
+        phone: '+5511999990000',
+        consentGiven: true,
+        status: 'ACTIVE',
+      },
+    });
+
+    // Cria automação com Tag Entrada -> Sequência 1 -> Tag Saída (Pix Gerado) -> Sequência 2
+    const flowAuto = await prisma.automation.create({
+      data: {
+        tenantId: testTenant.id,
+        name: 'Funil com Saída por Tag',
+        status: 'ACTIVE',
+        nodes: JSON.stringify([
+          {
+            id: 'tag_in',
+            type: 'tag',
+            data: { label: 'Tags', config: { tagName: 'Inscrito' } },
+          },
+          {
+            id: 'seq_1',
+            type: 'sequence_lead',
+            data: { label: 'Sequência Aquecimento VIP' },
+          },
+          {
+            id: 'tag_out',
+            type: 'tag',
+            data: { label: 'Tags', config: { tagName: 'Pix Gerado' } },
+          },
+          {
+            id: 'seq_2',
+            type: 'sequence_lead',
+            data: { label: 'Sequência Cobrança Pix' },
+          },
+        ]),
+        edges: JSON.stringify([
+          { id: 'e1', source: 'tag_in', target: 'seq_1' },
+          { id: 'e2', source: 'seq_1', target: 'tag_out' },
+          { id: 'e3', source: 'tag_out', target: 'seq_2' },
+        ]),
+      },
+    });
+
+    // Simula o lead ativo na Sequência 1 com um job agendado de espera
+    const enr1 = await prisma.automationEnrollment.create({
+      data: {
+        automationId: flowAuto.id,
+        contactId: transContact.id,
+        currentNodeId: 'seq_1',
+        status: 'WAITING',
+      },
+    });
+
+    const jobSeq1 = await prisma.scheduledJob.create({
+      data: {
+        tenantId: testTenant.id,
+        enrollmentId: enr1.id,
+        contactId: transContact.id,
+        automationId: flowAuto.id,
+        targetNodeId: 'node_msg_1',
+        executeAt: new Date(Date.now() + 3600 * 1000),
+        status: 'PENDING',
+      },
+    });
+
+    // Função de transição atômica executada quando a tag é adicionada
+    async function testHandleContactTagAdded(tenantId, contactId, tagName) {
+      const activeEnrollments = await prisma.automationEnrollment.findMany({
+        where: { contactId, status: { in: ['ACTIVE', 'WAITING'] } },
+        include: { automation: true },
+      });
+      const exited = [];
+      const entered = [];
+
+      for (const enr of activeEnrollments) {
+        const nodes = JSON.parse(enr.automation.nodes || '[]');
+        const edges = JSON.parse(enr.automation.edges || '[]');
+        const currentSeq = nodes.find((n) => n.id === enr.currentNodeId);
+
+        if (currentSeq) {
+          const outEdges = edges.filter((e) => e.source === currentSeq.id);
+          for (const edge of outEdges) {
+            const tagNode = nodes.find((n) => n.id === edge.target);
+            if (tagNode && (tagNode.data?.config?.tagName || tagNode.data?.tagName) === tagName) {
+              await prisma.scheduledJob.updateMany({
+                where: { enrollmentId: enr.id, status: 'PENDING' },
+                data: { status: 'CANCELLED' },
+              });
+              await prisma.automationEnrollment.update({
+                where: { id: enr.id },
+                data: { status: 'CANCELLED', completedAt: new Date() },
+              });
+              exited.push(currentSeq.data.label);
+
+              const nextEdges = edges.filter((e) => e.source === tagNode.id);
+              for (const nEdge of nextEdges) {
+                const nextSeq = nodes.find((n) => n.id === nEdge.target && n.type === 'sequence_lead');
+                if (nextSeq) {
+                  await prisma.automationEnrollment.create({
+                    data: {
+                      automationId: enr.automation.id,
+                      contactId,
+                      currentNodeId: nextSeq.id,
+                      status: 'ACTIVE',
+                    },
+                  });
+                  entered.push(nextSeq.data.label);
+                }
+              }
+            }
+          }
+        }
+      }
+      return { exited, entered };
+    }
+
+    // Lead agora recebe a tag 'Pix Gerado' (conectada como saída de seq_1 e entrada de seq_2)
+    const resultTransition = await testHandleContactTagAdded(
+      testTenant.id,
+      transContact.id,
+      'Pix Gerado'
+    );
+
+    // Verifica que o lead foi ejetado de seq_1 e entrou em seq_2
+    assert.ok(resultTransition.exited.includes('Sequência Aquecimento VIP'), 'Lead deve ser ejetado de seq_1');
+    assert.ok(resultTransition.entered.includes('Sequência Cobrança Pix'), 'Lead deve entrar em seq_2');
+
+    // Verifica se o job de seq_1 foi cancelado imediatamente
+    const updatedJob = await prisma.scheduledJob.findUnique({ where: { id: jobSeq1.id } });
+    assert.strictEqual(updatedJob.status, 'CANCELLED', 'Job agendado de seq_1 deve ser cancelado');
+
+    // Verifica se a inscrição em seq_1 foi cancelada
+    const updatedEnr1 = await prisma.automationEnrollment.findUnique({ where: { id: enr1.id } });
+    assert.strictEqual(updatedEnr1.status, 'CANCELLED', 'Inscrição em seq_1 deve ser encerrada');
+
+    console.log('✔ PASSOU: Lead ejetado da sequência anterior e transferido para a nova sequência pela Tag de saída.');
     passed++;
 
     console.log('\n=====================================================');
