@@ -70,6 +70,7 @@ export async function POST(request: Request) {
     let additionalTags: string[] = [];
     let tagByProduct = true;
     let tagByStatus = true;
+    let tagMode: 'UNIFIED' | 'SEPARATE' = 'UNIFIED'; // UNIFIED = tag única com produto + status (evita duplicidade em múltiplos produtos)
     let triggerAutomation = false;
 
     const contentType = request.headers.get('content-type') || '';
@@ -93,6 +94,7 @@ export async function POST(request: Request) {
 
       tagByProduct = formData.get('tagByProduct') !== 'false';
       tagByStatus = formData.get('tagByStatus') !== 'false';
+      tagMode = (formData.get('tagMode') as any) === 'SEPARATE' ? 'SEPARATE' : 'UNIFIED';
       triggerAutomation = formData.get('triggerAutomation') === 'true';
     } else {
       const body = await request.json();
@@ -100,6 +102,7 @@ export async function POST(request: Request) {
       additionalTags = body.tags || [];
       tagByProduct = body.tagByProduct !== false;
       tagByStatus = body.tagByStatus !== false;
+      tagMode = body.tagMode === 'SEPARATE' ? 'SEPARATE' : 'UNIFIED';
       triggerAutomation = !!body.triggerAutomation;
     }
 
@@ -210,21 +213,42 @@ export async function POST(request: Request) {
           if (t.trim()) tagsToApply.add(t.trim());
         }
 
-        // Tag inteligente pelo Produto Hotmart
-        if (tagByProduct && productName) {
-          tagsToApply.add(productName);
-        }
+        const statusLower = (saleStatus || '').toLowerCase();
+        const isApproved = statusLower.includes('aprovado') || statusLower.includes('completo');
+        const isWaiting = statusLower.includes('aguardando') || statusLower.includes('pendente');
+        const isCancelled = statusLower.includes('cancelado');
 
-        // Tag inteligente pelo Status Hotmart
-        if (tagByStatus && saleStatus) {
-          const statusLower = saleStatus.toLowerCase();
-          if (statusLower.includes('aprovado') || statusLower.includes('completo')) {
-            tagsToApply.add('Cliente');
-            tagsToApply.add('Compra Aprovada');
-          } else if (statusLower.includes('aguardando') || statusLower.includes('pendente')) {
-            tagsToApply.add('Aguardando Pagamento');
-          } else if (statusLower.includes('cancelado')) {
-            tagsToApply.add('Cancelado');
+        // Criação de Tags conforme o modo configurado
+        if (tagMode === 'UNIFIED') {
+          // Tag Unificada por Produto (Ex: "Cliente: Imersão Busca e Apreensão de Veículos - Compra Aprovada")
+          if (productName) {
+            if (isApproved) {
+              tagsToApply.add(`Cliente: ${productName} - Compra Aprovada`);
+            } else if (isWaiting) {
+              tagsToApply.add(`Aguardando Pagamento: ${productName}`);
+            } else if (isCancelled) {
+              tagsToApply.add(`Cancelado: ${productName}`);
+            } else if (tagByProduct) {
+              tagsToApply.add(productName);
+            }
+          } else {
+            if (isApproved) tagsToApply.add('Cliente Compra Aprovada');
+            else if (isWaiting) tagsToApply.add('Aguardando Pagamento');
+          }
+        } else {
+          // Tags separadas (#Produto e #Situação)
+          if (tagByProduct && productName) {
+            tagsToApply.add(productName);
+          }
+          if (tagByStatus && saleStatus) {
+            if (isApproved) {
+              tagsToApply.add('Cliente');
+              tagsToApply.add('Compra Aprovada');
+            } else if (isWaiting) {
+              tagsToApply.add('Aguardando Pagamento');
+            } else if (isCancelled) {
+              tagsToApply.add('Cancelado');
+            }
           }
         }
 
@@ -281,7 +305,7 @@ export async function POST(request: Request) {
             create: {
               tenantId,
               name: tagName,
-              color: tagName === 'Cliente' ? '#10b981' : tagName.includes('Aguardando') ? '#f59e0b' : '#6366f1',
+              color: tagName.includes('Cliente') || tagName.includes('Aprovada') ? '#10b981' : tagName.includes('Aguardando') ? '#f59e0b' : '#6366f1',
             },
           });
 
@@ -293,6 +317,22 @@ export async function POST(request: Request) {
 
           // Dispara transições de tags (saídas de sequências antigas e entradas em novas)
           await automationEngine.handleContactTagAdded(tenantId, contactId, tagName).catch(() => {});
+        }
+
+        // Se a compra for aprovada, remove tags transitórias de cobrança do lead
+        if (isApproved) {
+          const transitory = ['Aguardando Pagamento', 'Pix Gerado', 'Boleto Gerado', 'Carrinho Abandonado'];
+          const tagsToRemove = await prisma.tag.findMany({
+            where: { tenantId, name: { in: transitory } },
+          });
+          if (tagsToRemove.length > 0) {
+            await prisma.contactTag.deleteMany({
+              where: {
+                contactId,
+                tagId: { in: tagsToRemove.map((t) => t.id) },
+              },
+            });
+          }
         }
 
         // Opcional: disparar automações ativas

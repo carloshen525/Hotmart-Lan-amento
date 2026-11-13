@@ -18,11 +18,14 @@ import {
 // NÍVEL 1: NÓS DO FLUXO PRINCIPAL (MACRO)
 // ============================================================
 
-// 1. Nó de Tag (Gatilho de Entrada) - Estilo Idêntico ao Print
+// 1. Nó de Tag (Gatilho de Entrada / Saída) - Suporta Múltiplas Tags e Validação E/OU
 export const TagNode = memo(({ data, selected }: any) => {
   const count = data.config?.leadsCount ?? data.leadsCount ?? 0;
-  const tagName = data.config?.tagName || data.tagName;
-  const hasConfig = !!tagName;
+  const tagNames: string[] =
+    data.config?.tagNames ||
+    (data.config?.tagName ? [data.config.tagName] : data.tagName ? [data.tagName] : []);
+  const hasConfig = tagNames.length > 0;
+  const matchMode = data.config?.matchMode || 'ALL'; // 'ALL' = E (todas obrigatórias), 'ANY' = OU (qualquer uma)
 
   return (
     <div className="flex flex-col items-center group cursor-pointer select-none">
@@ -60,14 +63,30 @@ export const TagNode = memo(({ data, selected }: any) => {
       </div>
 
       {/* Legenda abaixo do nó */}
-      <div className="text-center mt-1.5">
-        <span className="text-[12px] font-medium text-slate-200 tracking-wide block">
-          Tags | {count} lead{count === 1 ? '' : 's'}
-        </span>
-        {tagName && (
-          <span className="text-[10px] font-semibold text-purple-300 bg-purple-950/60 px-2 py-0.5 rounded border border-purple-800/60 mt-0.5 inline-block truncate max-w-[140px]">
-            {tagName}
+      <div className="text-center mt-1.5 max-w-[190px]">
+        <div className="flex items-center justify-center gap-1 flex-wrap">
+          <span className="text-[12px] font-medium text-slate-200 tracking-wide block">
+            Tags{tagNames.length > 1 ? ` (${tagNames.length})` : ''} | {count} lead{count === 1 ? '' : 's'}
           </span>
+          {tagNames.length > 1 && (
+            <span className="text-[9px] font-bold px-1.5 py-0.2 rounded bg-indigo-950 text-indigo-300 border border-indigo-800">
+              {matchMode === 'ALL' ? 'TODAS (E)' : 'QUALQUER (OU)'}
+            </span>
+          )}
+        </div>
+
+        {tagNames.length > 0 && (
+          <div className="flex flex-wrap items-center justify-center gap-1 mt-1">
+            {tagNames.map((tn: string, idx: number) => (
+              <span
+                key={idx}
+                className="text-[10px] font-semibold text-purple-300 bg-purple-950/70 px-2 py-0.5 rounded-md border border-purple-800/60 truncate max-w-[170px] inline-block"
+                title={tn}
+              >
+                {tn}
+              </span>
+            ))}
+          </div>
         )}
       </div>
     </div>

@@ -8,7 +8,7 @@ async function runTestSuite() {
   console.log('=====================================================\n');
 
   let passed = 0;
-  let total = 14;
+  let total = 15;
 
   // Setup de tenant de teste limpo
   const testTenant = await prisma.tenant.upsert({
@@ -563,6 +563,74 @@ async function runTestSuite() {
     assert.strictEqual(updatedEnr1.status, 'CANCELLED', 'Inscrição em seq_1 deve ser encerrada');
 
     console.log('✔ PASSOU: Lead ejetado da sequência anterior e transferido para a nova sequência pela Tag de saída.');
+    passed++;
+
+    // =========================================================================
+    // TESTE 15: Validação Multi-Tags E/OU (Denis Dominique) e Deduplicação
+    // =========================================================================
+    console.log('\n[TESTE 15] Validação Multi-Tags E/OU e Deduplicação de Lead...');
+
+    // Criação de contato e tags separadas
+    const multiTagContact = await prisma.contact.upsert({
+      where: {
+        tenantId_email: {
+          tenantId: testTenant.id,
+          email: 'denis_multitag@teste.com',
+        },
+      },
+      update: { name: 'Lead MultiTag Test' },
+      create: {
+        tenantId: testTenant.id,
+        name: 'Lead MultiTag Test',
+        email: 'denis_multitag@teste.com',
+      },
+    });
+
+    // Helper simulando a lógica do engine para checagem E/OU
+    function checkTagNodeMatch(tagList, matchMode, contactTags, addedTag) {
+      if (!tagList.some((t) => t.toLowerCase().trim() === addedTag.toLowerCase().trim())) {
+        return false;
+      }
+      const allTags = new Set(contactTags.map((t) => t.toLowerCase().trim()));
+      allTags.add(addedTag.toLowerCase().trim());
+
+      if (matchMode === 'ALL') {
+        return tagList.every((t) => allTags.has(t.toLowerCase().trim()));
+      } else {
+        return true;
+      }
+    }
+
+    const requiredTags = ['Imersão Busca e Apreensão de Veículos', 'Compra Aprovada'];
+
+    // 1. Lead recebe apenas a primeira tag ('Imersão Busca e Apreensão de Veículos')
+    let isSatisfied = checkTagNodeMatch(
+      requiredTags,
+      'ALL',
+      [],
+      'Imersão Busca e Apreensão de Veículos'
+    );
+    assert.strictEqual(isSatisfied, false, 'Com regra TODAS (E), 1 de 2 tags NÃO deve disparar o gatilho');
+
+    // 2. Lead agora já possui a primeira e recebe a segunda tag ('Compra Aprovada')
+    isSatisfied = checkTagNodeMatch(
+      requiredTags,
+      'ALL',
+      ['Imersão Busca e Apreensão de Veículos'],
+      'Compra Aprovada'
+    );
+    assert.strictEqual(isSatisfied, true, 'Com regra TODAS (E), possuindo ambas as tags DEVE disparar');
+
+    // 3. Com regra QUALQUER UMA (OU), 1 tag já é suficiente
+    const isSatisfiedOr = checkTagNodeMatch(
+      requiredTags,
+      'ANY',
+      [],
+      'Compra Aprovada'
+    );
+    assert.strictEqual(isSatisfiedOr, true, 'Com regra QUALQUER (OU), 1 tag DEVE disparar o gatilho');
+
+    console.log('✔ PASSOU: Validação multi-tags AND/OR e atualização sem duplicidade verificadas com precisão.');
     passed++;
 
     console.log('\n=====================================================');

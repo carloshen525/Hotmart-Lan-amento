@@ -51,6 +51,7 @@ import {
   Share2,
   Users,
   Flame,
+  Search,
 } from 'lucide-react';
 
 import {
@@ -102,6 +103,9 @@ export default function AutomationCanvasPage() {
   // Seleção de nó e modais
   const [selectedNode, setSelectedNode] = useState<Node | null>(null);
   const [isTagModalOpen, setIsTagModalOpen] = useState(false);
+  const [tagModalSelectedNames, setTagModalSelectedNames] = useState<string[]>([]);
+  const [tagModalMatchMode, setTagModalMatchMode] = useState<'ALL' | 'ANY'>('ALL');
+  const [tagSearchQuery, setTagSearchQuery] = useState('');
   const [isMessageDrawerOpen, setIsMessageDrawerOpen] = useState(false);
   const [isCreateTagOpen, setIsCreateTagOpen] = useState(false);
   const [newTagName, setNewTagName] = useState('');
@@ -457,7 +461,7 @@ export default function AutomationCanvasPage() {
           label: 'Tags',
           type: 'tag',
           leadsCount: 0,
-          config: { tagName: '', tagColor: '#a855f7', leadsCount: 0 },
+          config: { tagName: '', tagNames: [], matchMode: 'ALL', tagColor: '#a855f7', leadsCount: 0 },
         },
       };
     } else if (type === 'sequence_lead') {
@@ -507,7 +511,7 @@ export default function AutomationCanvasPage() {
     setSelectedNode(newN);
 
     if (type === 'tag') {
-      setIsTagModalOpen(true);
+      openTagModal(newN);
     } else if (type === 'timer') {
       openTimerModal(newN);
     }
@@ -665,7 +669,7 @@ export default function AutomationCanvasPage() {
       if (node.type === 'sequence_lead') {
         openSequenceSubflow(node);
       } else if (node.type === 'tag') {
-        setIsTagModalOpen(true);
+        openTagModal(node);
       } else if (node.type === 'timer') {
         openTimerModal(node);
       }
@@ -804,9 +808,47 @@ export default function AutomationCanvasPage() {
     setIsTimerModalOpen(false);
   };
 
-  // Tag Selection Handler
-  const handleSelectTag = (tag: TagItem) => {
+  // Tag Selection Modal Handlers (Suporte a Multi-Tags e E/OU - Denis Dominique)
+  const openTagModal = (nodeToConfigure?: Node) => {
+    const target = nodeToConfigure || selectedNode;
+    if (!target) return;
+    setSelectedNode(target);
+    const cfg = (target.data.config as any) || {};
+    const existingList: string[] =
+      cfg.tagNames && Array.isArray(cfg.tagNames) && cfg.tagNames.length > 0
+        ? cfg.tagNames
+        : cfg.tagName
+        ? [cfg.tagName]
+        : target.data.tagName
+        ? [target.data.tagName]
+        : [];
+    setTagModalSelectedNames(existingList);
+    setTagModalMatchMode(cfg.matchMode || 'ALL');
+    setTagSearchQuery('');
+    setIsCreateTagOpen(false);
+    setIsTagModalOpen(true);
+  };
+
+  const handleToggleTagSelection = (name: string) => {
+    setTagModalSelectedNames((prev) =>
+      prev.includes(name) ? prev.filter((n) => n !== name) : [...prev, name]
+    );
+  };
+
+  const handleSaveTagConfig = () => {
     if (!selectedNode) return;
+
+    const count = availableTags
+      .filter((t) => tagModalSelectedNames.includes(t.name))
+      .reduce((acc, t) => acc + (t._count?.contacts || 0), 0);
+
+    const updatedCfg: any = {
+      ...((selectedNode.data.config as object) || {}),
+      tagNames: tagModalSelectedNames,
+      tagName: tagModalSelectedNames[0] || '',
+      matchMode: tagModalMatchMode,
+      leadsCount: count,
+    };
 
     setMacroNodes((nds) =>
       nds.map((n) =>
@@ -815,15 +857,11 @@ export default function AutomationCanvasPage() {
               ...n,
               data: {
                 ...n.data,
-                tagName: tag.name,
-                leadsCount: tag._count?.contacts || 0,
-                config: {
-                  ...((n.data.config as object) || {}),
-                  tagName: tag.name,
-                  tagColor: tag.color,
-                  tagId: tag.id,
-                  leadsCount: tag._count?.contacts || 0,
-                },
+                tagName: tagModalSelectedNames[0] || '',
+                tagNames: tagModalSelectedNames,
+                matchMode: tagModalMatchMode,
+                leadsCount: count,
+                config: updatedCfg,
               },
             }
           : n
@@ -846,7 +884,9 @@ export default function AutomationCanvasPage() {
       const data = await res.json();
       if (res.ok && data.tag) {
         setAvailableTags((prev) => [...prev, data.tag]);
-        handleSelectTag(data.tag);
+        setTagModalSelectedNames((prev) =>
+          prev.includes(data.tag.name) ? prev : [...prev, data.tag.name]
+        );
         setNewTagName('');
         setIsCreateTagOpen(false);
       }
@@ -1219,15 +1259,15 @@ export default function AutomationCanvasPage() {
       </div>
 
       {/* ============================================================ */}
-      {/* MODAL / DRAWER DE CONFIGURAÇÃO DE TAG */}
+      {/* MODAL / DRAWER DE CONFIGURAÇÃO DE TAGS (MULTI-TAGS E/OU) */}
       {/* ============================================================ */}
       {isTagModalOpen && (
-        <div className="fixed inset-0 bg-black/60 backdrop-blur-sm z-50 flex items-center justify-center p-4">
-          <div className="bg-[#181c25] rounded-2xl shadow-2xl border border-slate-800 max-w-md w-full p-6 text-xs text-slate-200">
+        <div className="fixed inset-0 bg-black/70 backdrop-blur-sm z-50 flex items-center justify-center p-4">
+          <div className="bg-[#181c25] rounded-2xl shadow-2xl border border-slate-800 max-w-lg w-full p-6 text-xs text-slate-200">
             <div className="flex items-center justify-between pb-3 border-b border-slate-800">
               <div className="flex items-center gap-2">
                 <TagIcon className="w-4 h-4 text-purple-400" />
-                <h3 className="font-bold text-white text-sm">Selecionar Tag de Entrada</h3>
+                <h3 className="font-bold text-white text-sm">Configurar Gatilho de Tags</h3>
               </div>
               <button
                 onClick={() => setIsTagModalOpen(false)}
@@ -1237,31 +1277,156 @@ export default function AutomationCanvasPage() {
               </button>
             </div>
 
-            <p className="text-slate-400 text-xs mt-3">
-              Qualquer lead que receber esta tag entrará automaticamente na sequência conectada.
-            </p>
+            {/* Regra de Validação E / OU (Multi-tags para produto + situação) */}
+            <div className="mt-3.5 p-3 bg-[#12141a] rounded-xl border border-slate-800 space-y-2">
+              <span className="text-[11px] font-bold text-slate-300 block uppercase tracking-wider">
+                Regra de Ativação Multi-Tags:
+              </span>
+              <div className="grid grid-cols-2 gap-2">
+                <button
+                  type="button"
+                  onClick={() => setTagModalMatchMode('ALL')}
+                  className={`p-2.5 rounded-lg border text-left transition-all ${
+                    tagModalMatchMode === 'ALL'
+                      ? 'bg-purple-950/60 border-purple-500 text-purple-200 ring-1 ring-purple-500'
+                      : 'bg-[#181c25] border-slate-800 text-slate-400 hover:border-slate-700'
+                  }`}
+                >
+                  <div className="flex items-center justify-between mb-1">
+                    <span className="font-bold text-xs text-white">TODAS as tags (E / AND)</span>
+                    {tagModalMatchMode === 'ALL' && <Check className="w-3.5 h-3.5 text-purple-400" />}
+                  </div>
+                  <p className="text-[10px] text-slate-400 leading-tight">
+                    O lead precisa ter <b>todas</b> as tags (ex: #Produto E #Compra Aprovada).
+                  </p>
+                </button>
 
-            <div className="mt-4 space-y-2 max-h-56 overflow-y-auto pr-1">
+                <button
+                  type="button"
+                  onClick={() => setTagModalMatchMode('ANY')}
+                  className={`p-2.5 rounded-lg border text-left transition-all ${
+                    tagModalMatchMode === 'ANY'
+                      ? 'bg-purple-950/60 border-purple-500 text-purple-200 ring-1 ring-purple-500'
+                      : 'bg-[#181c25] border-slate-800 text-slate-400 hover:border-slate-700'
+                  }`}
+                >
+                  <div className="flex items-center justify-between mb-1">
+                    <span className="font-bold text-xs text-white">QUALQUER uma (OU / OR)</span>
+                    {tagModalMatchMode === 'ANY' && <Check className="w-3.5 h-3.5 text-purple-400" />}
+                  </div>
+                  <p className="text-[10px] text-slate-400 leading-tight">
+                    O gatilho dispara se o lead receber <b>qualquer uma</b> das tags marcadas.
+                  </p>
+                </button>
+              </div>
+            </div>
+
+            {/* Tags Selecionadas */}
+            <div className="mt-3">
+              <div className="flex items-center justify-between mb-1.5">
+                <span className="text-[11px] font-semibold text-slate-300">
+                  Tags Selecionadas ({tagModalSelectedNames.length}):
+                </span>
+                {tagModalSelectedNames.length > 0 && (
+                  <button
+                    type="button"
+                    onClick={() => setTagModalSelectedNames([])}
+                    className="text-[10px] text-slate-400 hover:text-red-400"
+                  >
+                    Limpar todas
+                  </button>
+                )}
+              </div>
+
+              {tagModalSelectedNames.length === 0 ? (
+                <div className="p-2.5 rounded-lg bg-[#12141a] border border-dashed border-slate-800 text-center text-slate-500 text-[11px]">
+                  Nenhuma tag selecionada. Marque as tags na lista abaixo:
+                </div>
+              ) : (
+                <div className="flex flex-wrap gap-1.5 p-2 bg-[#12141a] rounded-lg border border-slate-800 max-h-24 overflow-y-auto">
+                  {tagModalSelectedNames.map((name) => {
+                    const tagObj = availableTags.find((t) => t.name === name);
+                    return (
+                      <span
+                        key={name}
+                        className="inline-flex items-center gap-1.5 px-2 py-0.5 rounded-md bg-purple-900/60 text-purple-200 border border-purple-700 text-xs font-semibold"
+                      >
+                        <span
+                          className="w-2 h-2 rounded-full"
+                          style={{ backgroundColor: tagObj?.color || '#a855f7' }}
+                        />
+                        <span className="truncate max-w-[200px]">{name}</span>
+                        <button
+                          type="button"
+                          onClick={() => handleToggleTagSelection(name)}
+                          className="text-purple-300 hover:text-white"
+                        >
+                          <X className="w-3 h-3" />
+                        </button>
+                      </span>
+                    );
+                  })}
+                </div>
+              )}
+            </div>
+
+            {/* Campo de Busca de Tags */}
+            <div className="mt-3 relative">
+              <Search className="w-3.5 h-3.5 text-slate-500 absolute left-2.5 top-2.5" />
+              <input
+                type="text"
+                value={tagSearchQuery}
+                onChange={(e) => setTagSearchQuery(e.target.value)}
+                placeholder="Buscar tags cadastradas..."
+                className="w-full pl-8 pr-3 py-1.5 bg-[#12141a] border border-slate-800 rounded-lg text-xs text-white placeholder-slate-500 focus:outline-none focus:border-purple-500"
+              />
+            </div>
+
+            {/* Lista de Tags com Checkbox */}
+            <div className="mt-2 space-y-1.5 max-h-40 overflow-y-auto pr-1">
               {availableTags.length === 0 ? (
-                <div className="text-center py-6 text-slate-500">
+                <div className="text-center py-4 text-slate-500">
                   Nenhuma tag cadastrada ainda. Crie uma abaixo:
                 </div>
               ) : (
-                availableTags.map((t) => (
-                  <div
-                    key={t.id}
-                    onClick={() => handleSelectTag(t)}
-                    className="p-3 rounded-xl bg-[#12141a] hover:bg-slate-800/80 border border-slate-800 flex items-center justify-between cursor-pointer transition-all"
-                  >
-                    <div className="flex items-center gap-2.5">
-                      <div className="w-3 h-3 rounded-full" style={{ backgroundColor: t.color }} />
-                      <span className="font-semibold text-white">{t.name}</span>
-                    </div>
-                    <span className="text-[10px] text-slate-400 font-mono">
-                      {t._count?.contacts || 0} leads
-                    </span>
-                  </div>
-                ))
+                availableTags
+                  .filter((t) =>
+                    t.name.toLowerCase().includes(tagSearchQuery.toLowerCase().trim())
+                  )
+                  .map((t) => {
+                    const isSelected = tagModalSelectedNames.includes(t.name);
+                    return (
+                      <div
+                        key={t.id}
+                        onClick={() => handleToggleTagSelection(t.name)}
+                        className={`p-2.5 rounded-xl border flex items-center justify-between cursor-pointer transition-all ${
+                          isSelected
+                            ? 'bg-purple-950/40 border-purple-600/80 text-white'
+                            : 'bg-[#12141a] hover:bg-slate-800/80 border-slate-800 text-slate-300'
+                        }`}
+                      >
+                        <div className="flex items-center gap-2.5">
+                          <div
+                            className={`w-4 h-4 rounded border flex items-center justify-center transition-all ${
+                              isSelected
+                                ? 'bg-purple-600 border-purple-500 text-white'
+                                : 'border-slate-700 bg-slate-900'
+                            }`}
+                          >
+                            {isSelected && <Check className="w-3 h-3 stroke-[3]" />}
+                          </div>
+                          <div
+                            className="w-2.5 h-2.5 rounded-full"
+                            style={{ backgroundColor: t.color }}
+                          />
+                          <span className="font-semibold text-xs">{t.name}</span>
+                        </div>
+                        <span className="text-[10px] text-slate-400 font-mono">
+                          {t._count?.contacts || 0} leads
+                        </span>
+                      </div>
+                    );
+                  })
               )}
             </div>
 
@@ -1310,7 +1475,7 @@ export default function AutomationCanvasPage() {
                       type="submit"
                       className="px-3 py-1 bg-purple-600 hover:bg-purple-500 text-white rounded-lg font-semibold"
                     >
-                      Salvar Tag
+                      Criar e Adicionar
                     </button>
                   </div>
                 </div>
@@ -1325,12 +1490,22 @@ export default function AutomationCanvasPage() {
                 <Trash2 className="w-3.5 h-3.5" />
                 <span>Excluir Gatilho</span>
               </button>
-              <button
-                onClick={() => setIsTagModalOpen(false)}
-                className="px-4 py-1.5 border border-slate-700 hover:bg-slate-800 rounded-lg text-slate-300 font-semibold text-xs"
-              >
-                Fechar
-              </button>
+              <div className="flex items-center gap-2">
+                <button
+                  type="button"
+                  onClick={() => setIsTagModalOpen(false)}
+                  className="px-4 py-1.5 border border-slate-700 hover:bg-slate-800 rounded-lg text-slate-300 font-semibold text-xs"
+                >
+                  Cancelar
+                </button>
+                <button
+                  type="button"
+                  onClick={handleSaveTagConfig}
+                  className="px-4 py-1.5 bg-purple-600 hover:bg-purple-500 text-white rounded-lg font-bold text-xs shadow-lg shadow-purple-600/30"
+                >
+                  Salvar Gatilho
+                </button>
+              </div>
             </div>
           </div>
         </div>

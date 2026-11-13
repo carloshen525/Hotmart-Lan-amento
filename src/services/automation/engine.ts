@@ -362,6 +362,47 @@ export class AutomationEngine {
     const exitedSequences: string[] = [];
     const enteredSequences: string[] = [];
 
+    // Busca o contato com todas as suas tags atuais para validações AND/OR
+    const contact = await prisma.contact.findUnique({
+      where: { id: contactId },
+      include: { tags: { include: { tag: true } } },
+    });
+    const currentTags = new Set<string>(
+      contact?.tags.map((t) => t.tag.name.toLowerCase().trim()) || []
+    );
+    currentTags.add(tagName.toLowerCase().trim());
+
+    // Helper para verificar se um nó de Tag satisfaz os critérios (individual ou multi-tag AND/OR)
+    const isTagNodeSatisfied = (tagNode: WorkflowNode): boolean => {
+      const cfg = tagNode.data.config || {};
+      const tagList: string[] =
+        cfg.tagNames && Array.isArray(cfg.tagNames) && cfg.tagNames.length > 0
+          ? cfg.tagNames
+          : cfg.tagName
+          ? [cfg.tagName]
+          : (tagNode.data as any).tagName
+          ? [(tagNode.data as any).tagName]
+          : [];
+
+      if (tagList.length === 0) return false;
+
+      // O evento disparador atual (tagName) precisa ser uma das tags do nó
+      const matchesTrigger = tagList.some(
+        (t) => t.toLowerCase().trim() === tagName.toLowerCase().trim()
+      );
+      if (!matchesTrigger) return false;
+
+      const matchMode: 'ALL' | 'ANY' = cfg.matchMode || 'ALL';
+
+      if (matchMode === 'ALL') {
+        // Todas as tags do nó precisam estar presentes no contato
+        return tagList.every((t) => currentTags.has(t.toLowerCase().trim()));
+      } else {
+        // Qualquer uma basta (já que matchesTrigger é true, está satisfeito)
+        return true;
+      }
+    };
+
     // 1. Buscar inscrições ativas ou em espera deste lead
     const activeEnrollments = await prisma.automationEnrollment.findMany({
       where: {
@@ -393,66 +434,60 @@ export class AutomationEngine {
               (n.type === 'tag' || n.type === 'trigger')
           );
 
-          if (targetTagNode) {
-            const exitTagName =
-              targetTagNode.data.config?.tagName || targetTagNode.data.tagName || '';
+          if (targetTagNode && isTagNodeSatisfied(targetTagNode)) {
+            // Cancela todos os jobs e disparos agendados restantes desta sequência
+            await prisma.scheduledJob.updateMany({
+              where: {
+                enrollmentId: enrollment.id,
+                status: 'PENDING',
+              },
+              data: { status: 'CANCELLED' },
+            });
 
-            // Se o lead recebeu exatamente a tag de saída configurada
-            if (exitTagName.toLowerCase().trim() === tagName.toLowerCase().trim()) {
-              // Cancela todos os jobs e disparos agendados restantes desta sequência
-              await prisma.scheduledJob.updateMany({
-                where: {
-                  enrollmentId: enrollment.id,
-                  status: 'PENDING',
-                },
-                data: { status: 'CANCELLED' },
-              });
+            // Finaliza/ejeta a inscrição atual
+            await prisma.automationEnrollment.update({
+              where: { id: enrollment.id },
+              data: {
+                status: 'CANCELLED',
+                completedAt: new Date(),
+              },
+            });
 
-              // Finaliza/ejeta a inscrição atual
-              await prisma.automationEnrollment.update({
-                where: { id: enrollment.id },
-                data: {
-                  status: 'CANCELLED',
-                  completedAt: new Date(),
-                },
-              });
+            // Registra o log da saída
+            await prisma.automationStepLog.create({
+              data: {
+                enrollmentId: enrollment.id,
+                contactId,
+                nodeId: currentSequenceNode.id,
+                nodeType: 'sequence_exit',
+                action: `SAÍDA_POR_TAG: ${tagName}`,
+                status: 'CANCELLED',
+                details: JSON.stringify({
+                  reason: `Lead atendeu à regra da tag de saída "${tagName}". Sequência interrompida.`,
+                  exitTagNodeId: targetTagNode.id,
+                }),
+              },
+            });
 
-              // Registra o log da saída
-              await prisma.automationStepLog.create({
-                data: {
-                  enrollmentId: enrollment.id,
+            exitedSequences.push(currentSequenceNode.data.label || 'Sequência Lead');
+
+            // Verifica se esta tag de saída conecta a uma NOVA sequência seguinte
+            const nextSeqEdges = edges.filter((e) => e.source === targetTagNode.id);
+            for (const nextEdge of nextSeqEdges) {
+              const nextSeqNode = nodes.find(
+                (n) => n.id === nextEdge.target && n.type === 'sequence_lead'
+              );
+
+              if (nextSeqNode) {
+                // Inicia o lead na nova sequência conectada
+                await this.enrollInSequence(
+                  enrollment.automation.id,
+                  nextSeqNode.id,
                   contactId,
-                  nodeId: currentSequenceNode.id,
-                  nodeType: 'sequence_exit',
-                  action: `SAÍDA_POR_TAG: ${tagName}`,
-                  status: 'CANCELLED',
-                  details: JSON.stringify({
-                    reason: `Lead recebeu a tag de saída "${tagName}". Sequência interrompida.`,
-                    exitTagNodeId: targetTagNode.id,
-                  }),
-                },
-              });
-
-              exitedSequences.push(currentSequenceNode.data.label || 'Sequência Lead');
-
-              // Verifica se esta tag de saída conecta a uma NOVA sequência seguinte
-              const nextSeqEdges = edges.filter((e) => e.source === targetTagNode.id);
-              for (const nextEdge of nextSeqEdges) {
-                const nextSeqNode = nodes.find(
-                  (n) => n.id === nextEdge.target && n.type === 'sequence_lead'
+                  tenantId,
+                  { triggeredByTag: tagName, previousSequence: currentSequenceNode.data.label }
                 );
-
-                if (nextSeqNode) {
-                  // Inicia o lead na nova sequência conectada
-                  await this.enrollInSequence(
-                    enrollment.automation.id,
-                    nextSeqNode.id,
-                    contactId,
-                    tenantId,
-                    { triggeredByTag: tagName, previousSequence: currentSequenceNode.data.label }
-                  );
-                  enteredSequences.push(nextSeqNode.data.label || 'Nova Sequência');
-                }
+                enteredSequences.push(nextSeqNode.data.label || 'Nova Sequência');
               }
             }
           }
@@ -470,11 +505,10 @@ export class AutomationEngine {
         const nodes: WorkflowNode[] = JSON.parse(auto.nodes || '[]');
         const edges: WorkflowEdge[] = JSON.parse(auto.edges || '[]');
 
-        // Procura nó de tag com esse nome
+        // Procura nós de tag que atendam aos requisitos
         const matchingTagNodes = nodes.filter((n) => {
           if (n.type !== 'tag' && n.type !== 'trigger') return false;
-          const nodeTag = n.data.config?.tagName || n.data.tagName || '';
-          return nodeTag.toLowerCase().trim() === tagName.toLowerCase().trim();
+          return isTagNodeSatisfied(n);
         });
 
         for (const tagNode of matchingTagNodes) {
@@ -548,7 +582,7 @@ export class AutomationEngine {
     });
 
     // Executa os nós internos do sub-fluxo da sequência
-    const subflow = seqNode.data.subflow || {};
+    const subflow = (seqNode.data as any).subflow || {};
     const subNodes: WorkflowNode[] = subflow.nodes || [];
     const subEdges: WorkflowEdge[] = subflow.edges || [];
 

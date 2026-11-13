@@ -59,6 +59,7 @@ export default function ContactsPage() {
   const [importCsvPreview, setImportCsvPreview] = useState<string[][]>([]);
   const [importTagByProduct, setImportTagByProduct] = useState(true);
   const [importTagByStatus, setImportTagByStatus] = useState(true);
+  const [importTagMode, setImportTagMode] = useState<'UNIFIED' | 'SEPARATE'>('UNIFIED');
   const [importTriggerAuto, setImportTriggerAuto] = useState(false);
   const [importExtraTags, setImportExtraTags] = useState('');
   const [importLoading, setImportLoading] = useState(false);
@@ -138,6 +139,7 @@ export default function ContactsPage() {
       formData.append('file', importFile);
       formData.append('tagByProduct', String(importTagByProduct));
       formData.append('tagByStatus', String(importTagByStatus));
+      formData.append('tagMode', importTagMode);
       formData.append('triggerAutomation', String(importTriggerAuto));
       if (importExtraTags.trim()) {
         formData.append('tags', importExtraTags.trim());
@@ -717,6 +719,52 @@ export default function ContactsPage() {
                   <span className="text-[11px] font-bold text-slate-800 uppercase tracking-wider block">
                     Regras de Automação e Tags
                   </span>
+
+                  {/* Modo de Identificação por Tag (Denis Dominique) */}
+                  <div className="p-2.5 bg-white rounded-lg border border-slate-200 space-y-2">
+                    <span className="text-[11px] font-bold text-slate-700 block">
+                      Formato de Identificação por Tags:
+                    </span>
+                    <div className="space-y-1.5">
+                      <label className="flex items-start gap-2 cursor-pointer">
+                        <input
+                          type="radio"
+                          name="tagMode"
+                          value="UNIFIED"
+                          checked={importTagMode === 'UNIFIED'}
+                          onChange={() => setImportTagMode('UNIFIED')}
+                          className="mt-0.5 text-indigo-600 focus:ring-indigo-500"
+                        />
+                        <div>
+                          <span className="text-xs font-semibold text-slate-800 block">
+                            Tag Unificada por Produto <span className="text-[10px] font-bold text-emerald-600 bg-emerald-50 px-1.5 py-0.2 rounded border border-emerald-200">Recomendado</span>
+                          </span>
+                          <span className="text-slate-500 text-[11px] block">
+                            Cria &quot;Cliente: [Produto] - Compra Aprovada&quot;. Evita disparos duplicados ou cruzados entre múltiplos produtos na esteira.
+                          </span>
+                        </div>
+                      </label>
+
+                      <label className="flex items-start gap-2 cursor-pointer">
+                        <input
+                          type="radio"
+                          name="tagMode"
+                          value="SEPARATE"
+                          checked={importTagMode === 'SEPARATE'}
+                          onChange={() => setImportTagMode('SEPARATE')}
+                          className="mt-0.5 text-indigo-600 focus:ring-indigo-500"
+                        />
+                        <div>
+                          <span className="text-xs font-semibold text-slate-800 block">
+                            Tags Separadas (#Produto e #Situação)
+                          </span>
+                          <span className="text-slate-500 text-[11px] block">
+                            Cria tags soltas para o produto e o status. Use para acionar gatilhos com regra E/OU (Multi-tags) no funil.
+                          </span>
+                        </div>
+                      </label>
+                    </div>
+                  </div>
 
                   <label className="flex items-start gap-2.5 cursor-pointer">
                     <input
