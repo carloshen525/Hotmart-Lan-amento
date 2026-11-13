@@ -46,6 +46,8 @@ model Tenant {
   campaigns          Campaign[]
   auditLogs          AuditLog[]
   whatsappInstance   WhatsappInstance?
+  emailSettings      EmailSettings?
+  emailLogs          EmailLog[]
 }
 
 model TenantMembership {
@@ -326,4 +328,43 @@ model WhatsappInstance {
   updatedAt       DateTime  @updatedAt
 
   tenant          Tenant    @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+}
+
+// -------------------------------------------------------------
+// 9. MULTI-TENANT EMAIL SERVICE (CONFIGURAÇÕES E LOGS POR EXPERT)
+// -------------------------------------------------------------
+model EmailSettings {
+  id            String    @id @default(cuid())
+  tenantId      String    @unique
+  provider      String    @default("SMTP") // SMTP, SES, RESEND, MAILGUN, BREVO
+  smtpHost      String
+  smtpPort      Int       @default(587)
+  smtpSecure    Boolean   @default(false)
+  smtpUsername  String
+  smtpPassword  String    // Criptografada com AES-256
+  fromName      String
+  fromEmail     String
+  replyTo       String?
+  createdAt     DateTime  @default(now())
+  updatedAt     DateTime  @updatedAt
+
+  tenant        Tenant    @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+}
+
+model EmailLog {
+  id           String    @id @default(cuid())
+  tenantId     String
+  to           String
+  subject      String
+  status       String    @default("SENT") // SENT, FAILED
+  provider     String    @default("SMTP")
+  errorMessage String?
+  messageId    String?
+  metadata     String?   // JSON com payload / resposta
+  createdAt    DateTime  @default(now())
+
+  tenant       Tenant    @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+
+  @@index([tenantId, createdAt])
+  @@index([tenantId, status])
 }

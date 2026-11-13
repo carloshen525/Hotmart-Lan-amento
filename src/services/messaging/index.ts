@@ -2,6 +2,7 @@ import { SimulatedMessageService } from './simulated';
 import { MetaWhatsAppService } from './meta-whatsapp';
 import { EvolutionApiService } from './evolution-api';
 import { EmailProviderService } from './email-provider';
+import { EmailService } from '../email';
 import { SendEmailParams, SendWhatsAppParams, SendResult } from './types';
 
 export class MessageManager {
@@ -37,10 +38,33 @@ export class MessageManager {
   }
 
   async sendEmail(params: SendEmailParams): Promise<SendResult> {
+    // 1. Prioriza o módulo Multi-Tenant EmailService (com credenciais exclusivas por tenant)
+    const settings = await EmailService.getSettings(params.tenantId).catch(() => null);
+    if (settings && settings.smtpHost) {
+      const emailRes = await EmailService.send(params.tenantId, {
+        to: params.email,
+        subject: params.subject,
+        html: params.content,
+        variables: params.variables,
+        contactId: params.contactId,
+      });
+
+      return {
+        success: emailRes.success,
+        messageId: emailRes.messageId || '',
+        provider: emailRes.provider,
+        status: emailRes.status === 'SENT' ? 'DELIVERED' : 'FAILED',
+        error: emailRes.error,
+      };
+    }
+
+    // 2. Provedor legado / Resend se configurado
     const mode = process.env.EMAIL_PROVIDER_MODE;
     if (mode === 'RESEND' && this.emailProvider.isConfigured()) {
       return this.emailProvider.send(params);
     }
+
+    // 3. Fallback Simulado
     return this.simulated.sendEmail(params);
   }
 }

@@ -29,11 +29,20 @@ const emailTemplates = [
 export default function EmailsPage() {
   return (
     <div className="space-y-8 max-w-7xl mx-auto">
-      <div>
-        <h1 className="text-2xl font-bold text-slate-900 tracking-tight">E-mail Marketing & Sequências</h1>
-        <p className="text-sm text-slate-500 mt-1">
-          Modelos responsivos, variáveis personalizadas e entregabilidade anti-spam.
-        </p>
+      <div className="flex flex-col sm:flex-row sm:items-center sm:justify-between gap-4">
+        <div>
+          <h1 className="text-2xl font-bold text-slate-900 tracking-tight">E-mail Marketing & Sequências</h1>
+          <p className="text-sm text-slate-500 mt-1">
+            Modelos responsivos, variáveis personalizadas e entregabilidade anti-spam.
+          </p>
+        </div>
+        <a
+          href="/settings/email"
+          className="inline-flex items-center gap-2 px-4 py-2 bg-indigo-600 hover:bg-indigo-700 text-white rounded-xl text-xs font-bold transition-all shadow-md shadow-indigo-600/20"
+        >
+          <Mail className="w-4 h-4" />
+          <span>Configurar Servidor SMTP</span>
+        </a>
       </div>
 
       <div className="grid grid-cols-1 md:grid-cols-2 gap-6">

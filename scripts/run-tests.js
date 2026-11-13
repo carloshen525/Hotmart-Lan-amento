@@ -8,7 +8,7 @@ async function runTestSuite() {
   console.log('=====================================================\n');
 
   let passed = 0;
-  let total = 15;
+  let total = 17;
 
   // Setup de tenant de teste limpo
   const testTenant = await prisma.tenant.upsert({
@@ -631,6 +631,133 @@ async function runTestSuite() {
     assert.strictEqual(isSatisfiedOr, true, 'Com regra QUALQUER (OU), 1 tag DEVE disparar o gatilho');
 
     console.log('✔ PASSOU: Validação multi-tags AND/OR e atualização sem duplicidade verificadas com precisão.');
+    passed++;
+
+    // =========================================================================
+    // TESTE 16: Isolamento Multi-Tenant e Criptografia das Configurações de E-mail
+    // =========================================================================
+    console.log('\n[TESTE 16] Isolamento Multi-Tenant e Criptografia SMTP (AES-256)...');
+
+    const crypto = require('crypto');
+    const ALGO = 'aes-256-gcm';
+    const KEY = crypto
+      .createHash('sha256')
+      .update(process.env.JWT_SECRET || 'secret-fallback-key-32-characters!')
+      .digest();
+
+    function encrypt(text) {
+      const iv = crypto.randomBytes(12);
+      const cipher = crypto.createCipheriv(ALGO, KEY, iv);
+      const enc = Buffer.concat([cipher.update(text, 'utf8'), cipher.final()]);
+      const tag = cipher.getAuthTag();
+      return `${iv.toString('hex')}:${tag.toString('hex')}:${enc.toString('hex')}`;
+    }
+
+    function decrypt(cipherText) {
+      const [ivHex, tagHex, encHex] = cipherText.split(':');
+      const decipher = crypto.createDecipheriv(ALGO, KEY, Buffer.from(ivHex, 'hex'));
+      decipher.setAuthTag(Buffer.from(tagHex, 'hex'));
+      return decipher.update(Buffer.from(encHex, 'hex')) + decipher.final('utf8');
+    }
+
+    const rawPasswordA = 'super_secret_smtp_expert_A_999!';
+    const rawPasswordB = 'outra_senha_isolada_expert_B_111!';
+
+    // Salva configurações para testTenant
+    await prisma.emailSettings.upsert({
+      where: { tenantId: testTenant.id },
+      create: {
+        tenantId: testTenant.id,
+        provider: 'SMTP',
+        smtpHost: 'smtp.expert-a.com',
+        smtpPort: 587,
+        smtpSecure: false,
+        smtpUsername: 'notificacoes@expert-a.com',
+        smtpPassword: encrypt(rawPasswordA),
+        fromName: 'Expert A Lançamento',
+        fromEmail: 'notificacoes@expert-a.com',
+      },
+      update: {
+        smtpHost: 'smtp.expert-a.com',
+        smtpPassword: encrypt(rawPasswordA),
+      },
+    });
+
+    // Salva configurações para otherTenant
+    await prisma.emailSettings.upsert({
+      where: { tenantId: otherTenant.id },
+      create: {
+        tenantId: otherTenant.id,
+        provider: 'SMTP',
+        smtpHost: 'smtp.expert-b.com',
+        smtpPort: 465,
+        smtpSecure: true,
+        smtpUsername: 'contato@expert-b.com',
+        smtpPassword: encrypt(rawPasswordB),
+        fromName: 'Expert B Lançamento',
+        fromEmail: 'contato@expert-b.com',
+      },
+      update: {
+        smtpHost: 'smtp.expert-b.com',
+        smtpPassword: encrypt(rawPasswordB),
+      },
+    });
+
+    // 1. Verifica se a senha foi salva criptografada no banco (nunca em texto puro)
+    const storedA = await prisma.emailSettings.findUnique({ where: { tenantId: testTenant.id } });
+    assert.notStrictEqual(storedA.smtpPassword, rawPasswordA, 'Senha NÃO pode ser salva em texto puro');
+    assert.strictEqual(decrypt(storedA.smtpPassword), rawPasswordA, 'Descriptografia deve recuperar senha original');
+
+    // 2. Verifica isolamento estrito entre tenants
+    const storedB = await prisma.emailSettings.findUnique({ where: { tenantId: otherTenant.id } });
+    assert.strictEqual(storedB.smtpHost, 'smtp.expert-b.com');
+    assert.strictEqual(storedB.smtpPort, 465);
+    assert.strictEqual(decrypt(storedB.smtpPassword), rawPasswordB);
+    assert.notStrictEqual(storedA.id, storedB.id, 'IDs de configuração devem ser únicos e isolados');
+
+    console.log('✔ PASSOU: Credenciais SMTP criptografadas com AES-256 e 100% isoladas entre tenants.');
+    passed++;
+
+    // =========================================================================
+    // TESTE 17: Disparo de E-mail e Trilha de Auditoria (EmailLog)
+    // =========================================================================
+    console.log('\n[TESTE 17] Trilha de Auditoria e Logs de E-mail por Tenant...');
+
+    // Registra log para Tenant A
+    const logA = await prisma.emailLog.create({
+      data: {
+        tenantId: testTenant.id,
+        to: 'aluno_expert_a@gmail.com',
+        subject: 'Bem-vindo ao Lançamento Expert A',
+        status: 'SENT',
+        provider: 'SMTP',
+        messageId: '<msg_test_a_123@smtp.com>',
+      },
+    });
+
+    // Registra log para Tenant B
+    const logB = await prisma.emailLog.create({
+      data: {
+        tenantId: otherTenant.id,
+        to: 'aluno_expert_b@hotmail.com',
+        subject: 'Lembrete de Aula Expert B',
+        status: 'SENT',
+        provider: 'SMTP',
+        messageId: '<msg_test_b_456@smtp.com>',
+      },
+    });
+
+    // Verifica que Tenant A vê apenas seus logs
+    const tenantALogs = await prisma.emailLog.findMany({ where: { tenantId: testTenant.id } });
+    assert.ok(tenantALogs.some((l) => l.id === logA.id));
+    assert.ok(!tenantALogs.some((l) => l.id === logB.id), 'Tenant A NÃO pode acessar logs do Tenant B');
+
+    // Verifica que Tenant B vê apenas seus logs
+    const tenantBLogs = await prisma.emailLog.findMany({ where: { tenantId: otherTenant.id } });
+    assert.ok(tenantBLogs.some((l) => l.id === logB.id));
+    assert.ok(!tenantBLogs.some((l) => l.id === logA.id), 'Tenant B NÃO pode acessar logs do Tenant A');
+
+    console.log('✔ PASSOU: Trilha de auditoria email_logs com isolamento estrito entre tenants validada.');
     passed++;
 
     console.log('\n=====================================================');

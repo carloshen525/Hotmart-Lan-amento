@@ -93,11 +93,20 @@ export default function SettingsPage() {
 
   return (
     <div className="space-y-8 max-w-7xl mx-auto">
-      <div>
-        <h1 className="text-2xl font-bold text-slate-900 tracking-tight">Configurações & Gestão de Experts</h1>
-        <p className="text-sm text-slate-500 mt-1">
-          Ambientes multi-tenant com contatos, tags, webhooks Hotmart e WhatsApp 100% isolados.
-        </p>
+      <div className="flex flex-col sm:flex-row sm:items-center sm:justify-between gap-4">
+        <div>
+          <h1 className="text-2xl font-bold text-slate-900 tracking-tight">Configurações & Gestão de Experts</h1>
+          <p className="text-sm text-slate-500 mt-1">
+            Ambientes multi-tenant com contatos, tags, webhooks Hotmart, WhatsApp e E-mail 100% isolados.
+          </p>
+        </div>
+        <a
+          href="/settings/email"
+          className="inline-flex items-center gap-2 px-4 py-2 bg-slate-900 hover:bg-slate-800 text-white rounded-xl text-xs font-bold transition-all shadow-md"
+        >
+          <Mail className="w-4 h-4 text-indigo-400" />
+          <span>Configurações de E-mail (SMTP)</span>
+        </a>
       </div>
 
       {notice && (
