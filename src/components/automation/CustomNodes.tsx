@@ -14,23 +14,97 @@ import {
   XCircle,
   CheckCircle2,
   AlertCircle,
+  Globe,
+  UserPlus,
 } from 'lucide-react';
 
 // Nó de Gatilho (Trigger)
 export const TriggerNode = memo(({ data }: any) => {
+  const isTagTrigger = data.subtype === 'TAG_ADDED' || !!data.config?.tagName;
+  const isWebhookTrigger = data.subtype === 'HOTMART_EVENT' || data.subtype === 'WEBHOOK';
+  const isContactTrigger = data.subtype === 'CONTACT_CREATED';
+
+  const getBadge = () => {
+    if (isTagTrigger) {
+      return (
+        <span className="px-2 py-0.5 rounded-full text-[9px] font-semibold bg-purple-500/20 text-purple-300 border border-purple-500/30">
+          Tag
+        </span>
+      );
+    }
+    if (isWebhookTrigger) {
+      return (
+        <span className="px-2 py-0.5 rounded-full text-[9px] font-semibold bg-orange-500/20 text-orange-300 border border-orange-500/30">
+          Webhook
+        </span>
+      );
+    }
+    return (
+      <span className="px-2 py-0.5 rounded-full text-[9px] font-semibold bg-indigo-500/20 text-indigo-300 border border-indigo-500/30">
+        Início
+      </span>
+    );
+  };
+
+  const getIcon = () => {
+    if (isTagTrigger) return <Tag className="w-3.5 h-3.5 text-purple-400" />;
+    if (isWebhookTrigger) return <Globe className="w-3.5 h-3.5 text-orange-400" />;
+    if (isContactTrigger) return <UserPlus className="w-3.5 h-3.5 text-emerald-400" />;
+    return <Zap className="w-3.5 h-3.5 text-indigo-400" />;
+  };
+
   return (
-    <div className="bg-slate-900 border-2 border-indigo-500 rounded-2xl shadow-xl p-3.5 w-60 text-xs text-white">
+    <div className="bg-slate-900 border-2 border-indigo-500/90 hover:border-indigo-400 rounded-2xl shadow-2xl p-4 w-68 text-xs text-white transition-all">
       <div className="flex items-center justify-between gap-2 mb-2">
         <div className="flex items-center gap-1.5 text-indigo-400 font-bold">
-          <div className="w-6 h-6 rounded-lg bg-indigo-500/20 flex items-center justify-center text-indigo-400">
-            <Zap className="w-3.5 h-3.5" />
+          <div className="w-6 h-6 rounded-lg bg-indigo-500/20 flex items-center justify-center">
+            {getIcon()}
           </div>
-          <span className="uppercase text-[10px] tracking-wider">Gatilho de Entrada</span>
+          <span className="uppercase text-[10px] tracking-wider text-slate-300">Gatilho de Entrada</span>
         </div>
-        <span className="w-2 h-2 rounded-full bg-indigo-400 animate-ping" />
+        {getBadge()}
       </div>
+
       <div className="font-bold text-slate-100 text-sm leading-snug">{data.label}</div>
-      <div className="text-[11px] text-slate-400 mt-1">{data.subtype || 'Início da Automação'}</div>
+
+      {/* Detalhe de Tag de Entrada */}
+      {isTagTrigger && data.config?.tagName && (
+        <div className="mt-2.5 pt-2 border-t border-slate-800 flex items-center justify-between">
+          <div className="flex items-center gap-1.5">
+            <span
+              className="w-2.5 h-2.5 rounded-full shrink-0"
+              style={{ backgroundColor: data.config?.tagColor || '#a855f7' }}
+            />
+            <span className="font-semibold text-xs text-purple-200 truncate max-w-[140px]">
+              {data.config.tagName}
+            </span>
+          </div>
+          {data.config?.leadsCount !== undefined && (
+            <span className="text-[10px] font-mono text-slate-400 bg-slate-800 px-2 py-0.5 rounded-md">
+              {data.config.leadsCount} leads
+            </span>
+          )}
+        </div>
+      )}
+
+      {/* Detalhe de Webhook de Entrada */}
+      {isWebhookTrigger && (
+        <div className="mt-2.5 pt-2 border-t border-slate-800 space-y-1 text-[11px]">
+          <div className="text-orange-300 font-medium">
+            Evento: {data.config?.webhookEvent || 'Hotmart Webhook'}
+          </div>
+          {data.config?.webhookTag && (
+            <div className="text-[10px] text-slate-400 flex items-center gap-1">
+              <span>Aplica tag:</span>
+              <span className="text-purple-300 font-semibold">{data.config.webhookTag}</span>
+            </div>
+          )}
+        </div>
+      )}
+
+      {!isTagTrigger && !isWebhookTrigger && (
+        <div className="text-[11px] text-slate-400 mt-1">{data.subtype || 'Início da Automação'}</div>
+      )}
 
       {/* Saída */}
       <Handle

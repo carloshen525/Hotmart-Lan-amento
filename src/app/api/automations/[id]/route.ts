@@ -48,6 +48,7 @@ export async function PUT(request: Request, { params }: { params: { id: string }
     if (body.description !== undefined) updateData.description = body.description;
     if (body.status !== undefined) updateData.status = body.status;
     if (body.triggerType !== undefined) updateData.triggerType = body.triggerType;
+    if (body.triggerConfig !== undefined) updateData.triggerConfig = typeof body.triggerConfig === 'string' ? body.triggerConfig : JSON.stringify(body.triggerConfig);
     if (body.nodes !== undefined) updateData.nodes = JSON.stringify(body.nodes);
     if (body.edges !== undefined) updateData.edges = JSON.stringify(body.edges);
 

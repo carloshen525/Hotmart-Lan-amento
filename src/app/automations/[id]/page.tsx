@@ -40,6 +40,10 @@ import {
   ChevronDown,
   Info,
   Layers,
+  Copy,
+  Check,
+  Globe,
+  UserPlus,
 } from 'lucide-react';
 
 import {
@@ -103,6 +107,18 @@ export default function AutomationCanvasPage() {
   const [simulationSteps, setSimulationSteps] = useState<any[]>([]);
   const [simulating, setSimulating] = useState(false);
 
+  // Estado para copiar URL do webhook
+  const [copiedWebhook, setCopiedWebhook] = useState(false);
+  const copyWebhookUrl = () => {
+    const url =
+      typeof window !== 'undefined'
+        ? `${window.location.origin}/api/webhooks/hotmart`
+        : '/api/webhooks/hotmart';
+    navigator.clipboard.writeText(url);
+    setCopiedWebhook(true);
+    setTimeout(() => setCopiedWebhook(false), 2500);
+  };
+
   // Mapeamento de nós do React Flow
   const nodeTypes = useMemo(
     () => ({
@@ -159,12 +175,19 @@ export default function AutomationCanvasPage() {
     setSaveNotice(null);
     try {
       const newStatus = publishStatus || status;
+
+      const triggerNode = nodes.find((n) => n.data.type === 'trigger');
+      const triggerType = (triggerNode?.data?.subtype as string) || 'TAG_ADDED';
+      const triggerConfig = triggerNode?.data?.config || {};
+
       const res = await fetch(`/api/automations/${automationId}`, {
         method: 'PUT',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({
           name,
           status: newStatus,
+          triggerType,
+          triggerConfig,
           nodes,
           edges,
         }),
@@ -348,35 +371,47 @@ export default function AutomationCanvasPage() {
       if (data.tag) {
         await fetchTags();
 
-        // Se um nó de tag estiver selecionado, vincula a nova tag automaticamente
+        // Se um nó de tag ou gatilho estiver selecionado, vincula a nova tag automaticamente
         if (selectedNode) {
-          const isAddOrRemove = selectedNode.data.subtype === 'ADD_TAG' || selectedNode.data.subtype === 'REMOVE_TAG';
-          const prefix = selectedNode.data.subtype === 'REMOVE_TAG' ? 'Remover Tag' : 'Tag';
-          const newLabel = isAddOrRemove ? `${prefix}: ${data.tag.name}` : `Verifica: ${data.tag.name}`;
+          if (selectedNode.data.type === 'trigger') {
+            if (
+              selectedNode.data.subtype === 'HOTMART_EVENT' ||
+              selectedNode.data.subtype === 'WEBHOOK'
+            ) {
+              updateSelectedNodeConfig('webhookTag', data.tag.name);
+            } else {
+              handleSelectTriggerTag(data.tag);
+            }
+          } else {
+            const isAddOrRemove =
+              selectedNode.data.subtype === 'ADD_TAG' || selectedNode.data.subtype === 'REMOVE_TAG';
+            const prefix = selectedNode.data.subtype === 'REMOVE_TAG' ? 'Remover Tag' : 'Tag';
+            const newLabel = isAddOrRemove ? `${prefix}: ${data.tag.name}` : `Verifica: ${data.tag.name}`;
 
-          setNodes((nds) =>
-            nds.map((n) => {
-              if (n.id === selectedNode.id) {
-                const updated = {
-                  ...n,
-                  data: {
-                    ...n.data,
-                    label: newLabel,
-                    config: {
-                      ...(n.data.config as object),
-                      tagName: data.tag.name,
-                      tagColor: data.tag.color,
-                      tagId: data.tag.id,
-                      leadsCount: 0,
+            setNodes((nds) =>
+              nds.map((n) => {
+                if (n.id === selectedNode.id) {
+                  const updated = {
+                    ...n,
+                    data: {
+                      ...n.data,
+                      label: newLabel,
+                      config: {
+                        ...(n.data.config as object),
+                        tagName: data.tag.name,
+                        tagColor: data.tag.color,
+                        tagId: data.tag.id,
+                        leadsCount: 0,
+                      },
                     },
-                  },
-                };
-                setSelectedNode(updated);
-                return updated;
-              }
-              return n;
-            })
-          );
+                  };
+                  setSelectedNode(updated);
+                  return updated;
+                }
+                return n;
+              })
+            );
+          }
         }
 
         setNewTagName('');
@@ -468,6 +503,141 @@ export default function AutomationCanvasPage() {
                 tagColor: tag.color,
                 tagId: tag.id,
                 leadsCount: tag._count?.contacts || 0,
+              },
+            },
+          };
+          setSelectedNode(updated);
+          return updated;
+        }
+        return n;
+      })
+    );
+  };
+
+  // Alterna o tipo do Gatilho de Entrada
+  const handleSelectTriggerType = (type: string) => {
+    if (!selectedNode) return;
+    const isTag = type === 'TAG_ADDED';
+    const isWebhook = type === 'HOTMART_EVENT';
+
+    let newLabel = 'Gatilho de Entrada';
+    let updatedConfig: any = {
+      ...(selectedNode.data.config as object),
+    };
+
+    if (isTag) {
+      const tagName = (selectedNode.data.config as any)?.tagName || availableTags[0]?.name || 'Inscrito';
+      const tagColor = (selectedNode.data.config as any)?.tagColor || availableTags[0]?.color || '#8b5cf6';
+      const tagId = (selectedNode.data.config as any)?.tagId || availableTags[0]?.id;
+      const leadsCount = availableTags.find((t) => t.id === tagId)?._count?.contacts || 0;
+
+      updatedConfig.tagName = tagName;
+      updatedConfig.tagColor = tagColor;
+      updatedConfig.tagId = tagId;
+      updatedConfig.leadsCount = leadsCount;
+      newLabel = `Gatilho: Tag "${tagName}"`;
+    } else if (isWebhook) {
+      const webhookEvent = (selectedNode.data.config as any)?.webhookEvent || 'PURCHASE_WAITING_PAYMENT';
+      const webhookTag = (selectedNode.data.config as any)?.webhookTag || 'Pix Gerado';
+      updatedConfig.webhookEvent = webhookEvent;
+      updatedConfig.webhookTag = webhookTag;
+      const eventName =
+        webhookEvent === 'PURCHASE_APPROVED'
+          ? 'Compra Aprovada'
+          : webhookEvent === 'PURCHASE_WAITING_PAYMENT'
+          ? 'Pix Gerado'
+          : 'Evento Hotmart';
+      newLabel = `Gatilho: Webhook (${eventName})`;
+    }
+
+    setNodes((nds) =>
+      nds.map((n) => {
+        if (n.id === selectedNode.id) {
+          const updated = {
+            ...n,
+            data: {
+              ...n.data,
+              subtype: type,
+              label: newLabel,
+              config: updatedConfig,
+            },
+          };
+          setSelectedNode(updated);
+          return updated;
+        }
+        return n;
+      })
+    );
+  };
+
+  // Seleciona tag para o gatilho de entrada
+  const handleSelectTriggerTag = (tag: TagItem) => {
+    if (!selectedNode) return;
+    const newLabel = `Gatilho: Tag "${tag.name}"`;
+    setNodes((nds) =>
+      nds.map((n) => {
+        if (n.id === selectedNode.id) {
+          const updated = {
+            ...n,
+            data: {
+              ...n.data,
+              subtype: 'TAG_ADDED',
+              label: newLabel,
+              config: {
+                ...(n.data.config as object),
+                tagName: tag.name,
+                tagColor: tag.color,
+                tagId: tag.id,
+                leadsCount: tag._count?.contacts || 0,
+              },
+            },
+          };
+          setSelectedNode(updated);
+          return updated;
+        }
+        return n;
+      })
+    );
+  };
+
+  // Seleciona evento de webhook para o gatilho
+  const handleSelectWebhookEvent = (eventValue: string) => {
+    if (!selectedNode) return;
+    const eventNames: Record<string, string> = {
+      PURCHASE_WAITING_PAYMENT: 'Pix Gerado',
+      PURCHASE_APPROVED: 'Compra Aprovada',
+      PURCHASE_OUT_OF_SHOPPING_CART: 'Carrinho Abandonado',
+      PURCHASE_BILLET_PRINTED: 'Boleto Gerado',
+      PURCHASE_REFUNDED: 'Reembolso',
+      GENERIC_WEBHOOK: 'Webhook Externo',
+    };
+    const defaultTags: Record<string, string> = {
+      PURCHASE_WAITING_PAYMENT: 'Pix Gerado',
+      PURCHASE_APPROVED: 'Cliente',
+      PURCHASE_OUT_OF_SHOPPING_CART: 'Carrinho Abandonado',
+      PURCHASE_BILLET_PRINTED: 'Boleto Gerado',
+      PURCHASE_REFUNDED: 'Reembolsado',
+      GENERIC_WEBHOOK: 'Webhook',
+    };
+
+    const eventLabel = eventNames[eventValue] || 'Webhook';
+    const autoTag = defaultTags[eventValue] || 'Webhook';
+    const newLabel = `Gatilho: Webhook (${eventLabel})`;
+
+    setNodes((nds) =>
+      nds.map((n) => {
+        if (n.id === selectedNode.id) {
+          const currentConfig = (n.data.config as any) || {};
+          const updated = {
+            ...n,
+            data: {
+              ...n.data,
+              subtype: 'HOTMART_EVENT',
+              label: newLabel,
+              config: {
+                ...currentConfig,
+                webhookEvent: eventValue,
+                webhookTag: currentConfig.webhookTag || autoTag,
               },
             },
           };
@@ -768,6 +938,218 @@ export default function AutomationCanvasPage() {
                     className="w-full p-2.5 bg-slate-950 border border-slate-700 rounded-xl text-white focus:outline-none focus:border-indigo-500"
                   />
                 </div>
+
+                {/* Bloco de GATILHO DE ENTRADA (TRIGGER) */}
+                {selectedNode.data.type === 'trigger' && (
+                  <div className="space-y-4 p-4 rounded-xl bg-slate-950/70 border border-indigo-500/40">
+                    <div className="flex items-center gap-2 text-indigo-400 font-bold">
+                      <Zap className="w-4 h-4" />
+                      <span>Configurar Gatilho de Entrada</span>
+                    </div>
+
+                    <div>
+                      <label className="block text-slate-300 font-semibold mb-1.5">
+                        Como este fluxo deve iniciar?
+                      </label>
+                      <div className="grid grid-cols-2 gap-2">
+                        <button
+                          type="button"
+                          onClick={() => handleSelectTriggerType('TAG_ADDED')}
+                          className={`p-2.5 rounded-xl border text-left flex flex-col gap-1 transition-all cursor-pointer ${
+                            selectedNode.data.subtype === 'TAG_ADDED' ||
+                            !selectedNode.data.subtype ||
+                            selectedNode.data.subtype === 'CONTACT_CREATED'
+                              ? 'bg-purple-500/20 border-purple-500 text-white'
+                              : 'bg-slate-900 border-slate-800 text-slate-400 hover:border-slate-700'
+                          }`}
+                        >
+                          <div className="flex items-center gap-1.5 text-xs font-bold text-purple-300">
+                            <TagIcon className="w-3.5 h-3.5" />
+                            <span>Lead com Tag</span>
+                          </div>
+                          <span className="text-[10px] text-slate-400 leading-tight">
+                            Ativa quando o lead recebe uma tag específica
+                          </span>
+                        </button>
+
+                        <button
+                          type="button"
+                          onClick={() => handleSelectTriggerType('HOTMART_EVENT')}
+                          className={`p-2.5 rounded-xl border text-left flex flex-col gap-1 transition-all cursor-pointer ${
+                            selectedNode.data.subtype === 'HOTMART_EVENT' ||
+                            selectedNode.data.subtype === 'WEBHOOK'
+                              ? 'bg-orange-500/20 border-orange-500 text-white'
+                              : 'bg-slate-900 border-slate-800 text-slate-400 hover:border-slate-700'
+                          }`}
+                        >
+                          <div className="flex items-center gap-1.5 text-xs font-bold text-orange-300">
+                            <Globe className="w-3.5 h-3.5" />
+                            <span>Webhook / Vendas</span>
+                          </div>
+                          <span className="text-[10px] text-slate-400 leading-tight">
+                            Ativa por evento da Hotmart ou webhook
+                          </span>
+                        </button>
+                      </div>
+                    </div>
+
+                    {/* SELEÇÃO QUANDO FOR TAG */}
+                    {(selectedNode.data.subtype === 'TAG_ADDED' ||
+                      !selectedNode.data.subtype ||
+                      selectedNode.data.subtype === 'CONTACT_CREATED') && (
+                      <div className="space-y-3 pt-2 border-t border-slate-800">
+                        <div className="flex items-center justify-between">
+                          <label className="text-slate-300 font-semibold text-[11px]">
+                            Selecione a Tag de Entrada
+                          </label>
+
+                          <button
+                            type="button"
+                            onClick={() => setIsCreateTagOpen(true)}
+                            className="px-2 py-0.5 bg-purple-600 hover:bg-purple-700 text-white rounded-lg text-[10px] font-semibold flex items-center gap-1 cursor-pointer"
+                          >
+                            <Plus className="w-3 h-3" />
+                            <span>Nova Tag</span>
+                          </button>
+                        </div>
+
+                        <div className="max-h-44 overflow-y-auto space-y-1.5 pr-1">
+                          {availableTags.length === 0 ? (
+                            <div className="p-3 text-center text-slate-500 text-[11px]">
+                              Nenhuma tag cadastrada. Clique em &quot;Nova Tag&quot; acima para criar tags como &quot;Inscrito&quot; ou &quot;Lead tráfego&quot;.
+                            </div>
+                          ) : (
+                            availableTags.map((tag) => {
+                              const isSelected =
+                                (selectedNode.data.config as any)?.tagName === tag.name ||
+                                (selectedNode.data.config as any)?.tagId === tag.id;
+
+                              return (
+                                <div
+                                  key={tag.id}
+                                  className={`flex items-center justify-between p-2 rounded-xl border transition-all ${
+                                    isSelected
+                                      ? 'bg-purple-500/20 border-purple-500 text-white font-medium'
+                                      : 'bg-slate-900 border-slate-800 text-slate-300 hover:border-slate-700'
+                                  }`}
+                                >
+                                  <button
+                                    type="button"
+                                    onClick={() => handleSelectTriggerTag(tag)}
+                                    className="flex items-center gap-2 flex-1 text-left cursor-pointer"
+                                  >
+                                    <span
+                                      className="w-3 h-3 rounded-full shrink-0"
+                                      style={{ backgroundColor: tag.color }}
+                                    />
+                                    <span className="truncate">{tag.name}</span>
+                                    {tag._count?.contacts !== undefined && (
+                                      <span className="text-[10px] text-slate-500">
+                                        ({tag._count.contacts} leads)
+                                      </span>
+                                    )}
+                                  </button>
+
+                                  <button
+                                    type="button"
+                                    onClick={() => {
+                                      setTagBeingEdited(tag);
+                                      setIsEditTagOpen(true);
+                                    }}
+                                    title="Editar esta Tag"
+                                    className="text-slate-400 hover:text-white p-1 hover:bg-slate-800 rounded-lg cursor-pointer ml-1"
+                                  >
+                                    <Edit2 className="w-3 h-3" />
+                                  </button>
+                                </div>
+                              );
+                            })
+                          )}
+                        </div>
+                      </div>
+                    )}
+
+                    {/* SELEÇÃO QUANDO FOR WEBHOOK */}
+                    {(selectedNode.data.subtype === 'HOTMART_EVENT' ||
+                      selectedNode.data.subtype === 'WEBHOOK') && (
+                      <div className="space-y-3 pt-2 border-t border-slate-800">
+                        <div>
+                          <label className="block text-slate-300 font-semibold mb-1 text-[11px]">
+                            Evento da Hotmart / Webhook
+                          </label>
+                          <select
+                            value={(selectedNode.data.config as any)?.webhookEvent || 'PURCHASE_WAITING_PAYMENT'}
+                            onChange={(e) => handleSelectWebhookEvent(e.target.value)}
+                            className="w-full p-2.5 bg-slate-900 border border-slate-700 rounded-xl text-white text-xs focus:outline-none focus:border-orange-500"
+                          >
+                            <option value="PURCHASE_WAITING_PAYMENT">Pix Gerado / Aguardando Pagamento</option>
+                            <option value="PURCHASE_APPROVED">Compra Aprovada (Hotmart)</option>
+                            <option value="PURCHASE_OUT_OF_SHOPPING_CART">Carrinho Abandonado</option>
+                            <option value="PURCHASE_BILLET_PRINTED">Boleto Bancário Impresso</option>
+                            <option value="PURCHASE_REFUNDED">Reembolso / Chargeback</option>
+                            <option value="GENERIC_WEBHOOK">Webhook Personalizado (Qualquer Origem)</option>
+                          </select>
+                        </div>
+
+                        <div>
+                          <div className="flex items-center justify-between mb-1">
+                            <label className="text-slate-300 font-semibold text-[11px]">
+                              Tag de Webhook Aplicada ao Lead
+                            </label>
+                            <button
+                              type="button"
+                              onClick={() => setIsCreateTagOpen(true)}
+                              className="text-purple-400 hover:text-purple-300 text-[10px] font-semibold cursor-pointer"
+                            >
+                              + Criar Tag
+                            </button>
+                          </div>
+                          <select
+                            value={(selectedNode.data.config as any)?.webhookTag || ''}
+                            onChange={(e) => updateSelectedNodeConfig('webhookTag', e.target.value)}
+                            className="w-full p-2.5 bg-slate-900 border border-slate-700 rounded-xl text-white text-xs focus:outline-none focus:border-orange-500"
+                          >
+                            <option value="">Selecione ou crie uma tag...</option>
+                            {availableTags.map((tag) => (
+                              <option key={tag.id} value={tag.name}>
+                                {tag.name}
+                              </option>
+                            ))}
+                          </select>
+                          <span className="text-[10px] text-slate-400 mt-1 block">
+                            Quando o webhook chegar, o lead receberá esta tag e entrará no fluxo.
+                          </span>
+                        </div>
+
+                        {/* URL do Webhook com botão Copiar */}
+                        <div className="p-2.5 rounded-xl bg-slate-900 border border-slate-800 space-y-1.5">
+                          <span className="text-[10px] text-slate-400 font-semibold block uppercase">
+                            URL do Webhook para colar na Hotmart:
+                          </span>
+                          <div className="flex items-center gap-2 bg-slate-950 p-2 rounded-lg border border-slate-800 font-mono text-[10px] text-orange-300 break-all select-all">
+                            <span className="truncate flex-1">
+                              {typeof window !== 'undefined'
+                                ? `${window.location.origin}/api/webhooks/hotmart`
+                                : '/api/webhooks/hotmart'}
+                            </span>
+                            <button
+                              type="button"
+                              onClick={copyWebhookUrl}
+                              className="px-2 py-1 bg-slate-800 hover:bg-slate-700 text-white rounded text-[10px] shrink-0 flex items-center gap-1 cursor-pointer"
+                            >
+                              {copiedWebhook ? (
+                                <Check className="w-3 h-3 text-emerald-400" />
+                              ) : (
+                                <Copy className="w-3 h-3" />
+                              )}
+                              <span>{copiedWebhook ? 'Copiado!' : 'Copiar'}</span>
+                            </button>
+                          </div>
+                        </div>
+                      </div>
+                    )}
+                  </div>
+                )}
 
                 {/* Bloco de TEMPORIZADOR / TIMER */}
                 {selectedNode.data.type === 'delay' && (
