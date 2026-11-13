@@ -44,6 +44,7 @@ import {
   Check,
   Globe,
   UserPlus,
+  Code,
 } from 'lucide-react';
 
 import {
@@ -117,6 +118,24 @@ export default function AutomationCanvasPage() {
     navigator.clipboard.writeText(url);
     setCopiedWebhook(true);
     setTimeout(() => setCopiedWebhook(false), 2500);
+  };
+
+  // Copiar código de compartilhamento da automação
+  const [copiedShareCode, setCopiedShareCode] = useState(false);
+  const handleCopyCode = async () => {
+    try {
+      const res = await fetch('/api/automations/share', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ automationId }),
+      });
+      const data = await res.json();
+      if (data.shareCode) {
+        await navigator.clipboard.writeText(data.shareCode);
+        setCopiedShareCode(true);
+        setTimeout(() => setCopiedShareCode(false), 2500);
+      }
+    } catch {}
   };
 
   // Mapeamento de nós do React Flow
@@ -719,12 +738,34 @@ export default function AutomationCanvasPage() {
           </div>
         </div>
 
-        <div className="flex items-center gap-3">
+        <div className="flex items-center gap-2.5">
           {saveNotice && (
             <span className="text-xs font-semibold text-emerald-400 bg-emerald-950/60 px-3 py-1 rounded-full border border-emerald-500/30">
               {saveNotice}
             </span>
           )}
+
+          <button
+            onClick={handleCopyCode}
+            className={`flex items-center gap-1.5 px-3 py-1.5 rounded-xl border text-xs font-semibold transition-all cursor-pointer ${
+              copiedShareCode
+                ? 'border-emerald-500/60 bg-emerald-950/80 text-emerald-300'
+                : 'border-slate-700 bg-slate-800/80 hover:bg-slate-700 text-slate-200'
+            }`}
+            title="Copiar código para compartilhar este fluxo com outros usuários"
+          >
+            {copiedShareCode ? (
+              <>
+                <Check className="w-3.5 h-3.5 text-emerald-400" />
+                <span>Código Copiado!</span>
+              </>
+            ) : (
+              <>
+                <Code className="w-3.5 h-3.5 text-indigo-400" />
+                <span>Compartilhar Código</span>
+              </>
+            )}
+          </button>
 
           <button
             onClick={() => {

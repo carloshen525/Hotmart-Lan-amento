@@ -1,6 +1,7 @@
 import { NextResponse } from 'next/server';
 import { prisma } from '@/lib/prisma';
 import { getActiveTenantId } from '@/lib/tenancy';
+import { parseShareCode } from '@/lib/automation-templates';
 
 export async function GET() {
   try {
@@ -31,10 +32,36 @@ export async function GET() {
 export async function POST(request: Request) {
   try {
     const tenantId = await getActiveTenantId();
-    const { name, description, triggerType, triggerConfig, nodes, edges } = await request.json();
+    const body = await request.json();
+    const { name, description, shareCode } = body;
+    let { triggerType, triggerConfig, nodes, edges } = body;
 
     if (!name) {
       return NextResponse.json({ error: 'Nome da automação é obrigatório' }, { status: 400 });
+    }
+
+    // Se informou um código de compartilhamento
+    if (shareCode) {
+      const decoded = parseShareCode(shareCode);
+      if (decoded) {
+        triggerType = decoded.triggerType;
+        triggerConfig = decoded.triggerConfig;
+        nodes = decoded.nodes;
+        edges = decoded.edges;
+      } else {
+        const cleanId = shareCode.replace(/^LF-/, '').trim();
+        const existing = await prisma.automation.findFirst({
+          where: {
+            OR: [{ id: cleanId }, { id: shareCode }],
+          },
+        });
+        if (existing) {
+          triggerType = existing.triggerType;
+          triggerConfig = existing.triggerConfig ? JSON.parse(existing.triggerConfig) : {};
+          nodes = existing.nodes ? JSON.parse(existing.nodes) : [];
+          edges = existing.edges ? JSON.parse(existing.edges) : [];
+        }
+      }
     }
 
     const defaultNodes = [
