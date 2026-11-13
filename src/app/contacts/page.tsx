@@ -1,11 +1,12 @@
 'use client';
 
-import { useState, useEffect } from 'react';
+import { useState, useEffect, useRef } from 'react';
 import {
   Users,
   Search,
   Filter,
   Download,
+  Upload,
   Plus,
   X,
   Mail,
@@ -16,6 +17,10 @@ import {
   AlertCircle,
   Trash2,
   UserX,
+  FileSpreadsheet,
+  Check,
+  RefreshCw,
+  Info,
 } from 'lucide-react';
 
 interface Contact {
@@ -32,6 +37,7 @@ interface Contact {
 
 export default function ContactsPage() {
   const [contacts, setContacts] = useState<Contact[]>([]);
+  const [tagsList, setTagsList] = useState<Array<{ id: string; name: string; color: string }>>([]);
   const [loading, setLoading] = useState(true);
   const [search, setSearch] = useState('');
   const [selectedTag, setSelectedTag] = useState('');
@@ -47,6 +53,25 @@ export default function ContactsPage() {
   const [newUtmSource, setNewUtmSource] = useState('instagram');
   const [triggerAuto, setTriggerAuto] = useState(true);
 
+  // Importação CSV Hotmart
+  const [isImportModalOpen, setIsImportModalOpen] = useState(false);
+  const [importFile, setImportFile] = useState<File | null>(null);
+  const [importCsvPreview, setImportCsvPreview] = useState<string[][]>([]);
+  const [importTagByProduct, setImportTagByProduct] = useState(true);
+  const [importTagByStatus, setImportTagByStatus] = useState(true);
+  const [importTriggerAuto, setImportTriggerAuto] = useState(false);
+  const [importExtraTags, setImportExtraTags] = useState('');
+  const [importLoading, setImportLoading] = useState(false);
+  const [importResult, setImportResult] = useState<{
+    success: boolean;
+    totalRows: number;
+    created: number;
+    updated: number;
+    errorsCount: number;
+    errorSamples?: string[];
+  } | null>(null);
+  const fileInputRef = useRef<HTMLInputElement | null>(null);
+
   const fetchContacts = () => {
     setLoading(true);
     let url = `/api/contacts?search=${encodeURIComponent(search)}`;
@@ -61,12 +86,96 @@ export default function ContactsPage() {
       .catch(() => setLoading(false));
   };
 
+  const fetchTags = () => {
+    fetch('/api/tags')
+      .then((res) => res.json())
+      .then((data) => {
+        if (data.tags) {
+          setTagsList(data.tags);
+        }
+      })
+      .catch(() => {});
+  };
+
+  useEffect(() => {
+    fetchTags();
+  }, []);
+
   useEffect(() => {
     const timer = setTimeout(() => {
       fetchContacts();
     }, 300);
     return () => clearTimeout(timer);
   }, [search, selectedTag]);
+
+  const handleFileChange = (e: React.ChangeEvent<HTMLInputElement>) => {
+    const file = e.target.files?.[0];
+    if (file) {
+      setImportFile(file);
+      setImportResult(null);
+      // Ler prévia
+      const reader = new FileReader();
+      reader.onload = (event) => {
+        const text = (event.target?.result as string) || '';
+        const lines = text.split(/\r?\n/).filter((l) => l.trim().length > 0);
+        const delimiter = lines[0]?.includes(';') ? ';' : ',';
+        const sampleRows = lines.slice(0, 4).map((l) =>
+          l.split(delimiter).map((col) => col.replace(/^"|"$/g, '').trim())
+        );
+        setImportCsvPreview(sampleRows);
+      };
+      reader.readAsText(file);
+    }
+  };
+
+  const handleExecuteImport = async () => {
+    if (!importFile) return;
+    setImportLoading(true);
+    setImportResult(null);
+
+    try {
+      const formData = new FormData();
+      formData.append('file', importFile);
+      formData.append('tagByProduct', String(importTagByProduct));
+      formData.append('tagByStatus', String(importTagByStatus));
+      formData.append('triggerAutomation', String(importTriggerAuto));
+      if (importExtraTags.trim()) {
+        formData.append('tags', importExtraTags.trim());
+      }
+
+      const res = await fetch('/api/contacts/import', {
+        method: 'POST',
+        body: formData,
+      });
+
+      const data = await res.json();
+      if (res.ok && data.success) {
+        setImportResult(data);
+        fetchContacts();
+        fetchTags();
+      } else {
+        setImportResult({
+          success: false,
+          totalRows: 0,
+          created: 0,
+          updated: 0,
+          errorsCount: 1,
+          errorSamples: [data.error || 'Erro ao processar importação'],
+        });
+      }
+    } catch (err: any) {
+      setImportResult({
+        success: false,
+        totalRows: 0,
+        created: 0,
+        updated: 0,
+        errorsCount: 1,
+        errorSamples: [err.message || 'Erro de conexão com o servidor'],
+      });
+    } finally {
+      setImportLoading(false);
+    }
+  };
 
   const handleCreateContact = async (e: React.FormEvent) => {
     e.preventDefault();
@@ -134,7 +243,19 @@ export default function ContactsPage() {
           </p>
         </div>
 
-        <div className="flex items-center gap-3">
+        <div className="flex items-center gap-2 sm:gap-3 flex-wrap">
+          <button
+            onClick={() => {
+              setImportResult(null);
+              setImportFile(null);
+              setImportCsvPreview([]);
+              setIsImportModalOpen(true);
+            }}
+            className="flex items-center gap-2 px-3.5 py-2 border border-indigo-200 bg-indigo-50/60 hover:bg-indigo-100 text-indigo-700 font-semibold text-xs rounded-lg transition-colors shadow-sm"
+          >
+            <Upload className="w-3.5 h-3.5" />
+            <span>Importar CSV</span>
+          </button>
           <a
             href="/api/contacts?format=csv"
             className="flex items-center gap-2 px-3.5 py-2 border border-slate-200 bg-white hover:bg-slate-50 text-slate-700 font-medium text-xs rounded-lg transition-colors shadow-sm"
@@ -170,13 +291,23 @@ export default function ContactsPage() {
           <select
             value={selectedTag}
             onChange={(e) => setSelectedTag(e.target.value)}
-            className="text-xs border border-slate-200 rounded-lg px-3 py-2 bg-white text-slate-700 focus:outline-none focus:ring-2 focus:ring-indigo-500"
+            className="text-xs border border-slate-200 rounded-lg px-3 py-2 bg-white text-slate-700 focus:outline-none focus:ring-2 focus:ring-indigo-500 max-w-[200px] truncate"
           >
             <option value="">Todas as Tags</option>
-            <option value="Inscrito">Inscrito</option>
-            <option value="Pix Gerado">Pix Gerado</option>
-            <option value="Cliente">Cliente</option>
-            <option value="Carrinho Abandonado">Carrinho Abandonado</option>
+            {tagsList.length > 0 ? (
+              tagsList.map((t) => (
+                <option key={t.id} value={t.name}>
+                  {t.name}
+                </option>
+              ))
+            ) : (
+              <>
+                <option value="Inscrito">Inscrito</option>
+                <option value="Pix Gerado">Pix Gerado</option>
+                <option value="Cliente">Cliente</option>
+                <option value="Carrinho Abandonado">Carrinho Abandonado</option>
+              </>
+            )}
           </select>
         </div>
       </div>
@@ -478,6 +609,281 @@ export default function ContactsPage() {
                 </button>
               </div>
             </form>
+          </div>
+        </div>
+      )}
+
+      {/* Modal Importação CSV Hotmart */}
+      {isImportModalOpen && (
+        <div className="fixed inset-0 bg-slate-900/50 backdrop-blur-sm z-50 flex items-center justify-center p-4">
+          <div className="bg-white rounded-2xl shadow-2xl border border-slate-200 max-w-xl w-full p-6 max-h-[90vh] overflow-y-auto">
+            <div className="flex items-center justify-between pb-3 border-b border-slate-100">
+              <div className="flex items-center gap-2">
+                <div className="w-8 h-8 rounded-lg bg-indigo-50 border border-indigo-100 flex items-center justify-center text-indigo-600">
+                  <FileSpreadsheet className="w-4 h-4" />
+                </div>
+                <div>
+                  <h3 className="font-bold text-slate-900 text-base">Importar Leads via CSV</h3>
+                  <p className="text-[11px] text-slate-500">Compatível com exportação de vendas da Hotmart ou planilhas padrão</p>
+                </div>
+              </div>
+              <button
+                onClick={() => setIsImportModalOpen(false)}
+                className="text-slate-400 hover:text-slate-600 p-1 rounded-lg hover:bg-slate-100"
+              >
+                <X className="w-4 h-4" />
+              </button>
+            </div>
+
+            {!importResult ? (
+              <div className="space-y-4 mt-4 text-xs">
+                {/* Upload Box */}
+                <div>
+                  <input
+                    ref={fileInputRef}
+                    type="file"
+                    accept=".csv,text/csv"
+                    onChange={handleFileChange}
+                    className="hidden"
+                  />
+                  <div
+                    onClick={() => fileInputRef.current?.click()}
+                    className={`border-2 border-dashed rounded-xl p-5 text-center cursor-pointer transition-all ${
+                      importFile
+                        ? 'border-indigo-400 bg-indigo-50/30'
+                        : 'border-slate-200 hover:border-indigo-300 hover:bg-slate-50'
+                    }`}
+                  >
+                    <Upload className="w-7 h-7 mx-auto text-indigo-500 mb-2" />
+                    {importFile ? (
+                      <div>
+                        <p className="font-semibold text-slate-800 text-xs">{importFile.name}</p>
+                        <p className="text-[11px] text-slate-500 mt-0.5">
+                          {(importFile.size / 1024).toFixed(1)} KB • Clique para escolher outro arquivo
+                        </p>
+                      </div>
+                    ) : (
+                      <div>
+                        <p className="font-semibold text-slate-700 text-xs">
+                          Clique para selecionar ou arraste o arquivo CSV
+                        </p>
+                        <p className="text-[11px] text-slate-400 mt-1">
+                          Exportação da Hotmart (com ponto e vírgula) ou padrão UTF-8
+                        </p>
+                      </div>
+                    )}
+                  </div>
+                </div>
+
+                {/* Prévia dos dados lidos */}
+                {importCsvPreview.length > 0 && (
+                  <div className="bg-slate-50 border border-slate-200 rounded-lg p-3">
+                    <div className="flex items-center justify-between mb-2">
+                      <span className="font-semibold text-slate-700 text-[11px] flex items-center gap-1.5">
+                        <CheckCircle className="w-3.5 h-3.5 text-emerald-600" />
+                        Prévia dos dados identificados:
+                      </span>
+                      <span className="text-[10px] text-slate-400">Primeiras {importCsvPreview.length - 1} linhas</span>
+                    </div>
+                    <div className="overflow-x-auto text-[10px] text-slate-600 font-mono">
+                      <table className="w-full">
+                        <thead>
+                          <tr className="border-b border-slate-200 text-slate-800 font-semibold">
+                            {importCsvPreview[0]?.slice(0, 5).map((col, idx) => (
+                              <th key={idx} className="p-1 text-left truncate max-w-[120px]">
+                                {col}
+                              </th>
+                            ))}
+                          </tr>
+                        </thead>
+                        <tbody>
+                          {importCsvPreview.slice(1).map((row, rIdx) => (
+                            <tr key={rIdx} className="border-b border-slate-100">
+                              {row.slice(0, 5).map((cell, cIdx) => (
+                                <td key={cIdx} className="p-1 truncate max-w-[120px]">
+                                  {cell || '-'}
+                                </td>
+                              ))}
+                            </tr>
+                          ))}
+                        </tbody>
+                      </table>
+                    </div>
+                  </div>
+                )}
+
+                {/* Opções de Inteligência de Importação */}
+                <div className="bg-slate-50/70 p-3.5 rounded-xl border border-slate-200 space-y-3">
+                  <span className="text-[11px] font-bold text-slate-800 uppercase tracking-wider block">
+                    Regras de Automação e Tags
+                  </span>
+
+                  <label className="flex items-start gap-2.5 cursor-pointer">
+                    <input
+                      type="checkbox"
+                      checked={importTagByProduct}
+                      onChange={(e) => setImportTagByProduct(e.target.checked)}
+                      className="mt-0.5 rounded text-indigo-600 focus:ring-indigo-500"
+                    />
+                    <div>
+                      <span className="font-semibold text-slate-800 block">
+                        Criar tag com o Nome do Produto Hotmart
+                      </span>
+                      <span className="text-slate-500 text-[11px]">
+                        Identifica a coluna &quot;Nome do Produto&quot; e aplica como tag no lead.
+                      </span>
+                    </div>
+                  </label>
+
+                  <label className="flex items-start gap-2.5 cursor-pointer">
+                    <input
+                      type="checkbox"
+                      checked={importTagByStatus}
+                      onChange={(e) => setImportTagByStatus(e.target.checked)}
+                      className="mt-0.5 rounded text-indigo-600 focus:ring-indigo-500"
+                    />
+                    <div>
+                      <span className="font-semibold text-slate-800 block">
+                        Criar tag pelo Status da Compra
+                      </span>
+                      <span className="text-slate-500 text-[11px]">
+                        Aplica tags como &quot;Cliente&quot; para compras aprovadas ou &quot;Aguardando Pagamento&quot;.
+                      </span>
+                    </div>
+                  </label>
+
+                  <label className="flex items-start gap-2.5 cursor-pointer">
+                    <input
+                      type="checkbox"
+                      checked={importTriggerAuto}
+                      onChange={(e) => setImportTriggerAuto(e.target.checked)}
+                      className="mt-0.5 rounded text-indigo-600 focus:ring-indigo-500"
+                    />
+                    <div>
+                      <span className="font-semibold text-slate-800 block">
+                        Disparar automações ativas para novos leads
+                      </span>
+                      <span className="text-slate-500 text-[11px]">
+                        Se marcado, executará fluxos com gatilho de cadastro para os leads novos.
+                      </span>
+                    </div>
+                  </label>
+
+                  <div className="pt-2 border-t border-slate-200">
+                    <label className="block text-slate-700 font-semibold mb-1 text-[11px]">
+                      Tags Adicionais Opcionais
+                    </label>
+                    <input
+                      type="text"
+                      value={importExtraTags}
+                      onChange={(e) => setImportExtraTags(e.target.value)}
+                      placeholder="Ex: Turma 01, Lançamento Nov/26"
+                      className="w-full p-2 border border-slate-200 rounded-lg text-xs bg-white focus:ring-2 focus:ring-indigo-500"
+                    />
+                  </div>
+                </div>
+
+                {/* Formatação automática de Telefone aviso */}
+                <div className="flex items-center gap-2 p-2.5 bg-blue-50/70 text-blue-700 rounded-lg text-[11px] border border-blue-100">
+                  <Info className="w-4 h-4 shrink-0 text-blue-500" />
+                  <span>
+                    Telefones com DDD da planilha serão automaticamente convertidos para o padrão internacional do WhatsApp (ex: +5561999...).
+                  </span>
+                </div>
+
+                <div className="pt-3 flex items-center justify-end gap-2 border-t border-slate-100">
+                  <button
+                    type="button"
+                    onClick={() => setIsImportModalOpen(false)}
+                    className="px-4 py-2 border border-slate-200 text-slate-600 rounded-lg hover:bg-slate-50 font-medium"
+                  >
+                    Cancelar
+                  </button>
+                  <button
+                    type="button"
+                    disabled={!importFile || importLoading}
+                    onClick={handleExecuteImport}
+                    className="flex items-center gap-2 px-5 py-2 bg-indigo-600 hover:bg-indigo-700 disabled:opacity-50 text-white rounded-lg font-semibold shadow-sm transition-all"
+                  >
+                    {importLoading ? (
+                      <>
+                        <RefreshCw className="w-4 h-4 animate-spin" />
+                        <span>Processando CSV...</span>
+                      </>
+                    ) : (
+                      <>
+                        <Upload className="w-4 h-4" />
+                        <span>Importar Leads Agora</span>
+                      </>
+                    )}
+                  </button>
+                </div>
+              </div>
+            ) : (
+              /* Resultado da Importação */
+              <div className="mt-4 space-y-4 text-xs">
+                <div className={`p-4 rounded-xl border ${importResult.success ? 'bg-emerald-50/60 border-emerald-200' : 'bg-red-50/60 border-red-200'}`}>
+                  <div className="flex items-center gap-2 font-bold text-sm mb-1 text-slate-900">
+                    {importResult.success ? (
+                      <>
+                        <CheckCircle className="w-5 h-5 text-emerald-600" />
+                        <span>Importação Concluída com Sucesso!</span>
+                      </>
+                    ) : (
+                      <>
+                        <AlertCircle className="w-5 h-5 text-red-600" />
+                        <span>Falha na Importação</span>
+                      </>
+                    )}
+                  </div>
+                  <p className="text-slate-600 text-xs">
+                    {importResult.success
+                      ? 'Os contatos da sua planilha Hotmart foram processados e vinculados ao CRM.'
+                      : 'Houve um erro ao processar a planilha. Verifique o formato do arquivo.'}
+                  </p>
+                </div>
+
+                {importResult.success && (
+                  <div className="grid grid-cols-3 gap-3">
+                    <div className="bg-slate-50 p-3 rounded-lg border border-slate-200 text-center">
+                      <span className="block text-xl font-bold text-emerald-600">{importResult.created}</span>
+                      <span className="text-[11px] text-slate-500 font-medium">Novos Criados</span>
+                    </div>
+                    <div className="bg-slate-50 p-3 rounded-lg border border-slate-200 text-center">
+                      <span className="block text-xl font-bold text-indigo-600">{importResult.updated}</span>
+                      <span className="text-[11px] text-slate-500 font-medium">Atualizados</span>
+                    </div>
+                    <div className="bg-slate-50 p-3 rounded-lg border border-slate-200 text-center">
+                      <span className="block text-xl font-bold text-slate-700">{importResult.totalRows}</span>
+                      <span className="text-[11px] text-slate-500 font-medium">Linhas Totais</span>
+                    </div>
+                  </div>
+                )}
+
+                {importResult.errorSamples && importResult.errorSamples.length > 0 && (
+                  <div className="p-3 bg-red-50 border border-red-200 rounded-lg text-[11px] text-red-700 space-y-1">
+                    <span className="font-semibold block">Avisos / Linhas com problemas:</span>
+                    {importResult.errorSamples.map((err, i) => (
+                      <p key={i}>• {err}</p>
+                    ))}
+                  </div>
+                )}
+
+                <div className="pt-3 flex justify-end">
+                  <button
+                    onClick={() => {
+                      setIsImportModalOpen(false);
+                      setImportResult(null);
+                      setImportFile(null);
+                      setImportCsvPreview([]);
+                    }}
+                    className="px-5 py-2 bg-indigo-600 hover:bg-indigo-700 text-white rounded-lg font-semibold shadow-sm text-xs"
+                  >
+                    Concluir
+                  </button>
+                </div>
+              </div>
+            )}
           </div>
         </div>
       )}
