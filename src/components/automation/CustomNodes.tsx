@@ -3,346 +3,373 @@
 import { memo } from 'react';
 import { Handle, Position } from '@xyflow/react';
 import {
-  Zap,
+  Tag,
+  Clock,
+  Play,
   Mail,
   MessageSquare,
-  Clock,
-  Calendar,
-  GitFork,
-  Tag,
-  LogOut,
-  XCircle,
-  CheckCircle2,
   AlertCircle,
+  Settings,
+  Flame,
   Globe,
-  UserPlus,
 } from 'lucide-react';
 
-// Nó de Gatilho (Trigger)
-export const TriggerNode = memo(({ data }: any) => {
-  const isTagTrigger = data.subtype === 'TAG_ADDED' || !!data.config?.tagName;
-  const isWebhookTrigger = data.subtype === 'HOTMART_EVENT' || data.subtype === 'WEBHOOK';
-  const isContactTrigger = data.subtype === 'CONTACT_CREATED';
+// ============================================================
+// NÍVEL 1: NÓS DO FLUXO PRINCIPAL (MACRO)
+// ============================================================
 
-  const getBadge = () => {
-    if (isTagTrigger) {
-      return (
-        <span className="px-2 py-0.5 rounded-full text-[9px] font-semibold bg-purple-500/20 text-purple-300 border border-purple-500/30">
-          Tag
-        </span>
-      );
-    }
-    if (isWebhookTrigger) {
-      return (
-        <span className="px-2 py-0.5 rounded-full text-[9px] font-semibold bg-orange-500/20 text-orange-300 border border-orange-500/30">
-          Webhook
-        </span>
-      );
-    }
-    return (
-      <span className="px-2 py-0.5 rounded-full text-[9px] font-semibold bg-indigo-500/20 text-indigo-300 border border-indigo-500/30">
-        Início
-      </span>
-    );
-  };
-
-  const getIcon = () => {
-    if (isTagTrigger) return <Tag className="w-3.5 h-3.5 text-purple-400" />;
-    if (isWebhookTrigger) return <Globe className="w-3.5 h-3.5 text-orange-400" />;
-    if (isContactTrigger) return <UserPlus className="w-3.5 h-3.5 text-emerald-400" />;
-    return <Zap className="w-3.5 h-3.5 text-indigo-400" />;
-  };
+// 1. Nó de Tag (Gatilho de Entrada) - Estilo Idêntico ao Print
+export const TagNode = memo(({ data, selected }: any) => {
+  const count = data.config?.leadsCount ?? data.leadsCount ?? 0;
+  const tagName = data.config?.tagName || data.tagName;
+  const hasConfig = !!tagName;
 
   return (
-    <div className="bg-slate-900 border-2 border-indigo-500/90 hover:border-indigo-400 rounded-2xl shadow-2xl p-4 w-68 text-xs text-white transition-all">
-      <div className="flex items-center justify-between gap-2 mb-2">
-        <div className="flex items-center gap-1.5 text-indigo-400 font-bold">
-          <div className="w-6 h-6 rounded-lg bg-indigo-500/20 flex items-center justify-center">
-            {getIcon()}
+    <div className="flex flex-col items-center group cursor-pointer select-none">
+      {/* Caixa do Ícone */}
+      <div
+        className={`relative w-14 h-14 rounded-2xl flex items-center justify-center transition-all duration-200 ${
+          selected
+            ? 'bg-slate-700 ring-2 ring-indigo-400 shadow-lg shadow-indigo-500/20'
+            : 'bg-[#555861] hover:bg-[#60636d] shadow-md'
+        }`}
+      >
+        {/* Handle de Entrada (Esquerda) */}
+        <Handle
+          type="target"
+          position={Position.Left}
+          className="!w-3 !h-3 !bg-slate-400 !border-2 !border-[#181a20] -ml-1 hover:!bg-white"
+        />
+
+        {/* Ícone de Tag */}
+        <Tag className="w-6 h-6 text-white stroke-[2]" />
+
+        {/* Badge vermelho de Atenção se não configurado */}
+        {!hasConfig && (
+          <div className="absolute -top-1.5 -right-1.5 w-5 h-5 rounded-full bg-red-600 border-2 border-[#181a20] flex items-center justify-center text-white font-bold text-[10px] shadow-sm animate-pulse">
+            !
           </div>
-          <span className="uppercase text-[10px] tracking-wider text-slate-300">Gatilho de Entrada</span>
-        </div>
-        {getBadge()}
+        )}
+
+        {/* Handle de Saída (Direita) */}
+        <Handle
+          type="source"
+          position={Position.Right}
+          className="!w-3 !h-3 !bg-slate-400 !border-2 !border-[#181a20] -mr-1 hover:!bg-white"
+        />
       </div>
 
-      <div className="font-bold text-slate-100 text-sm leading-snug">{data.label}</div>
-
-      {/* Detalhe de Tag de Entrada */}
-      {isTagTrigger && data.config?.tagName && (
-        <div className="mt-2.5 pt-2 border-t border-slate-800 flex items-center justify-between">
-          <div className="flex items-center gap-1.5">
-            <span
-              className="w-2.5 h-2.5 rounded-full shrink-0"
-              style={{ backgroundColor: data.config?.tagColor || '#a855f7' }}
-            />
-            <span className="font-semibold text-xs text-purple-200 truncate max-w-[140px]">
-              {data.config.tagName}
-            </span>
-          </div>
-          {data.config?.leadsCount !== undefined && (
-            <span className="text-[10px] font-mono text-slate-400 bg-slate-800 px-2 py-0.5 rounded-md">
-              {data.config.leadsCount} leads
-            </span>
-          )}
-        </div>
-      )}
-
-      {/* Detalhe de Webhook de Entrada */}
-      {isWebhookTrigger && (
-        <div className="mt-2.5 pt-2 border-t border-slate-800 space-y-1 text-[11px]">
-          <div className="text-orange-300 font-medium">
-            Evento: {data.config?.webhookEvent || 'Hotmart Webhook'}
-          </div>
-          {data.config?.webhookTag && (
-            <div className="text-[10px] text-slate-400 flex items-center gap-1">
-              <span>Aplica tag:</span>
-              <span className="text-purple-300 font-semibold">{data.config.webhookTag}</span>
-            </div>
-          )}
-        </div>
-      )}
-
-      {!isTagTrigger && !isWebhookTrigger && (
-        <div className="text-[11px] text-slate-400 mt-1">{data.subtype || 'Início da Automação'}</div>
-      )}
-
-      {/* Saída */}
-      <Handle
-        type="source"
-        position={Position.Bottom}
-        className="!bg-indigo-500 !w-3.5 !h-3.5 !border-2 !border-slate-900"
-      />
-    </div>
-  );
-});
-TriggerNode.displayName = 'TriggerNode';
-
-// Nó de Ação (Action & Tag)
-export const ActionNode = memo(({ data }: any) => {
-  const isTagAction = data.subtype === 'ADD_TAG' || data.subtype === 'REMOVE_TAG';
-  const isWhatsApp = data.subtype === 'SEND_WHATSAPP';
-  const isEmail = data.subtype === 'SEND_EMAIL';
-
-  const getIcon = () => {
-    switch (data.subtype) {
-      case 'SEND_EMAIL':
-        return <Mail className="w-3.5 h-3.5 text-blue-400" />;
-      case 'SEND_WHATSAPP':
-        return <MessageSquare className="w-3.5 h-3.5 text-emerald-400" />;
-      case 'ADD_TAG':
-      case 'REMOVE_TAG':
-        return <Tag className="w-3.5 h-3.5 text-purple-400" />;
-      case 'CANCEL_OTHER_FLOWS':
-        return <XCircle className="w-3.5 h-3.5 text-rose-400" />;
-      case 'EXIT_FLOW':
-        return <LogOut className="w-3.5 h-3.5 text-slate-400" />;
-      default:
-        return <Zap className="w-3.5 h-3.5 text-indigo-400" />;
-    }
-  };
-
-  return (
-    <div className="bg-slate-900 border border-slate-700/80 hover:border-indigo-400 rounded-2xl shadow-xl p-3.5 w-64 text-xs text-white transition-all">
-      <Handle
-        type="target"
-        position={Position.Top}
-        className="!bg-slate-500 !w-3.5 !h-3.5 !border-2 !border-slate-900"
-      />
-
-      <div className="flex items-center justify-between gap-2 mb-2">
-        <div className="flex items-center gap-1.5 font-bold">
-          <div className="w-6 h-6 rounded-lg bg-slate-800 flex items-center justify-center">
-            {getIcon()}
-          </div>
-          <span className="uppercase text-[10px] tracking-wider text-slate-400">
-            {isTagAction ? (data.subtype === 'ADD_TAG' ? 'Adicionar Tag' : 'Remover Tag') : 'Ação'}
-          </span>
-        </div>
-
-        {isTagAction && (
-          <span className="px-2 py-0.5 rounded-full text-[10px] font-semibold bg-purple-500/20 text-purple-300 border border-purple-500/30">
-            Tag
+      {/* Legenda abaixo do nó */}
+      <div className="text-center mt-1.5">
+        <span className="text-[12px] font-medium text-slate-200 tracking-wide block">
+          Tags | {count} lead{count === 1 ? '' : 's'}
+        </span>
+        {tagName && (
+          <span className="text-[10px] font-semibold text-purple-300 bg-purple-950/60 px-2 py-0.5 rounded border border-purple-800/60 mt-0.5 inline-block truncate max-w-[140px]">
+            {tagName}
           </span>
         )}
       </div>
-
-      <div className="font-bold text-slate-100 text-sm leading-snug">{data.label}</div>
-
-      {/* Detalhe de Tag com visual inspirado na plataforma */}
-      {isTagAction && (
-        <div className="mt-2 pt-2 border-t border-slate-800 flex items-center justify-between">
-          <div className="flex items-center gap-1.5">
-            <span
-              className="w-2.5 h-2.5 rounded-full shrink-0"
-              style={{ backgroundColor: data.config?.tagColor || '#a855f7' }}
-            />
-            <span className="font-semibold text-xs text-purple-200 truncate max-w-[130px]">
-              {data.config?.tagName || 'Selecione a Tag'}
-            </span>
-          </div>
-          {data.config?.leadsCount !== undefined && (
-            <span className="text-[10px] font-mono text-slate-400 bg-slate-800 px-2 py-0.5 rounded-md">
-              {data.config.leadsCount} leads
-            </span>
-          )}
-        </div>
-      )}
-
-      {/* Detalhe de WhatsApp */}
-      {isWhatsApp && data.config?.text && (
-        <div className="mt-2 pt-2 border-t border-slate-800 text-[11px] text-slate-400 truncate">
-          💬 &quot;{data.config.text}&quot;
-        </div>
-      )}
-
-      {/* Detalhe de E-mail */}
-      {isEmail && data.config?.subject && (
-        <div className="mt-2 pt-2 border-t border-slate-800 text-[11px] text-slate-400 truncate">
-          ✉️ {data.config.subject}
-        </div>
-      )}
-
-      <Handle
-        type="source"
-        position={Position.Bottom}
-        className="!bg-indigo-500 !w-3.5 !h-3.5 !border-2 !border-slate-900"
-      />
     </div>
   );
 });
-ActionNode.displayName = 'ActionNode';
+TagNode.displayName = 'TagNode';
 
-// Nó Condicional (Condition - SE / SENÃO)
-export const ConditionNode = memo(({ data }: any) => {
-  return (
-    <div className="bg-slate-900 border-2 border-amber-500/80 rounded-2xl shadow-xl p-3.5 w-64 text-xs text-white">
-      <Handle
-        type="target"
-        position={Position.Top}
-        className="!bg-slate-500 !w-3.5 !h-3.5 !border-2 !border-slate-900"
-      />
-
-      <div className="flex items-center gap-2 text-amber-400 font-bold mb-2">
-        <div className="w-6 h-6 rounded-lg bg-amber-500/20 flex items-center justify-center">
-          <GitFork className="w-3.5 h-3.5 text-amber-400" />
-        </div>
-        <span className="uppercase text-[10px] tracking-wider">Condição SE / SENÃO</span>
-      </div>
-
-      <div className="font-bold text-slate-100 text-sm leading-snug">{data.label}</div>
-      <div className="text-[11px] text-slate-400 mt-1">
-        Verifica tag: <span className="text-amber-300 font-semibold">{data.config?.tagName || 'Cliente'}</span>
-      </div>
-
-      <div className="flex justify-between items-center mt-3 pt-2.5 border-t border-slate-800 text-[10px] font-bold">
-        <span className="text-emerald-400 flex items-center gap-1 bg-emerald-950/60 px-2 py-0.5 rounded-full border border-emerald-500/30">
-          ✔ SIM
-        </span>
-        <span className="text-rose-400 flex items-center gap-1 bg-rose-950/60 px-2 py-0.5 rounded-full border border-rose-500/30">
-          ✖ NÃO
-        </span>
-      </div>
-
-      {/* Alça SIM (Verde) */}
-      <Handle
-        type="source"
-        position={Position.Bottom}
-        id="yes"
-        style={{ left: '25%' }}
-        className="!bg-emerald-500 !w-3.5 !h-3.5 !border-2 !border-slate-900"
-      />
-      {/* Alça NÃO (Vermelha) */}
-      <Handle
-        type="source"
-        position={Position.Bottom}
-        id="no"
-        style={{ left: '75%' }}
-        className="!bg-rose-500 !w-3.5 !h-3.5 !border-2 !border-slate-900"
-      />
-    </div>
-  );
-});
-ConditionNode.displayName = 'ConditionNode';
-
-// Nó de Temporizador (Delay / Agendamento)
-export const DelayNode = memo(({ data }: any) => {
-  const isSpecificDate =
-    data.config?.timerType === 'SPECIFIC_DATE' ||
-    data.config?.delayType === 'specific_date' ||
-    !!data.config?.specificDate;
-
-  const unit = data.config?.unit || (data.config?.minutes !== undefined ? 'minutes' : data.config?.hours !== undefined ? 'hours' : 'days');
-  const amount = data.config?.value ?? data.config?.duration ?? data.config?.minutes ?? data.config?.hours ?? data.config?.days ?? 1;
-
-  const unitLabel = unit === 'minutes' ? 'Minutos' : unit === 'hours' ? 'Horas' : 'Dias';
-
-  const formatSpecificDate = (isoStr?: string) => {
-    if (!isoStr) return 'Não configurado';
-    try {
-      const d = new Date(isoStr);
-      if (isNaN(d.getTime())) return isoStr;
-      return `${d.toLocaleDateString('pt-BR')} às ${d.toLocaleTimeString('pt-BR', { hour: '2-digit', minute: '2-digit' })}`;
-    } catch {
-      return isoStr;
-    }
-  };
+// 2. Nó de Sequência Lead - Estilo Idêntico ao Print
+export const SequenceLeadNode = memo(({ data, selected }: any) => {
+  const count = data.config?.leadsCount ?? data.leadsCount ?? 0;
+  const waiting = data.config?.waitingCount ?? 0;
+  const success = data.config?.successCount ?? 0;
+  const failed = data.config?.failedCount ?? 0;
+  const label = data.label || 'Sequência Lead';
 
   return (
-    <div className="bg-slate-900 border-2 border-sky-500/80 rounded-2xl shadow-xl p-3.5 w-64 text-xs text-white">
-      <Handle
-        type="target"
-        position={Position.Top}
-        className="!bg-slate-500 !w-3.5 !h-3.5 !border-2 !border-slate-900"
-      />
+    <div className="flex flex-col items-center group cursor-pointer select-none">
+      {/* Bloco Vermelho Arredondado */}
+      <div
+        className={`relative w-48 h-14 rounded-2xl flex items-center justify-center px-4 transition-all duration-200 ${
+          selected
+            ? 'bg-[#c24141] ring-2 ring-red-400 shadow-xl shadow-red-900/30'
+            : 'bg-[#b83b3b] hover:bg-[#c24141] shadow-lg'
+        }`}
+      >
+        {/* Handle Entrada (Esquerda) */}
+        <Handle
+          type="target"
+          position={Position.Left}
+          className="!w-3 !h-3 !bg-slate-300 !border-2 !border-[#181a20] -ml-1 hover:!bg-white"
+        />
 
-      <div className="flex items-center justify-between gap-2 mb-2">
-        <div className="flex items-center gap-1.5 text-sky-400 font-bold">
-          <div className="w-6 h-6 rounded-lg bg-sky-500/20 flex items-center justify-center">
-            {isSpecificDate ? (
-              <Calendar className="w-3.5 h-3.5 text-sky-400" />
-            ) : (
-              <Clock className="w-3.5 h-3.5 text-sky-400" />
-            )}
+        {/* Ícone de Trilha da Sequência: o---o-o-o---o */}
+        <div className="flex items-center gap-1.5 text-white/90">
+          <div className="w-5 h-5 rounded-full border-2 border-white flex items-center justify-center">
+            <div className="w-1.5 h-1.5 bg-white rounded-full" />
           </div>
-          <span className="uppercase text-[10px] tracking-wider">
-            {isSpecificDate ? 'Data Específica' : 'Temporizador'}
+          <div className="w-2.5 h-0.5 bg-white/70" />
+          <div className="w-1.5 h-1.5 rounded-full bg-white/90" />
+          <div className="w-1.5 h-1.5 rounded-full bg-white/90" />
+          <div className="w-1.5 h-1.5 rounded-full bg-white/90" />
+          <div className="w-2.5 h-0.5 bg-white/70" />
+          <div className="w-5 h-5 rounded-full border-2 border-white flex items-center justify-center">
+            <div className="w-1.5 h-1.5 bg-white rounded-full" />
+          </div>
+        </div>
+
+        {/* Handle Saída (Direita) */}
+        <Handle
+          type="source"
+          position={Position.Right}
+          className="!w-3 !h-3 !bg-slate-300 !border-2 !border-[#181a20] -mr-1 hover:!bg-white"
+        />
+      </div>
+
+      {/* Legenda abaixo */}
+      <div className="text-center mt-1.5">
+        <span className="text-[12px] font-medium text-slate-200 tracking-wide block">
+          {label} | {count} lead{count === 1 ? '' : 's'}
+        </span>
+
+        {/* Pílulas coloridas de status (Amarelo, Verde, Vermelho) */}
+        <div className="flex items-center justify-center gap-1 mt-1">
+          <span className="px-2 py-0.2 rounded-md bg-[#848c26] text-black font-bold text-[10px] min-w-[20px] text-center">
+            {waiting}
+          </span>
+          <span className="px-2 py-0.2 rounded-md bg-[#1db954] text-black font-bold text-[10px] min-w-[20px] text-center">
+            {success}
+          </span>
+          <span className="px-2 py-0.2 rounded-md bg-[#b83b3b] text-white font-bold text-[10px] min-w-[20px] text-center">
+            {failed}
           </span>
         </div>
-
-        <span className="px-2 py-0.5 rounded-full text-[9px] font-semibold bg-sky-500/20 text-sky-300 border border-sky-500/30">
-          {isSpecificDate ? 'Agendado' : `${amount} ${unitLabel.toLowerCase()}`}
-        </span>
       </div>
-
-      <div className="font-bold text-slate-100 text-sm leading-snug">{data.label}</div>
-
-      <div className="mt-2 pt-2 border-t border-slate-800 text-[11px] text-slate-300">
-        {isSpecificDate ? (
-          <div className="flex items-center gap-1 text-sky-200">
-            <Calendar className="w-3 h-3 text-sky-400 shrink-0" />
-            <span>{formatSpecificDate(data.config?.specificDate)}</span>
-          </div>
-        ) : (
-          <div className="flex items-center gap-1 text-sky-200">
-            <Clock className="w-3 h-3 text-sky-400 shrink-0" />
-            <span>Aguardar {amount} {unitLabel}</span>
-          </div>
-        )}
-      </div>
-
-      {data.config?.cancelCondition === 'PURCHASE_APPROVED' && (
-        <div className="mt-1.5 flex items-center gap-1 text-[10px] text-emerald-400">
-          <CheckCircle2 className="w-3 h-3 text-emerald-400 shrink-0" />
-          <span>Interrompe se comprar</span>
-        </div>
-      )}
-
-      <Handle
-        type="source"
-        position={Position.Bottom}
-        className="!bg-sky-500 !w-3.5 !h-3.5 !border-2 !border-slate-900"
-      />
     </div>
   );
 });
-DelayNode.displayName = 'DelayNode';
+SequenceLeadNode.displayName = 'SequenceLeadNode';
+
+// 3. Nó de Timer (Temporizador Macro / Micro) - Estilo Idêntico ao Print
+export const TimerNode = memo(({ data, selected }: any) => {
+  const value = data.config?.value ?? data.config?.delayMinutes ?? 1;
+  const unit = data.config?.unit || 'minuto';
+  const waiting = data.config?.waitingCount ?? 0;
+  const success = data.config?.successCount ?? 0;
+  const failed = data.config?.failedCount ?? 0;
+
+  const unitText =
+    unit === 'minutes' || unit === 'minuto'
+      ? value === 1 ? '1 minuto' : `${value} minutos`
+      : unit === 'hours' || unit === 'hora'
+      ? value === 1 ? '1 hora' : `${value} horas`
+      : value === 1 ? '1 dia' : `${value} dias`;
+
+  return (
+    <div className="flex flex-col items-center group cursor-pointer select-none">
+      {/* Caixa Escura do Relógio */}
+      <div
+        className={`relative w-14 h-14 rounded-2xl flex items-center justify-center transition-all duration-200 ${
+          selected
+            ? 'bg-slate-800 ring-2 ring-sky-400 shadow-xl shadow-sky-950/40'
+            : 'bg-[#181a20] border border-slate-700/60 hover:border-slate-500 shadow-lg'
+        }`}
+      >
+        <Handle
+          type="target"
+          position={Position.Left}
+          className="!w-3 !h-3 !bg-slate-400 !border-2 !border-[#181a20] -ml-1 hover:!bg-white"
+        />
+
+        <Clock className="w-6 h-6 text-white stroke-[1.8]" />
+
+        <Handle
+          type="source"
+          position={Position.Right}
+          className="!w-3 !h-3 !bg-slate-400 !border-2 !border-[#181a20] -mr-1 hover:!bg-white"
+        />
+      </div>
+
+      {/* Legenda com tempo e dias da semana */}
+      <div className="text-center mt-1.5">
+        <span className="text-[12px] font-medium text-slate-200 tracking-wide block">
+          Timer | {unitText}
+        </span>
+        <span className="text-[10px] text-slate-400 block mt-0.5">
+          {data.config?.weekDaysSummary || 'Dom, Seg, Ter, Qua, Qui, Sex, Sáb.'}
+        </span>
+
+        {/* Pílulas de status */}
+        <div className="flex items-center justify-center gap-1 mt-1">
+          <span className="px-2 py-0.2 rounded-md bg-[#848c26] text-black font-bold text-[10px] min-w-[20px] text-center">
+            {waiting}
+          </span>
+          <span className="px-2 py-0.2 rounded-md bg-[#1db954] text-black font-bold text-[10px] min-w-[20px] text-center">
+            {success}
+          </span>
+          <span className="px-2 py-0.2 rounded-md bg-[#b83b3b] text-white font-bold text-[10px] min-w-[20px] text-center">
+            {failed}
+          </span>
+        </div>
+      </div>
+    </div>
+  );
+});
+TimerNode.displayName = 'TimerNode';
+
+// ============================================================
+// NÍVEL 2: NÓS DENTRO DA SEQUÊNCIA (INTERNOS)
+// ============================================================
+
+// 4. Nó de Início da Sequência (Start) - Amarelo com Play
+export const StartNode = memo(({ data, selected }: any) => {
+  const count = data.leadsCount ?? 0;
+
+  return (
+    <div className="flex flex-col items-center group cursor-default select-none">
+      <div
+        className={`w-14 h-14 rounded-2xl flex items-center justify-center bg-[#facc15] shadow-lg shadow-yellow-500/20 transition-all ${
+          selected ? 'ring-2 ring-white scale-105' : ''
+        }`}
+      >
+        <Play className="w-6 h-6 text-black fill-black ml-0.5" />
+
+        {/* Handle de Saída (Direita) */}
+        <Handle
+          type="source"
+          position={Position.Right}
+          className="!w-3 !h-3 !bg-slate-400 !border-2 !border-[#181a20] -mr-1 hover:!bg-white"
+        />
+      </div>
+
+      <div className="text-center mt-1.5">
+        <span className="text-[12px] font-medium text-slate-200 tracking-wide block">
+          Start | {count} lead{count === 1 ? '' : 's'}
+        </span>
+      </div>
+    </div>
+  );
+});
+StartNode.displayName = 'StartNode';
+
+// 5. Nó de Disparo de WhatsApp - Verde com Ícone do WhatsApp
+export const WhatsAppNode = memo(({ data, selected }: any) => {
+  const count = data.config?.leadsCount ?? data.leadsCount ?? 0;
+  const waiting = data.config?.waitingCount ?? 0;
+  const success = data.config?.successCount ?? 0;
+  const failed = data.config?.failedCount ?? 0;
+  const hasText = !!data.config?.message || !!data.config?.text;
+
+  return (
+    <div className="flex flex-col items-center group cursor-pointer select-none">
+      <div
+        className={`relative w-14 h-14 rounded-2xl flex items-center justify-center transition-all duration-200 ${
+          selected
+            ? 'bg-[#15803d] ring-2 ring-green-400 shadow-xl shadow-green-950/40'
+            : 'bg-[#1e7c3b] hover:bg-[#238b43] shadow-lg'
+        }`}
+      >
+        <Handle
+          type="target"
+          position={Position.Left}
+          className="!w-3 !h-3 !bg-slate-300 !border-2 !border-[#181a20] -ml-1 hover:!bg-white"
+        />
+
+        {/* Ícone de Balão/WhatsApp */}
+        <MessageSquare className="w-6 h-6 text-white stroke-[2]" />
+
+        {/* Badge vermelho de Atenção se a mensagem estiver vazia */}
+        {!hasText && (
+          <div className="absolute -top-1.5 -right-1.5 w-5 h-5 rounded-full bg-red-600 border-2 border-[#181a20] flex items-center justify-center text-white font-bold text-[10px] shadow-sm animate-pulse">
+            !
+          </div>
+        )}
+
+        <Handle
+          type="source"
+          position={Position.Right}
+          className="!w-3 !h-3 !bg-slate-300 !border-2 !border-[#181a20] -mr-1 hover:!bg-white"
+        />
+      </div>
+
+      <div className="text-center mt-1.5">
+        <span className="text-[12px] font-medium text-slate-200 tracking-wide block">
+          WhatsApp | {count} lead{count === 1 ? '' : 's'}
+        </span>
+
+        {/* Pílulas de status */}
+        <div className="flex items-center justify-center gap-1 mt-1">
+          <span className="px-2 py-0.2 rounded-md bg-[#848c26] text-black font-bold text-[10px] min-w-[20px] text-center">
+            {waiting}
+          </span>
+          <span className="px-2 py-0.2 rounded-md bg-[#1db954] text-black font-bold text-[10px] min-w-[20px] text-center">
+            {success}
+          </span>
+          <span className="px-2 py-0.2 rounded-md bg-[#b83b3b] text-white font-bold text-[10px] min-w-[20px] text-center">
+            {failed}
+          </span>
+        </div>
+      </div>
+    </div>
+  );
+});
+WhatsAppNode.displayName = 'WhatsAppNode';
+
+// 6. Nó de Disparo de E-mail - Marrom/Laranja com Envelope
+export const EmailNode = memo(({ data, selected }: any) => {
+  const count = data.config?.leadsCount ?? data.leadsCount ?? 0;
+  const waiting = data.config?.waitingCount ?? 0;
+  const success = data.config?.successCount ?? 0;
+  const failed = data.config?.failedCount ?? 0;
+  const hasSubject = !!data.config?.subject;
+
+  return (
+    <div className="flex flex-col items-center group cursor-pointer select-none">
+      <div
+        className={`relative w-14 h-14 rounded-2xl flex items-center justify-center transition-all duration-200 ${
+          selected
+            ? 'bg-[#9a5b3a] ring-2 ring-orange-400 shadow-xl shadow-orange-950/40'
+            : 'bg-[#8d4f2f] hover:bg-[#9a5b3a] shadow-lg'
+        }`}
+      >
+        <Handle
+          type="target"
+          position={Position.Left}
+          className="!w-3 !h-3 !bg-slate-300 !border-2 !border-[#181a20] -ml-1 hover:!bg-white"
+        />
+
+        <Mail className="w-6 h-6 text-white stroke-[2]" />
+
+        {/* Badge vermelho de Atenção se não configurado */}
+        {!hasSubject && (
+          <div className="absolute -top-1.5 -right-1.5 w-5 h-5 rounded-full bg-red-600 border-2 border-[#181a20] flex items-center justify-center text-white font-bold text-[10px] shadow-sm animate-pulse">
+            !
+          </div>
+        )}
+
+        <Handle
+          type="source"
+          position={Position.Right}
+          className="!w-3 !h-3 !bg-slate-300 !border-2 !border-[#181a20] -mr-1 hover:!bg-white"
+        />
+      </div>
+
+      <div className="text-center mt-1.5">
+        <span className="text-[12px] font-medium text-slate-200 tracking-wide block truncate max-w-[150px]">
+          {data.label || 'E-mail Performance'} | {count} lead{count === 1 ? '' : 's'}
+        </span>
+
+        {/* Pílulas de status */}
+        <div className="flex items-center justify-center gap-1 mt-1">
+          <span className="px-2 py-0.2 rounded-md bg-[#848c26] text-black font-bold text-[10px] min-w-[20px] text-center">
+            {waiting}
+          </span>
+          <span className="px-2 py-0.2 rounded-md bg-[#1db954] text-black font-bold text-[10px] min-w-[20px] text-center">
+            {success}
+          </span>
+          <span className="px-2 py-0.2 rounded-md bg-[#b83b3b] text-white font-bold text-[10px] min-w-[20px] text-center">
+            {failed}
+          </span>
+        </div>
+      </div>
+    </div>
+  );
+});
+EmailNode.displayName = 'EmailNode';

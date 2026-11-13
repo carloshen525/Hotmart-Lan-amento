@@ -45,13 +45,20 @@ import {
   Globe,
   UserPlus,
   Code,
+  Settings,
+  HelpCircle,
+  RotateCw,
+  Share2,
+  Users,
 } from 'lucide-react';
 
 import {
-  TriggerNode,
-  ActionNode,
-  ConditionNode,
-  DelayNode,
+  TagNode,
+  SequenceLeadNode,
+  TimerNode,
+  StartNode,
+  WhatsAppNode,
+  EmailNode,
 } from '@/components/automation/CustomNodes';
 
 interface TagItem {
@@ -66,28 +73,39 @@ export default function AutomationCanvasPage() {
   const router = useRouter();
   const automationId = params.id as string;
 
-  const [nodes, setNodes] = useState<Node[]>([]);
-  const [edges, setEdges] = useState<Edge[]>([]);
+  // Modo de visualização: MACRO (fluxo principal) ou SEQUENCE (dentro de uma sequência lead)
+  const [viewMode, setViewMode] = useState<'MACRO' | 'SEQUENCE'>('MACRO');
+  const [activeSequenceNode, setActiveSequenceNode] = useState<Node | null>(null);
+
+  // Estados dos nós do fluxo Macro
+  const [macroNodes, setMacroNodes] = useState<Node[]>([]);
+  const [macroEdges, setMacroEdges] = useState<Edge[]>([]);
+
+  // Estados dos nós dentro da sequência ativa
+  const [sequenceNodes, setSequenceNodes] = useState<Node[]>([]);
+  const [sequenceEdges, setSequenceEdges] = useState<Edge[]>([]);
+  const [sequenceName, setSequenceName] = useState('sequence');
+  const [sequenceActive, setSequenceActive] = useState(true);
+
+  // Dados da automação geral
   const [name, setName] = useState('');
   const [status, setStatus] = useState('DRAFT');
   const [loading, setLoading] = useState(true);
   const [saving, setSaving] = useState(false);
   const [saveNotice, setSaveNotice] = useState<string | null>(null);
 
-  // Lista de tags existentes no expert
+  // Tags disponíveis no expert
   const [availableTags, setAvailableTags] = useState<TagItem[]>([]);
 
-  // Seleção de nó
+  // Seleção de nó e modais
   const [selectedNode, setSelectedNode] = useState<Node | null>(null);
-
-  // Modais de Tag (Criação e Edição rápida)
+  const [isTagModalOpen, setIsTagModalOpen] = useState(false);
+  const [isMessageDrawerOpen, setIsMessageDrawerOpen] = useState(false);
   const [isCreateTagOpen, setIsCreateTagOpen] = useState(false);
-  const [isEditTagOpen, setIsEditTagOpen] = useState(false);
   const [newTagName, setNewTagName] = useState('');
   const [newTagColor, setNewTagColor] = useState('#8b5cf6');
-  const [tagBeingEdited, setTagBeingEdited] = useState<TagItem | null>(null);
 
-  // Modal Avançado de Configurar Timer (Inspirado nas Imagens)
+  // Modal Avançado de Timer
   const [isTimerModalOpen, setIsTimerModalOpen] = useState(false);
   const [timerTab, setTimerTab] = useState<'CONTINUOUS' | 'SPECIFIC_DATE'>('CONTINUOUS');
   const [timerValue, setTimerValue] = useState<number>(1);
@@ -104,23 +122,10 @@ export default function AutomationCanvasPage() {
   // Modal de Simulação
   const [isSimulateOpen, setIsSimulateOpen] = useState(false);
   const [simClientStatus, setSimClientStatus] = useState(false);
-  const [simPixStatus, setSimPixStatus] = useState(false);
   const [simulationSteps, setSimulationSteps] = useState<any[]>([]);
   const [simulating, setSimulating] = useState(false);
 
-  // Estado para copiar URL do webhook
-  const [copiedWebhook, setCopiedWebhook] = useState(false);
-  const copyWebhookUrl = () => {
-    const url =
-      typeof window !== 'undefined'
-        ? `${window.location.origin}/api/webhooks/hotmart`
-        : '/api/webhooks/hotmart';
-    navigator.clipboard.writeText(url);
-    setCopiedWebhook(true);
-    setTimeout(() => setCopiedWebhook(false), 2500);
-  };
-
-  // Copiar código de compartilhamento da automação
+  // Compartilhamento via código
   const [copiedShareCode, setCopiedShareCode] = useState(false);
   const handleCopyCode = async () => {
     try {
@@ -138,13 +143,20 @@ export default function AutomationCanvasPage() {
     } catch {}
   };
 
-  // Mapeamento de nós do React Flow
+  // Mapeamento de nós suportados no React Flow
   const nodeTypes = useMemo(
     () => ({
-      trigger: TriggerNode,
-      action: ActionNode,
-      condition: ConditionNode,
-      delay: DelayNode,
+      tag: TagNode,
+      sequence_lead: SequenceLeadNode,
+      timer: TimerNode,
+      delay: TimerNode,
+      start: StartNode,
+      whatsapp: WhatsAppNode,
+      email: EmailNode,
+      // Retrocompatibilidade
+      trigger: TagNode,
+      action: WhatsAppNode,
+      condition: TimerNode,
     }),
     []
   );
@@ -166,38 +178,408 @@ export default function AutomationCanvasPage() {
         if (data.automation) {
           setName(data.automation.name);
           setStatus(data.automation.status);
-          setNodes(data.automation.nodes || []);
-          setEdges(data.automation.edges || []);
+
+          let parsedNodes: Node[] = [];
+          let parsedEdges: Edge[] = [];
+
+          try {
+            parsedNodes =
+              typeof data.automation.nodes === 'string'
+                ? JSON.parse(data.automation.nodes)
+                : data.automation.nodes || [];
+          } catch {
+            parsedNodes = [];
+          }
+
+          try {
+            parsedEdges =
+              typeof data.automation.edges === 'string'
+                ? JSON.parse(data.automation.edges)
+                : data.automation.edges || [];
+          } catch {
+            parsedEdges = [];
+          }
+
+          // Se for uma campanha nova em branco, inicializa no padrão Tag > Sequência Lead
+          if (parsedNodes.length === 0) {
+            const initialTag: Node = {
+              id: 'node_tag_1',
+              type: 'tag',
+              position: { x: 200, y: 160 },
+              data: {
+                label: 'Tags',
+                type: 'tag',
+                subtype: 'TAG_ADDED',
+                leadsCount: 0,
+                config: { tagName: '', tagColor: '#a855f7', leadsCount: 0 },
+              },
+            };
+
+            const initialSequence: Node = {
+              id: 'node_seq_1',
+              type: 'sequence_lead',
+              position: { x: 440, y: 160 },
+              data: {
+                label: 'Sequência Lead',
+                type: 'sequence_lead',
+                leadsCount: 0,
+                config: { leadsCount: 0, waitingCount: 0, successCount: 0, failedCount: 0 },
+                subflow: {
+                  nodes: [
+                    {
+                      id: 'seq_start',
+                      type: 'start',
+                      position: { x: 120, y: 180 },
+                      data: { leadsCount: 0 },
+                    },
+                    {
+                      id: 'seq_timer_1',
+                      type: 'timer',
+                      position: { x: 320, y: 180 },
+                      data: {
+                        config: {
+                          value: 1,
+                          unit: 'minutes',
+                          weekDaysSummary: 'Dom, Seg, Ter, Qua, Qui, Sex, Sáb.',
+                        },
+                      },
+                    },
+                    {
+                      id: 'seq_wpp_1',
+                      type: 'whatsapp',
+                      position: { x: 540, y: 100 },
+                      data: {
+                        config: {
+                          message: 'Olá {{nome}}! Seja muito bem-vindo ao nosso lançamento.',
+                          leadsCount: 0,
+                        },
+                      },
+                    },
+                    {
+                      id: 'seq_mail_1',
+                      type: 'email',
+                      position: { x: 540, y: 260 },
+                      data: {
+                        label: 'E-mail Performance',
+                        config: {
+                          subject: 'Seu acesso foi liberado!',
+                          content: '<p>Olá {{nome}}, prepare-se para o que vem aí!</p>',
+                          leadsCount: 0,
+                        },
+                      },
+                    },
+                  ],
+                  edges: [
+                    { id: 'e_seq_1', source: 'seq_start', target: 'seq_timer_1', animated: true },
+                    { id: 'e_seq_2', source: 'seq_timer_1', target: 'seq_wpp_1', animated: true },
+                    { id: 'e_seq_3', source: 'seq_timer_1', target: 'seq_mail_1', animated: true },
+                  ],
+                },
+              },
+            };
+
+            const initialEdges: Edge[] = [
+              {
+                id: 'e_macro_1',
+                source: 'node_tag_1',
+                target: 'node_seq_1',
+                animated: true,
+                style: { stroke: '#ffffff', strokeWidth: 2 },
+              },
+            ];
+
+            setMacroNodes([initialTag, initialSequence]);
+            setMacroEdges(initialEdges);
+          } else {
+            // Migra/garante compatibilidade dos tipos de nós para a nova interface
+            const normalizedNodes = parsedNodes.map((n) => {
+              let t = n.type;
+              if (t === 'trigger') t = 'tag';
+              if (t === 'action') t = 'sequence_lead';
+              if (t === 'delay') t = 'timer';
+              return { ...n, type: t };
+            });
+            setMacroNodes(normalizedNodes);
+            setMacroEdges(parsedEdges);
+          }
         }
         setLoading(false);
       })
       .catch(() => setLoading(false));
   }, [automationId]);
 
-  const onNodesChange: OnNodesChange = useCallback(
-    (changes) => setNodes((nds) => applyNodeChanges(changes, nds)),
+  // Handlers para nós do Macro Canvas
+  const onMacroNodesChange: OnNodesChange = useCallback(
+    (changes) => setMacroNodes((nds) => applyNodeChanges(changes, nds)),
+    []
+  );
+  const onMacroEdgesChange: OnEdgesChange = useCallback(
+    (changes) => setMacroEdges((eds) => applyEdgeChanges(changes, eds)),
+    []
+  );
+  const onMacroConnect: OnConnect = useCallback(
+    (params) =>
+      setMacroEdges((eds) =>
+        addEdge({ ...params, animated: true, style: { stroke: '#ffffff', strokeWidth: 2 } }, eds)
+      ),
     []
   );
 
-  const onEdgesChange: OnEdgesChange = useCallback(
-    (changes) => setEdges((eds) => applyEdgeChanges(changes, eds)),
+  // Handlers para nós da Sequência Interna
+  const onSequenceNodesChange: OnNodesChange = useCallback(
+    (changes) => setSequenceNodes((nds) => applyNodeChanges(changes, nds)),
+    []
+  );
+  const onSequenceEdgesChange: OnEdgesChange = useCallback(
+    (changes) => setSequenceEdges((eds) => applyEdgeChanges(changes, eds)),
+    []
+  );
+  const onSequenceConnect: OnConnect = useCallback(
+    (params) =>
+      setSequenceEdges((eds) =>
+        addEdge({ ...params, animated: true, style: { stroke: '#ffffff', strokeWidth: 2 } }, eds)
+      ),
     []
   );
 
-  const onConnect: OnConnect = useCallback(
-    (params) => setEdges((eds) => addEdge({ ...params, animated: true }, eds)),
-    []
-  );
+  // Abrir visão interna da Sequência Lead
+  const openSequenceSubflow = (node: Node) => {
+    setActiveSequenceNode(node);
+    setSequenceName(node.data?.label ? String(node.data.label) : 'sequence');
 
+    const sub = (node.data?.subflow as any) || {};
+    let subNodes: Node[] = sub.nodes || [];
+    let subEdges: Edge[] = sub.edges || [];
+
+    if (subNodes.length === 0) {
+      subNodes = [
+        {
+          id: 'seq_start',
+          type: 'start',
+          position: { x: 120, y: 180 },
+          data: { leadsCount: 0 },
+        },
+        {
+          id: `seq_timer_${Date.now()}`,
+          type: 'timer',
+          position: { x: 300, y: 180 },
+          data: {
+            config: {
+              value: 1,
+              unit: 'minutes',
+              weekDaysSummary: 'Dom, Seg, Ter, Qua, Qui, Sex, Sáb.',
+            },
+          },
+        },
+        {
+          id: `seq_wpp_${Date.now()}`,
+          type: 'whatsapp',
+          position: { x: 500, y: 140 },
+          data: {
+            config: {
+              message: '',
+              leadsCount: 0,
+            },
+          },
+        },
+      ];
+      subEdges = [
+        { id: 'e_init_1', source: 'seq_start', target: subNodes[1].id, animated: true },
+        { id: 'e_init_2', source: subNodes[1].id, target: subNodes[2].id, animated: true },
+      ];
+    }
+
+    setSequenceNodes(subNodes);
+    setSequenceEdges(subEdges);
+    setSelectedNode(null);
+    setViewMode('SEQUENCE');
+  };
+
+  // Voltar da visão interna para o Fluxo Macro
+  const closeSequenceSubflow = () => {
+    if (activeSequenceNode) {
+      setMacroNodes((nds) =>
+        nds.map((n) =>
+          n.id === activeSequenceNode.id
+            ? {
+                ...n,
+                data: {
+                  ...n.data,
+                  label: sequenceName || n.data.label,
+                  subflow: {
+                    nodes: sequenceNodes,
+                    edges: sequenceEdges,
+                  },
+                },
+              }
+            : n
+        )
+      );
+    }
+    setActiveSequenceNode(null);
+    setSelectedNode(null);
+    setViewMode('MACRO');
+  };
+
+  // Adicionar blocos no Macro (Tag, Timer, Sequência Lead)
+  const addMacroBlock = (type: 'tag' | 'timer' | 'sequence_lead') => {
+    const id = `node_${type}_${Date.now()}`;
+    let newN: Node;
+
+    if (type === 'tag') {
+      newN = {
+        id,
+        type: 'tag',
+        position: { x: 220 + Math.random() * 50, y: 140 + macroNodes.length * 40 },
+        data: {
+          label: 'Tags',
+          type: 'tag',
+          leadsCount: 0,
+          config: { tagName: '', tagColor: '#a855f7', leadsCount: 0 },
+        },
+      };
+    } else if (type === 'sequence_lead') {
+      newN = {
+        id,
+        type: 'sequence_lead',
+        position: { x: 440 + Math.random() * 50, y: 140 + macroNodes.length * 40 },
+        data: {
+          label: 'Sequência Lead',
+          type: 'sequence_lead',
+          leadsCount: 0,
+          config: { leadsCount: 0, waitingCount: 0, successCount: 0, failedCount: 0 },
+          subflow: {
+            nodes: [
+              {
+                id: `start_${id}`,
+                type: 'start',
+                position: { x: 100, y: 150 },
+                data: { leadsCount: 0 },
+              },
+            ],
+            edges: [],
+          },
+        },
+      };
+    } else {
+      newN = {
+        id,
+        type: 'timer',
+        position: { x: 340 + Math.random() * 50, y: 140 + macroNodes.length * 40 },
+        data: {
+          label: 'Timer',
+          type: 'timer',
+          config: {
+            value: 1,
+            unit: 'minutes',
+            weekDaysSummary: 'Dom, Seg, Ter, Qua, Qui, Sex, Sáb.',
+            waitingCount: 0,
+            successCount: 0,
+            failedCount: 0,
+          },
+        },
+      };
+    }
+
+    setMacroNodes((nds) => [...nds, newN]);
+    setSelectedNode(newN);
+
+    if (type === 'tag') {
+      setIsTagModalOpen(true);
+    } else if (type === 'timer') {
+      openTimerModal(newN);
+    }
+  };
+
+  // Adicionar blocos dentro da Sequência (Timer, WhatsApp, E-mail)
+  const addSequenceBlock = (type: 'timer' | 'whatsapp' | 'email') => {
+    const id = `seq_${type}_${Date.now()}`;
+    let newN: Node;
+
+    if (type === 'whatsapp') {
+      newN = {
+        id,
+        type: 'whatsapp',
+        position: { x: 400 + Math.random() * 40, y: 100 + sequenceNodes.length * 40 },
+        data: {
+          label: 'WhatsApp',
+          config: {
+            message: '',
+            leadsCount: 0,
+            waitingCount: 0,
+            successCount: 0,
+            failedCount: 0,
+          },
+        },
+      };
+    } else if (type === 'email') {
+      newN = {
+        id,
+        type: 'email',
+        position: { x: 400 + Math.random() * 40, y: 100 + sequenceNodes.length * 40 },
+        data: {
+          label: 'E-mail Performance',
+          config: {
+            subject: '',
+            content: '',
+            leadsCount: 0,
+            waitingCount: 0,
+            successCount: 0,
+            failedCount: 0,
+          },
+        },
+      };
+    } else {
+      newN = {
+        id,
+        type: 'timer',
+        position: { x: 300 + Math.random() * 40, y: 100 + sequenceNodes.length * 40 },
+        data: {
+          config: {
+            value: 1,
+            unit: 'minutes',
+            weekDaysSummary: 'Dom, Seg, Ter, Qua, Qui, Sex, Sáb.',
+            waitingCount: 0,
+            successCount: 0,
+            failedCount: 0,
+          },
+        },
+      };
+    }
+
+    setSequenceNodes((nds) => [...nds, newN]);
+    setSelectedNode(newN);
+
+    if (type === 'timer') {
+      openTimerModal(newN);
+    } else {
+      setIsMessageDrawerOpen(true);
+    }
+  };
+
+  // Salvar no Banco de Dados
   const handleSave = async (publishStatus?: string) => {
     setSaving(true);
     setSaveNotice(null);
     try {
       const newStatus = publishStatus || status;
 
-      const triggerNode = nodes.find((n) => n.data.type === 'trigger');
-      const triggerType = (triggerNode?.data?.subtype as string) || 'TAG_ADDED';
-      const triggerConfig = triggerNode?.data?.config || {};
+      // Se estiver dentro de uma sequência, salva as alterações locais no nó pai antes
+      let currentMacroNodes = [...macroNodes];
+      if (viewMode === 'SEQUENCE' && activeSequenceNode) {
+        currentMacroNodes = currentMacroNodes.map((n) =>
+          n.id === activeSequenceNode.id
+            ? {
+                ...n,
+                data: {
+                  ...n.data,
+                  label: sequenceName || n.data.label,
+                  subflow: { nodes: sequenceNodes, edges: sequenceEdges },
+                },
+              }
+            : n
+        );
+      }
 
       const res = await fetch(`/api/automations/${automationId}`, {
         method: 'PUT',
@@ -205,16 +587,14 @@ export default function AutomationCanvasPage() {
         body: JSON.stringify({
           name,
           status: newStatus,
-          triggerType,
-          triggerConfig,
-          nodes,
-          edges,
+          nodes: currentMacroNodes,
+          edges: macroEdges,
         }),
       });
 
       if (res.ok) {
         setStatus(newStatus);
-        setSaveNotice(publishStatus === 'ACTIVE' ? 'Automação Ativada com Sucesso!' : 'Rascunho Salvo!');
+        setSaveNotice(publishStatus === 'ACTIVE' ? 'Automação Ativada com Sucesso!' : 'Salvo com Sucesso!');
         setTimeout(() => setSaveNotice(null), 3000);
       }
     } catch {
@@ -224,88 +604,36 @@ export default function AutomationCanvasPage() {
     }
   };
 
-  const addBlock = (type: string, subtype: string, label: string, config: any = {}) => {
-    const id = `node_${Date.now()}`;
-    const newNode: Node = {
-      id,
-      type,
-      position: { x: 340 + Math.random() * 40, y: 150 + nodes.length * 50 },
-      data: {
-        label,
-        type,
-        subtype,
-        config,
-      },
-    };
-    setNodes((nds) => [...nds, newNode]);
-    setSelectedNode(newNode);
+  // Clique em nó
+  const onNodeClick = (_: any, node: Node) => {
+    setSelectedNode(node);
 
-    if (type === 'delay') {
-      openTimerModal(newNode);
+    if (viewMode === 'MACRO') {
+      if (node.type === 'sequence_lead') {
+        openSequenceSubflow(node);
+      } else if (node.type === 'tag') {
+        setIsTagModalOpen(true);
+      } else if (node.type === 'timer') {
+        openTimerModal(node);
+      }
+    } else {
+      if (node.type === 'whatsapp' || node.type === 'email') {
+        setIsMessageDrawerOpen(true);
+      } else if (node.type === 'timer') {
+        openTimerModal(node);
+      }
     }
   };
 
-  const updateSelectedNodeConfig = (key: string, value: any) => {
-    if (!selectedNode) return;
-    setNodes((nds) =>
-      nds.map((n) => {
-        if (n.id === selectedNode.id) {
-          const updated = {
-            ...n,
-            data: {
-              ...n.data,
-              config: {
-                ...(n.data.config as object),
-                [key]: value,
-              },
-            },
-          };
-          setSelectedNode(updated);
-          return updated;
-        }
-        return n;
-      })
-    );
-  };
-
-  const updateSelectedNodeLabel = (label: string) => {
-    if (!selectedNode) return;
-    setNodes((nds) =>
-      nds.map((n) => {
-        if (n.id === selectedNode.id) {
-          const updated = {
-            ...n,
-            data: { ...n.data, label },
-          };
-          setSelectedNode(updated);
-          return updated;
-        }
-        return n;
-      })
-    );
-  };
-
-  const deleteSelectedNode = () => {
-    if (!selectedNode) return;
-    setNodes((nds) => nds.filter((n) => n.id !== selectedNode.id));
-    setEdges((eds) => eds.filter((e) => e.source !== selectedNode.id && e.target !== selectedNode.id));
-    setSelectedNode(null);
-  };
-
-  // Abre e popula o modal de Timer para o nó
+  // Timer Modal Handler
   const openTimerModal = (nodeToConfigure?: Node) => {
-    const targetNode = nodeToConfigure || selectedNode;
-    if (!targetNode || targetNode.data.type !== 'delay') return;
+    const target = nodeToConfigure || selectedNode;
+    if (!target) return;
+    const cfg = (target.data.config as any) || {};
 
-    const cfg = (targetNode.data.config as any) || {};
-    const isSpecific =
-      cfg.timerType === 'SPECIFIC_DATE' ||
-      cfg.delayType === 'specific_date' ||
-      !!cfg.specificDate;
-
-    setTimerTab(isSpecific ? 'SPECIFIC_DATE' : 'CONTINUOUS');
-    setTimerValue(Number(cfg.value ?? cfg.duration ?? cfg.minutes ?? cfg.hours ?? cfg.days ?? 1));
-    setTimerUnit(cfg.unit || (cfg.minutes !== undefined ? 'minutes' : cfg.hours !== undefined ? 'hours' : 'days'));
+    setTimerTab(cfg.timerType === 'SPECIFIC_DATE' ? 'SPECIFIC_DATE' : 'CONTINUOUS');
+    setTimerValue(Number(cfg.value ?? cfg.duration ?? cfg.minutes ?? 1));
+    setTimerUnit(cfg.unit || 'minutes');
     setTimerSpecificDate(cfg.specificDate || '');
     setTimerCancelCondition(cfg.cancelCondition || 'PURCHASE_APPROVED');
     setTimerHasLimit(!!cfg.hasLimit);
@@ -318,14 +646,18 @@ export default function AutomationCanvasPage() {
     setIsTimerModalOpen(true);
   };
 
-  // Salva configurações do Timer no nó
-  const handleSaveTimer = () => {
+  const handleSaveTimerConfig = () => {
     if (!selectedNode) return;
 
-    let newLabel = '';
-    let updatedConfig: any = {
+    const unitText =
+      timerUnit === 'minutes' ? 'minuto(s)' : timerUnit === 'hours' ? 'hora(s)' : 'dia(s)';
+
+    const updatedCfg: any = {
       ...(selectedNode.data.config as object),
       timerType: timerTab,
+      unit: timerUnit,
+      value: timerValue,
+      specificDate: timerTab === 'SPECIFIC_DATE' ? timerSpecificDate : undefined,
       cancelCondition: timerCancelCondition,
       hasLimit: timerHasLimit,
       hasInterval: timerHasInterval,
@@ -333,50 +665,63 @@ export default function AutomationCanvasPage() {
       intervalEnd: timerIntervalEnd,
       hasWeekDays: timerHasWeekDays,
       weekDays: timerWeekDays,
+      weekDaysSummary: timerHasWeekDays
+        ? timerWeekDays.join(', ')
+        : 'Dom, Seg, Ter, Qua, Qui, Sex, Sáb.',
     };
 
-    if (timerTab === 'CONTINUOUS') {
-      const unitLabel = timerUnit === 'minutes' ? 'Minuto(s)' : timerUnit === 'hours' ? 'Hora(s)' : 'Dia(s)';
-      newLabel = `Aguardar ${timerValue} ${unitLabel}`;
-      updatedConfig.unit = timerUnit;
-      updatedConfig.value = timerValue;
-      updatedConfig.specificDate = undefined;
-    } else {
-      if (!timerSpecificDate) {
-        alert('Por favor, informe a data e horário desejados para liberação.');
-        return;
-      }
-      const d = new Date(timerSpecificDate);
-      const dateFormatted = !isNaN(d.getTime())
-        ? `${d.toLocaleDateString('pt-BR')} ${d.toLocaleTimeString('pt-BR', { hour: '2-digit', minute: '2-digit' })}`
-        : timerSpecificDate;
-      newLabel = `Liberar em ${dateFormatted}`;
-      updatedConfig.specificDate = timerSpecificDate;
-    }
+    const updateInList = (list: Node[]) =>
+      list.map((n) =>
+        n.id === selectedNode.id
+          ? {
+              ...n,
+              data: {
+                ...n.data,
+                config: updatedCfg,
+              },
+            }
+          : n
+      );
 
-    setNodes((nds) =>
-      nds.map((n) => {
-        if (n.id === selectedNode.id) {
-          const updated = {
-            ...n,
-            data: {
-              ...n.data,
-              label: newLabel,
-              config: updatedConfig,
-            },
-          };
-          setSelectedNode(updated);
-          return updated;
-        }
-        return n;
-      })
-    );
+    if (viewMode === 'MACRO') {
+      setMacroNodes(updateInList);
+    } else {
+      setSequenceNodes(updateInList);
+    }
 
     setIsTimerModalOpen(false);
   };
 
-  // Criação rápida de Tag dentro do fluxo
-  const handleCreateTag = async (e: React.FormEvent) => {
+  // Tag Selection Handler
+  const handleSelectTag = (tag: TagItem) => {
+    if (!selectedNode) return;
+
+    setMacroNodes((nds) =>
+      nds.map((n) =>
+        n.id === selectedNode.id
+          ? {
+              ...n,
+              data: {
+                ...n.data,
+                tagName: tag.name,
+                leadsCount: tag._count?.contacts || 0,
+                config: {
+                  ...((n.data.config as object) || {}),
+                  tagName: tag.name,
+                  tagColor: tag.color,
+                  tagId: tag.id,
+                  leadsCount: tag._count?.contacts || 0,
+                },
+              },
+            }
+          : n
+      )
+    );
+    setIsTagModalOpen(false);
+  };
+
+  // Criação rápida de Tag
+  const handleQuickCreateTag = async (e: React.FormEvent) => {
     e.preventDefault();
     if (!newTagName.trim()) return;
 
@@ -387,372 +732,173 @@ export default function AutomationCanvasPage() {
         body: JSON.stringify({ name: newTagName.trim(), color: newTagColor }),
       });
       const data = await res.json();
-      if (data.tag) {
-        await fetchTags();
-
-        // Se um nó de tag ou gatilho estiver selecionado, vincula a nova tag automaticamente
-        if (selectedNode) {
-          if (selectedNode.data.type === 'trigger') {
-            if (
-              selectedNode.data.subtype === 'HOTMART_EVENT' ||
-              selectedNode.data.subtype === 'WEBHOOK'
-            ) {
-              updateSelectedNodeConfig('webhookTag', data.tag.name);
-            } else {
-              handleSelectTriggerTag(data.tag);
-            }
-          } else {
-            const isAddOrRemove =
-              selectedNode.data.subtype === 'ADD_TAG' || selectedNode.data.subtype === 'REMOVE_TAG';
-            const prefix = selectedNode.data.subtype === 'REMOVE_TAG' ? 'Remover Tag' : 'Tag';
-            const newLabel = isAddOrRemove ? `${prefix}: ${data.tag.name}` : `Verifica: ${data.tag.name}`;
-
-            setNodes((nds) =>
-              nds.map((n) => {
-                if (n.id === selectedNode.id) {
-                  const updated = {
-                    ...n,
-                    data: {
-                      ...n.data,
-                      label: newLabel,
-                      config: {
-                        ...(n.data.config as object),
-                        tagName: data.tag.name,
-                        tagColor: data.tag.color,
-                        tagId: data.tag.id,
-                        leadsCount: 0,
-                      },
-                    },
-                  };
-                  setSelectedNode(updated);
-                  return updated;
-                }
-                return n;
-              })
-            );
-          }
-        }
-
+      if (res.ok && data.tag) {
+        setAvailableTags((prev) => [...prev, data.tag]);
+        handleSelectTag(data.tag);
         setNewTagName('');
         setIsCreateTagOpen(false);
       }
     } catch {}
   };
 
-  // Edição rápida de Tag
-  const handleUpdateTag = async (e: React.FormEvent) => {
-    e.preventDefault();
-    if (!tagBeingEdited || !tagBeingEdited.name.trim()) return;
-
-    try {
-      const res = await fetch(`/api/tags/${tagBeingEdited.id}`, {
-        method: 'PUT',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ name: tagBeingEdited.name.trim(), color: tagBeingEdited.color }),
-      });
-      const data = await res.json();
-      if (data.tag) {
-        await fetchTags();
-
-        // Atualiza os nós no canvas que usam essa tag
-        setNodes((nds) =>
-          nds.map((n) => {
-            const cfg = n.data.config as any;
-            if (cfg?.tagName === tagBeingEdited.name || cfg?.tagId === tagBeingEdited.id) {
-              const prefix = n.data.subtype === 'REMOVE_TAG' ? 'Remover Tag' : n.data.subtype === 'HAS_TAG' ? 'Verifica' : 'Tag';
-              return {
-                ...n,
-                data: {
-                  ...n.data,
-                  label: `${prefix}: ${data.tag.name}`,
-                  config: {
-                    ...cfg,
-                    tagName: data.tag.name,
-                    tagColor: data.tag.color,
-                  },
-                },
-              };
-            }
-            return n;
-          })
-        );
-
-        if (selectedNode) {
-          const cfg = selectedNode.data.config as any;
-          if (cfg?.tagName === tagBeingEdited.name || cfg?.tagId === tagBeingEdited.id) {
-            setSelectedNode((prev) =>
-              prev
-                ? {
-                    ...prev,
-                    data: {
-                      ...prev.data,
-                      label: `Tag: ${data.tag.name}`,
-                      config: { ...cfg, tagName: data.tag.name, tagColor: data.tag.color },
-                    },
-                  }
-                : null
-            );
-          }
-        }
-
-        setIsEditTagOpen(false);
-        setTagBeingEdited(null);
-      }
-    } catch {}
-  };
-
-  // Seleciona tag para o nó
-  const handleSelectTagForNode = (tag: TagItem) => {
+  // Salvar mensagem de WhatsApp ou E-mail
+  const handleSaveMessage = (messageText: string, emailSubject?: string) => {
     if (!selectedNode) return;
-    const isAddOrRemove = selectedNode.data.subtype === 'ADD_TAG' || selectedNode.data.subtype === 'REMOVE_TAG';
-    const prefix = selectedNode.data.subtype === 'REMOVE_TAG' ? 'Remover Tag' : selectedNode.data.subtype === 'HAS_TAG' ? 'Verifica' : 'Tag';
-    const newLabel = `${prefix}: ${tag.name}`;
 
-    setNodes((nds) =>
+    setSequenceNodes((nds) =>
       nds.map((n) => {
         if (n.id === selectedNode.id) {
-          const updated = {
+          const isWpp = n.type === 'whatsapp';
+          return {
             ...n,
             data: {
               ...n.data,
-              label: newLabel,
               config: {
-                ...(n.data.config as object),
-                tagName: tag.name,
-                tagColor: tag.color,
-                tagId: tag.id,
-                leadsCount: tag._count?.contacts || 0,
+                ...((n.data.config as object) || {}),
+                message: isWpp ? messageText : undefined,
+                text: isWpp ? messageText : undefined,
+                subject: !isWpp ? emailSubject : undefined,
+                content: !isWpp ? messageText : undefined,
               },
             },
           };
-          setSelectedNode(updated);
-          return updated;
         }
         return n;
       })
     );
+    setIsMessageDrawerOpen(false);
   };
 
-  // Alterna o tipo do Gatilho de Entrada
-  const handleSelectTriggerType = (type: string) => {
+  // Deletar nó selecionado
+  const handleDeleteCurrentNode = () => {
     if (!selectedNode) return;
-    const isTag = type === 'TAG_ADDED';
-    const isWebhook = type === 'HOTMART_EVENT';
-
-    let newLabel = 'Gatilho de Entrada';
-    let updatedConfig: any = {
-      ...(selectedNode.data.config as object),
-    };
-
-    if (isTag) {
-      const tagName = (selectedNode.data.config as any)?.tagName || availableTags[0]?.name || 'Inscrito';
-      const tagColor = (selectedNode.data.config as any)?.tagColor || availableTags[0]?.color || '#8b5cf6';
-      const tagId = (selectedNode.data.config as any)?.tagId || availableTags[0]?.id;
-      const leadsCount = availableTags.find((t) => t.id === tagId)?._count?.contacts || 0;
-
-      updatedConfig.tagName = tagName;
-      updatedConfig.tagColor = tagColor;
-      updatedConfig.tagId = tagId;
-      updatedConfig.leadsCount = leadsCount;
-      newLabel = `Gatilho: Tag "${tagName}"`;
-    } else if (isWebhook) {
-      const webhookEvent = (selectedNode.data.config as any)?.webhookEvent || 'PURCHASE_WAITING_PAYMENT';
-      const webhookTag = (selectedNode.data.config as any)?.webhookTag || 'Pix Gerado';
-      updatedConfig.webhookEvent = webhookEvent;
-      updatedConfig.webhookTag = webhookTag;
-      const eventName =
-        webhookEvent === 'PURCHASE_APPROVED'
-          ? 'Compra Aprovada'
-          : webhookEvent === 'PURCHASE_WAITING_PAYMENT'
-          ? 'Pix Gerado'
-          : 'Evento Hotmart';
-      newLabel = `Gatilho: Webhook (${eventName})`;
+    if (viewMode === 'MACRO') {
+      setMacroNodes((nds) => nds.filter((n) => n.id !== selectedNode.id));
+      setMacroEdges((eds) =>
+        eds.filter((e) => e.source !== selectedNode.id && e.target !== selectedNode.id)
+      );
+    } else {
+      if (selectedNode.type === 'start') return; // não deleta o nó start
+      setSequenceNodes((nds) => nds.filter((n) => n.id !== selectedNode.id));
+      setSequenceEdges((eds) =>
+        eds.filter((e) => e.source !== selectedNode.id && e.target !== selectedNode.id)
+      );
     }
-
-    setNodes((nds) =>
-      nds.map((n) => {
-        if (n.id === selectedNode.id) {
-          const updated = {
-            ...n,
-            data: {
-              ...n.data,
-              subtype: type,
-              label: newLabel,
-              config: updatedConfig,
-            },
-          };
-          setSelectedNode(updated);
-          return updated;
-        }
-        return n;
-      })
-    );
-  };
-
-  // Seleciona tag para o gatilho de entrada
-  const handleSelectTriggerTag = (tag: TagItem) => {
-    if (!selectedNode) return;
-    const newLabel = `Gatilho: Tag "${tag.name}"`;
-    setNodes((nds) =>
-      nds.map((n) => {
-        if (n.id === selectedNode.id) {
-          const updated = {
-            ...n,
-            data: {
-              ...n.data,
-              subtype: 'TAG_ADDED',
-              label: newLabel,
-              config: {
-                ...(n.data.config as object),
-                tagName: tag.name,
-                tagColor: tag.color,
-                tagId: tag.id,
-                leadsCount: tag._count?.contacts || 0,
-              },
-            },
-          };
-          setSelectedNode(updated);
-          return updated;
-        }
-        return n;
-      })
-    );
-  };
-
-  // Seleciona evento de webhook para o gatilho
-  const handleSelectWebhookEvent = (eventValue: string) => {
-    if (!selectedNode) return;
-    const eventNames: Record<string, string> = {
-      PURCHASE_WAITING_PAYMENT: 'Pix Gerado',
-      PURCHASE_APPROVED: 'Compra Aprovada',
-      PURCHASE_OUT_OF_SHOPPING_CART: 'Carrinho Abandonado',
-      PURCHASE_BILLET_PRINTED: 'Boleto Gerado',
-      PURCHASE_REFUNDED: 'Reembolso',
-      GENERIC_WEBHOOK: 'Webhook Externo',
-    };
-    const defaultTags: Record<string, string> = {
-      PURCHASE_WAITING_PAYMENT: 'Pix Gerado',
-      PURCHASE_APPROVED: 'Cliente',
-      PURCHASE_OUT_OF_SHOPPING_CART: 'Carrinho Abandonado',
-      PURCHASE_BILLET_PRINTED: 'Boleto Gerado',
-      PURCHASE_REFUNDED: 'Reembolsado',
-      GENERIC_WEBHOOK: 'Webhook',
-    };
-
-    const eventLabel = eventNames[eventValue] || 'Webhook';
-    const autoTag = defaultTags[eventValue] || 'Webhook';
-    const newLabel = `Gatilho: Webhook (${eventLabel})`;
-
-    setNodes((nds) =>
-      nds.map((n) => {
-        if (n.id === selectedNode.id) {
-          const currentConfig = (n.data.config as any) || {};
-          const updated = {
-            ...n,
-            data: {
-              ...n.data,
-              subtype: 'HOTMART_EVENT',
-              label: newLabel,
-              config: {
-                ...currentConfig,
-                webhookEvent: eventValue,
-                webhookTag: currentConfig.webhookTag || autoTag,
-              },
-            },
-          };
-          setSelectedNode(updated);
-          return updated;
-        }
-        return n;
-      })
-    );
-  };
-
-  // Simulação de fluxo
-  const runSimulation = async () => {
-    setSimulating(true);
-    setSimulationSteps([]);
-    try {
-      const res = await fetch(`/api/automations/${automationId}/simulate`, {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({
-          contactTags: ['Inscrito', ...(simClientStatus ? ['Cliente'] : []), ...(simPixStatus ? ['Pix Gerado'] : [])],
-          isClient: simClientStatus,
-          hasGeneratedPix: simPixStatus,
-        }),
-      });
-      const data = await res.json();
-      setSimulationSteps(data.steps || []);
-    } catch {}
-    setSimulating(false);
+    setSelectedNode(null);
+    setIsMessageDrawerOpen(false);
+    setIsTagModalOpen(false);
   };
 
   if (loading) {
     return (
-      <div className="flex items-center justify-center h-full bg-slate-950">
-        <div className="w-8 h-8 border-4 border-indigo-500 border-t-transparent rounded-full animate-spin"></div>
+      <div className="flex items-center justify-center h-full bg-[#0e1015]">
+        <div className="w-8 h-8 border-4 border-indigo-500 border-t-transparent rounded-full animate-spin" />
       </div>
     );
   }
 
   return (
-    <div className="flex flex-col h-[calc(100vh-64px)] -m-8 bg-slate-950 text-slate-100 overflow-hidden font-sans">
-      {/* Topo do Construtor */}
-      <div className="h-14 bg-slate-900 border-b border-slate-800 px-6 flex items-center justify-between z-10 shrink-0">
-        <div className="flex items-center gap-4">
-          <button
-            onClick={() => router.push('/automations')}
-            className="p-1.5 rounded-lg border border-slate-700 hover:bg-slate-800 text-slate-400 hover:text-white transition-colors cursor-pointer"
-          >
-            <ArrowLeft className="w-4 h-4" />
-          </button>
+    <div className="flex flex-col h-[calc(100vh-64px)] -m-8 bg-[#0e1015] text-slate-100 overflow-hidden font-sans select-none">
+      {/* ============================================================ */}
+      {/* BARRA SUPERIOR (TOP BAR) - MUDA CONFORME O NÍVEL */}
+      {/* ============================================================ */}
+      <div className="h-14 bg-[#14161d] border-b border-slate-800/80 px-5 flex items-center justify-between z-20 shrink-0">
+        <div className="flex items-center gap-3">
+          {viewMode === 'MACRO' ? (
+            <button
+              onClick={() => router.push('/automations')}
+              className="p-1.5 rounded-lg border border-slate-700/80 hover:bg-slate-800 text-slate-400 hover:text-white transition-colors cursor-pointer"
+              title="Voltar para lista de automações"
+            >
+              <ArrowLeft className="w-4 h-4" />
+            </button>
+          ) : (
+            <button
+              onClick={closeSequenceSubflow}
+              className="flex items-center gap-1.5 px-3 py-1.5 rounded-lg border border-slate-700 bg-slate-800 hover:bg-slate-700 text-white text-xs font-semibold transition-colors cursor-pointer"
+              title="Voltar ao fluxo principal"
+            >
+              <ArrowLeft className="w-3.5 h-3.5" />
+              <span>Voltar ao Fluxo Principal</span>
+            </button>
+          )}
 
-          <div className="flex items-center gap-3">
-            <input
-              type="text"
-              value={name}
-              onChange={(e) => setName(e.target.value)}
-              className="font-bold text-white text-sm bg-transparent border-b border-transparent hover:border-slate-700 focus:border-indigo-500 focus:outline-none px-1"
-            />
-
-            {/* Switch Ativada / Desativada no Topo (como na imagem de inspiração) */}
-            <div className="flex items-center gap-2 bg-slate-800/80 px-2.5 py-1 rounded-full border border-slate-700/60">
-              <span className={`text-[11px] font-semibold ${status === 'ACTIVE' ? 'text-emerald-400' : 'text-slate-400'}`}>
-                {status === 'ACTIVE' ? 'Ativada' : 'Desativada'}
-              </span>
-              <button
-                type="button"
-                onClick={() => handleSave(status === 'ACTIVE' ? 'PAUSED' : 'ACTIVE')}
-                className={`w-9 h-5 flex items-center rounded-full p-0.5 transition-colors cursor-pointer ${
-                  status === 'ACTIVE' ? 'bg-emerald-500' : 'bg-slate-600'
-                }`}
-              >
-                <div
-                  className={`bg-white w-4 h-4 rounded-full shadow-md transform transition-transform ${
-                    status === 'ACTIVE' ? 'translate-x-4' : 'translate-x-0'
-                  }`}
-                />
-              </button>
-            </div>
+          <div className="flex items-center gap-2.5">
+            <Settings className="w-4 h-4 text-slate-500" />
+            {viewMode === 'MACRO' ? (
+              <input
+                type="text"
+                value={name}
+                onChange={(e) => setName(e.target.value)}
+                placeholder="nome do fluxo"
+                className="font-bold text-white text-sm bg-transparent border-b border-transparent hover:border-slate-700 focus:border-indigo-500 focus:outline-none px-1"
+              />
+            ) : (
+              <input
+                type="text"
+                value={sequenceName}
+                onChange={(e) => setSequenceName(e.target.value)}
+                placeholder="sequence"
+                className="font-bold text-white text-sm bg-transparent border-b border-transparent hover:border-slate-700 focus:border-indigo-500 focus:outline-none px-1"
+              />
+            )}
           </div>
         </div>
 
-        <div className="flex items-center gap-2.5">
+        {/* Lado Direito do Topo */}
+        <div className="flex items-center gap-3">
+          {/* Switch Ativar / Desativar estilo da imagem */}
+          <div className="flex items-center gap-2 bg-[#1b1e27] px-3 py-1 rounded-full border border-slate-800">
+            <span
+              className={`text-[11px] font-semibold ${
+                (viewMode === 'MACRO' ? status === 'ACTIVE' : sequenceActive)
+                  ? 'text-emerald-400'
+                  : 'text-slate-400'
+              }`}
+            >
+              {(viewMode === 'MACRO' ? status === 'ACTIVE' : sequenceActive) ? 'Ativar' : 'Desativar'}
+            </span>
+            <button
+              type="button"
+              onClick={() => {
+                if (viewMode === 'MACRO') {
+                  handleSave(status === 'ACTIVE' ? 'PAUSED' : 'ACTIVE');
+                } else {
+                  setSequenceActive(!sequenceActive);
+                }
+              }}
+              className={`w-9 h-5 flex items-center rounded-full p-0.5 transition-colors cursor-pointer ${
+                (viewMode === 'MACRO' ? status === 'ACTIVE' : sequenceActive)
+                  ? 'bg-emerald-500'
+                  : 'bg-slate-700'
+              }`}
+            >
+              <div
+                className={`bg-white w-4 h-4 rounded-full shadow-md transform transition-transform ${
+                  (viewMode === 'MACRO' ? status === 'ACTIVE' : sequenceActive)
+                    ? 'translate-x-4'
+                    : 'translate-x-0'
+                }`}
+              />
+            </button>
+          </div>
+
+          {/* Feedback de salvamento */}
           {saveNotice && (
             <span className="text-xs font-semibold text-emerald-400 bg-emerald-950/60 px-3 py-1 rounded-full border border-emerald-500/30">
               {saveNotice}
             </span>
           )}
 
+          {/* Botão Compartilhar Código */}
           <button
             onClick={handleCopyCode}
             className={`flex items-center gap-1.5 px-3 py-1.5 rounded-xl border text-xs font-semibold transition-all cursor-pointer ${
               copiedShareCode
                 ? 'border-emerald-500/60 bg-emerald-950/80 text-emerald-300'
-                : 'border-slate-700 bg-slate-800/80 hover:bg-slate-700 text-slate-200'
+                : 'border-slate-700 bg-slate-800 hover:bg-slate-700 text-slate-200'
             }`}
-            title="Copiar código para compartilhar este fluxo com outros usuários"
+            title="Copiar código de compartilhamento deste fluxo"
           >
             {copiedShareCode ? (
               <>
@@ -767,1131 +913,629 @@ export default function AutomationCanvasPage() {
             )}
           </button>
 
-          <button
-            onClick={() => {
-              setIsSimulateOpen(true);
-              runSimulation();
-            }}
-            className="flex items-center gap-1.5 px-3 py-1.5 rounded-xl border border-purple-500/30 bg-purple-950/40 text-purple-300 hover:bg-purple-900/60 text-xs font-semibold transition-colors cursor-pointer"
-          >
-            <Sparkles className="w-3.5 h-3.5 text-purple-400" />
-            <span>Simular Fluxo</span>
-          </button>
-
+          {/* Botão Salvar */}
           <button
             onClick={() => handleSave()}
             disabled={saving}
-            className="flex items-center gap-1.5 px-3 py-1.5 rounded-xl border border-slate-700 bg-slate-800 hover:bg-slate-700 text-white text-xs font-semibold transition-colors cursor-pointer"
+            className="flex items-center gap-1.5 px-4 py-1.5 rounded-xl bg-indigo-600 hover:bg-indigo-500 text-white text-xs font-semibold transition-colors cursor-pointer shadow-lg shadow-indigo-600/20"
           >
             <Save className="w-3.5 h-3.5" />
-            <span>Salvar Rascunho</span>
+            <span>{saving ? 'Salvando...' : 'Salvar'}</span>
           </button>
         </div>
       </div>
 
-      {/* Área Central: Barra Lateral de Ferramentas + Canvas + Painel de Edição */}
-      <div className="flex-1 flex relative overflow-hidden bg-slate-950">
-        {/* Barra Lateral Esquerda de Blocos (Inspirada na Imagem 2) */}
-        <div className="w-56 bg-slate-900 border-r border-slate-800 p-3 flex flex-col justify-between shrink-0 z-20 overflow-y-auto">
-          <div className="space-y-4">
-            <div>
-              <span className="text-[10px] font-bold uppercase tracking-wider text-slate-500 block px-2 mb-2">
-                Arraste os Blocos
-              </span>
+      {/* ============================================================ */}
+      {/* ÁREA CENTRAL: SIDEBAR DE FERRAMENTAS + CANVAS */}
+      {/* ============================================================ */}
+      <div className="flex-1 flex relative overflow-hidden bg-[#0e1015]">
+        {/* SIDEBAR ESQUERDA - SOMENTE OS ÍCONES SOLICITADOS */}
+        <div className="w-48 bg-[#14161d] border-r border-slate-800/80 p-3 flex flex-col justify-between shrink-0 z-20">
+          <div>
+            <span className="text-[11px] font-semibold text-slate-400 block px-1 mb-3">
+              Arraste os ícones
+            </span>
 
-              {/* Seção Entrada */}
-              <div className="space-y-1 mb-3">
-                <span className="text-[10px] text-slate-500 px-2 font-medium">Entrada</span>
-                <button
-                  onClick={() =>
-                    addBlock('trigger', 'CONTACT_CREATED', 'Novo Lead Cadastrado', {
-                      description: 'Inicia quando o lead entra no lançamento',
-                    })
-                  }
-                  className="w-full flex items-center gap-2.5 px-3 py-2 rounded-xl bg-slate-800/60 hover:bg-slate-800 text-slate-200 text-xs font-medium transition-all text-left border border-slate-700/40 hover:border-indigo-500/40 cursor-pointer"
-                >
-                  <div className="w-6 h-6 rounded-lg bg-indigo-500/20 text-indigo-400 flex items-center justify-center">
-                    <Zap className="w-3.5 h-3.5" />
-                  </div>
-                  <span>Gatilho de Entrada</span>
-                </button>
-              </div>
-
-              {/* Seção Tags */}
-              <div className="space-y-1 mb-3">
-                <span className="text-[10px] text-slate-500 px-2 font-medium">Segmentação</span>
-                <button
-                  onClick={() =>
-                    addBlock('action', 'ADD_TAG', 'Adicionar Tag', {
-                      tagName: availableTags[0]?.name || 'Inscrito',
-                      tagColor: availableTags[0]?.color || '#8b5cf6',
-                      tagId: availableTags[0]?.id,
-                      leadsCount: availableTags[0]?._count?.contacts || 0,
-                    })
-                  }
-                  className="w-full flex items-center gap-2.5 px-3 py-2 rounded-xl bg-slate-800/60 hover:bg-slate-800 text-slate-200 text-xs font-medium transition-all text-left border border-slate-700/40 hover:border-purple-500/40 cursor-pointer"
-                >
-                  <div className="w-6 h-6 rounded-lg bg-purple-500/20 text-purple-400 flex items-center justify-center">
-                    <TagIcon className="w-3.5 h-3.5" />
-                  </div>
-                  <span>Tag / Segmento</span>
-                </button>
-              </div>
-
-              {/* Seção Agendamento & Timer */}
-              <div className="space-y-1 mb-3">
-                <span className="text-[10px] text-slate-500 px-2 font-medium">Agendamento</span>
-                <button
-                  onClick={() =>
-                    addBlock('delay', 'WAIT_TIME', 'Aguardar 1 Minuto', {
-                      timerType: 'CONTINUOUS',
-                      value: 1,
-                      unit: 'minutes',
-                      cancelCondition: 'PURCHASE_APPROVED',
-                    })
-                  }
-                  className="w-full flex items-center gap-2.5 px-3 py-2 rounded-xl bg-slate-800/60 hover:bg-slate-800 text-slate-200 text-xs font-medium transition-all text-left border border-slate-700/40 hover:border-sky-500/40 cursor-pointer"
-                >
-                  <div className="w-6 h-6 rounded-lg bg-sky-500/20 text-sky-400 flex items-center justify-center">
-                    <Clock className="w-3.5 h-3.5" />
-                  </div>
-                  <span>Timer / Agendamento</span>
-                </button>
-              </div>
-
-              {/* Seção Disparos de Mensagens */}
-              <div className="space-y-1 mb-3">
-                <span className="text-[10px] text-slate-500 px-2 font-medium">Disparos</span>
-                <button
-                  onClick={() =>
-                    addBlock('action', 'SEND_WHATSAPP', 'Enviar WhatsApp', {
-                      text: 'Olá {{nome}}! Seu link exclusivo para entrar na sala ao vivo é: https://zoom.us/demo',
-                    })
-                  }
-                  className="w-full flex items-center gap-2.5 px-3 py-2 rounded-xl bg-slate-800/60 hover:bg-slate-800 text-slate-200 text-xs font-medium transition-all text-left border border-slate-700/40 hover:border-emerald-500/40 cursor-pointer"
-                >
-                  <div className="w-6 h-6 rounded-lg bg-emerald-500/20 text-emerald-400 flex items-center justify-center">
-                    <MessageSquare className="w-3.5 h-3.5" />
-                  </div>
-                  <span>Mensagem WhatsApp</span>
-                </button>
-
-                <button
-                  onClick={() =>
-                    addBlock('action', 'SEND_EMAIL', 'Enviar E-mail', {
-                      subject: 'Link da Aula ao Vivo',
-                      content: '<p>Olá {{nome}}, nossa transmissão vai começar!</p>',
-                    })
-                  }
-                  className="w-full flex items-center gap-2.5 px-3 py-2 rounded-xl bg-slate-800/60 hover:bg-slate-800 text-slate-200 text-xs font-medium transition-all text-left border border-slate-700/40 hover:border-blue-500/40 cursor-pointer"
-                >
-                  <div className="w-6 h-6 rounded-lg bg-blue-500/20 text-blue-400 flex items-center justify-center">
-                    <Mail className="w-3.5 h-3.5" />
-                  </div>
-                  <span>E-mail Marketing</span>
-                </button>
-              </div>
-
-              {/* Seção Decisões & Filtros */}
-              <div className="space-y-1 mb-3">
-                <span className="text-[10px] text-slate-500 px-2 font-medium">Decisões</span>
-                <button
-                  onClick={() =>
-                    addBlock('condition', 'HAS_TAG', 'Condição: Comprou?', {
-                      tagName: 'Cliente',
-                    })
-                  }
-                  className="w-full flex items-center gap-2.5 px-3 py-2 rounded-xl bg-slate-800/60 hover:bg-slate-800 text-slate-200 text-xs font-medium transition-all text-left border border-slate-700/40 hover:border-amber-500/40 cursor-pointer"
-                >
-                  <div className="w-6 h-6 rounded-lg bg-amber-500/20 text-amber-400 flex items-center justify-center">
-                    <GitFork className="w-3.5 h-3.5" />
-                  </div>
-                  <span>Condição SE / SENÃO</span>
-                </button>
-
-                <button
-                  onClick={() =>
-                    addBlock('action', 'CANCEL_OTHER_FLOWS', 'Interromper Cobranças', {})
-                  }
-                  className="w-full flex items-center gap-2.5 px-3 py-2 rounded-xl bg-slate-800/60 hover:bg-slate-800 text-slate-200 text-xs font-medium transition-all text-left border border-slate-700/40 hover:border-rose-500/40 cursor-pointer"
-                >
-                  <div className="w-6 h-6 rounded-lg bg-rose-500/20 text-rose-400 flex items-center justify-center">
-                    <XCircle className="w-3.5 h-3.5" />
-                  </div>
-                  <span>Interromper Cobranças</span>
-                </button>
-              </div>
-            </div>
-          </div>
-
-          <div className="pt-3 border-t border-slate-800 text-[11px] text-slate-500">
-            Arraste ou clique para conectar blocos pelo fluxo
-          </div>
-        </div>
-
-        {/* Canvas do React Flow */}
-        <div className="flex-1 h-full w-full bg-slate-950">
-          <ReactFlow
-            nodes={nodes}
-            edges={edges}
-            onNodesChange={onNodesChange}
-            onEdgesChange={onEdgesChange}
-            onConnect={onConnect}
-            nodeTypes={nodeTypes}
-            onNodeClick={(_, node) => {
-              setSelectedNode(node);
-              if (node.data.type === 'delay') {
-                openTimerModal(node);
-              }
-            }}
-            onPaneClick={() => setSelectedNode(null)}
-            fitView
-          >
-            <Background variant={BackgroundVariant.Dots} gap={20} size={1.5} color="#334155" />
-            <Controls className="!bg-slate-900 !border-slate-800 !text-white !fill-white shadow-xl" />
-          </ReactFlow>
-        </div>
-
-        {/* Painel Lateral de Configuração do Bloco Selecionado */}
-        {selectedNode && (
-          <div className="w-88 bg-slate-900 border-l border-slate-800 shadow-2xl p-5 overflow-y-auto z-20 shrink-0 text-xs flex flex-col justify-between animate-in fade-in slide-in-from-right-2">
-            <div>
-              <div className="flex items-center justify-between pb-3 border-b border-slate-800 mb-4">
-                <div className="flex items-center gap-2">
-                  <span className="font-bold text-white text-sm">Configurar Bloco</span>
-                  <span className="text-[10px] text-slate-500 font-mono">ID: {selectedNode.id}</span>
-                </div>
-                <button
-                  onClick={() => setSelectedNode(null)}
-                  className="text-slate-400 hover:text-white p-1 rounded-lg hover:bg-slate-800 cursor-pointer"
-                >
-                  <X className="w-4 h-4" />
-                </button>
-              </div>
-
+            {/* SE ESTIVER NO NÍVEL 1 (MACRO): TAG, TIMER E SEQUÊNCIA LEAD */}
+            {viewMode === 'MACRO' ? (
               <div className="space-y-4">
-                <div>
-                  <label className="block text-slate-300 font-semibold mb-1">Título no Fluxo</label>
-                  <input
-                    type="text"
-                    value={selectedNode.data.label as string}
-                    onChange={(e) => updateSelectedNodeLabel(e.target.value)}
-                    className="w-full p-2.5 bg-slate-950 border border-slate-700 rounded-xl text-white focus:outline-none focus:border-indigo-500"
-                  />
+                {/* Tag */}
+                <div
+                  onClick={() => addMacroBlock('tag')}
+                  className="flex flex-col items-center justify-center p-3 rounded-xl bg-[#1b1e27] hover:bg-[#232733] border border-slate-800 hover:border-slate-700 cursor-pointer transition-all group"
+                >
+                  <TagIcon className="w-6 h-6 text-slate-300 group-hover:text-white mb-1.5 transition-colors" />
+                  <span className="text-xs font-medium text-slate-300 group-hover:text-white">Tag</span>
                 </div>
 
-                {/* Bloco de GATILHO DE ENTRADA (TRIGGER) */}
-                {selectedNode.data.type === 'trigger' && (
-                  <div className="space-y-4 p-4 rounded-xl bg-slate-950/70 border border-indigo-500/40">
-                    <div className="flex items-center gap-2 text-indigo-400 font-bold">
-                      <Zap className="w-4 h-4" />
-                      <span>Configurar Gatilho de Entrada</span>
-                    </div>
-
-                    <div>
-                      <label className="block text-slate-300 font-semibold mb-1.5">
-                        Como este fluxo deve iniciar?
-                      </label>
-                      <div className="grid grid-cols-2 gap-2">
-                        <button
-                          type="button"
-                          onClick={() => handleSelectTriggerType('TAG_ADDED')}
-                          className={`p-2.5 rounded-xl border text-left flex flex-col gap-1 transition-all cursor-pointer ${
-                            selectedNode.data.subtype === 'TAG_ADDED' ||
-                            !selectedNode.data.subtype ||
-                            selectedNode.data.subtype === 'CONTACT_CREATED'
-                              ? 'bg-purple-500/20 border-purple-500 text-white'
-                              : 'bg-slate-900 border-slate-800 text-slate-400 hover:border-slate-700'
-                          }`}
-                        >
-                          <div className="flex items-center gap-1.5 text-xs font-bold text-purple-300">
-                            <TagIcon className="w-3.5 h-3.5" />
-                            <span>Lead com Tag</span>
-                          </div>
-                          <span className="text-[10px] text-slate-400 leading-tight">
-                            Ativa quando o lead recebe uma tag específica
-                          </span>
-                        </button>
-
-                        <button
-                          type="button"
-                          onClick={() => handleSelectTriggerType('HOTMART_EVENT')}
-                          className={`p-2.5 rounded-xl border text-left flex flex-col gap-1 transition-all cursor-pointer ${
-                            selectedNode.data.subtype === 'HOTMART_EVENT' ||
-                            selectedNode.data.subtype === 'WEBHOOK'
-                              ? 'bg-orange-500/20 border-orange-500 text-white'
-                              : 'bg-slate-900 border-slate-800 text-slate-400 hover:border-slate-700'
-                          }`}
-                        >
-                          <div className="flex items-center gap-1.5 text-xs font-bold text-orange-300">
-                            <Globe className="w-3.5 h-3.5" />
-                            <span>Webhook / Vendas</span>
-                          </div>
-                          <span className="text-[10px] text-slate-400 leading-tight">
-                            Ativa por evento da Hotmart ou webhook
-                          </span>
-                        </button>
-                      </div>
-                    </div>
-
-                    {/* SELEÇÃO QUANDO FOR TAG */}
-                    {(selectedNode.data.subtype === 'TAG_ADDED' ||
-                      !selectedNode.data.subtype ||
-                      selectedNode.data.subtype === 'CONTACT_CREATED') && (
-                      <div className="space-y-3 pt-2 border-t border-slate-800">
-                        <div className="flex items-center justify-between">
-                          <label className="text-slate-300 font-semibold text-[11px]">
-                            Selecione a Tag de Entrada
-                          </label>
-
-                          <button
-                            type="button"
-                            onClick={() => setIsCreateTagOpen(true)}
-                            className="px-2 py-0.5 bg-purple-600 hover:bg-purple-700 text-white rounded-lg text-[10px] font-semibold flex items-center gap-1 cursor-pointer"
-                          >
-                            <Plus className="w-3 h-3" />
-                            <span>Nova Tag</span>
-                          </button>
-                        </div>
-
-                        <div className="max-h-44 overflow-y-auto space-y-1.5 pr-1">
-                          {availableTags.length === 0 ? (
-                            <div className="p-3 text-center text-slate-500 text-[11px]">
-                              Nenhuma tag cadastrada. Clique em &quot;Nova Tag&quot; acima para criar tags como &quot;Inscrito&quot; ou &quot;Lead tráfego&quot;.
-                            </div>
-                          ) : (
-                            availableTags.map((tag) => {
-                              const isSelected =
-                                (selectedNode.data.config as any)?.tagName === tag.name ||
-                                (selectedNode.data.config as any)?.tagId === tag.id;
-
-                              return (
-                                <div
-                                  key={tag.id}
-                                  className={`flex items-center justify-between p-2 rounded-xl border transition-all ${
-                                    isSelected
-                                      ? 'bg-purple-500/20 border-purple-500 text-white font-medium'
-                                      : 'bg-slate-900 border-slate-800 text-slate-300 hover:border-slate-700'
-                                  }`}
-                                >
-                                  <button
-                                    type="button"
-                                    onClick={() => handleSelectTriggerTag(tag)}
-                                    className="flex items-center gap-2 flex-1 text-left cursor-pointer"
-                                  >
-                                    <span
-                                      className="w-3 h-3 rounded-full shrink-0"
-                                      style={{ backgroundColor: tag.color }}
-                                    />
-                                    <span className="truncate">{tag.name}</span>
-                                    {tag._count?.contacts !== undefined && (
-                                      <span className="text-[10px] text-slate-500">
-                                        ({tag._count.contacts} leads)
-                                      </span>
-                                    )}
-                                  </button>
-
-                                  <button
-                                    type="button"
-                                    onClick={() => {
-                                      setTagBeingEdited(tag);
-                                      setIsEditTagOpen(true);
-                                    }}
-                                    title="Editar esta Tag"
-                                    className="text-slate-400 hover:text-white p-1 hover:bg-slate-800 rounded-lg cursor-pointer ml-1"
-                                  >
-                                    <Edit2 className="w-3 h-3" />
-                                  </button>
-                                </div>
-                              );
-                            })
-                          )}
-                        </div>
-                      </div>
-                    )}
-
-                    {/* SELEÇÃO QUANDO FOR WEBHOOK */}
-                    {(selectedNode.data.subtype === 'HOTMART_EVENT' ||
-                      selectedNode.data.subtype === 'WEBHOOK') && (
-                      <div className="space-y-3 pt-2 border-t border-slate-800">
-                        <div>
-                          <label className="block text-slate-300 font-semibold mb-1 text-[11px]">
-                            Evento da Hotmart / Webhook
-                          </label>
-                          <select
-                            value={(selectedNode.data.config as any)?.webhookEvent || 'PURCHASE_WAITING_PAYMENT'}
-                            onChange={(e) => handleSelectWebhookEvent(e.target.value)}
-                            className="w-full p-2.5 bg-slate-900 border border-slate-700 rounded-xl text-white text-xs focus:outline-none focus:border-orange-500"
-                          >
-                            <option value="PURCHASE_WAITING_PAYMENT">Pix Gerado / Aguardando Pagamento</option>
-                            <option value="PURCHASE_APPROVED">Compra Aprovada (Hotmart)</option>
-                            <option value="PURCHASE_OUT_OF_SHOPPING_CART">Carrinho Abandonado</option>
-                            <option value="PURCHASE_BILLET_PRINTED">Boleto Bancário Impresso</option>
-                            <option value="PURCHASE_REFUNDED">Reembolso / Chargeback</option>
-                            <option value="GENERIC_WEBHOOK">Webhook Personalizado (Qualquer Origem)</option>
-                          </select>
-                        </div>
-
-                        <div>
-                          <div className="flex items-center justify-between mb-1">
-                            <label className="text-slate-300 font-semibold text-[11px]">
-                              Tag de Webhook Aplicada ao Lead
-                            </label>
-                            <button
-                              type="button"
-                              onClick={() => setIsCreateTagOpen(true)}
-                              className="text-purple-400 hover:text-purple-300 text-[10px] font-semibold cursor-pointer"
-                            >
-                              + Criar Tag
-                            </button>
-                          </div>
-                          <select
-                            value={(selectedNode.data.config as any)?.webhookTag || ''}
-                            onChange={(e) => updateSelectedNodeConfig('webhookTag', e.target.value)}
-                            className="w-full p-2.5 bg-slate-900 border border-slate-700 rounded-xl text-white text-xs focus:outline-none focus:border-orange-500"
-                          >
-                            <option value="">Selecione ou crie uma tag...</option>
-                            {availableTags.map((tag) => (
-                              <option key={tag.id} value={tag.name}>
-                                {tag.name}
-                              </option>
-                            ))}
-                          </select>
-                          <span className="text-[10px] text-slate-400 mt-1 block">
-                            Quando o webhook chegar, o lead receberá esta tag e entrará no fluxo.
-                          </span>
-                        </div>
-
-                        {/* URL do Webhook com botão Copiar */}
-                        <div className="p-2.5 rounded-xl bg-slate-900 border border-slate-800 space-y-1.5">
-                          <span className="text-[10px] text-slate-400 font-semibold block uppercase">
-                            URL do Webhook para colar na Hotmart:
-                          </span>
-                          <div className="flex items-center gap-2 bg-slate-950 p-2 rounded-lg border border-slate-800 font-mono text-[10px] text-orange-300 break-all select-all">
-                            <span className="truncate flex-1">
-                              {typeof window !== 'undefined'
-                                ? `${window.location.origin}/api/webhooks/hotmart`
-                                : '/api/webhooks/hotmart'}
-                            </span>
-                            <button
-                              type="button"
-                              onClick={copyWebhookUrl}
-                              className="px-2 py-1 bg-slate-800 hover:bg-slate-700 text-white rounded text-[10px] shrink-0 flex items-center gap-1 cursor-pointer"
-                            >
-                              {copiedWebhook ? (
-                                <Check className="w-3 h-3 text-emerald-400" />
-                              ) : (
-                                <Copy className="w-3 h-3" />
-                              )}
-                              <span>{copiedWebhook ? 'Copiado!' : 'Copiar'}</span>
-                            </button>
-                          </div>
-                        </div>
-                      </div>
-                    )}
+                <div className="pt-2 border-t border-slate-800">
+                  <span className="text-[10px] text-slate-500 px-1 font-medium block mb-2">
+                    Agendamento
+                  </span>
+                  {/* Timer */}
+                  <div
+                    onClick={() => addMacroBlock('timer')}
+                    className="flex flex-col items-center justify-center p-3 rounded-xl bg-[#1b1e27] hover:bg-[#232733] border border-slate-800 hover:border-slate-700 cursor-pointer transition-all group"
+                  >
+                    <Clock className="w-6 h-6 text-slate-300 group-hover:text-white mb-1.5 transition-colors" />
+                    <span className="text-xs font-medium text-slate-300 group-hover:text-white">Timer</span>
                   </div>
-                )}
+                </div>
 
-                {/* Bloco de TEMPORIZADOR / TIMER */}
-                {selectedNode.data.type === 'delay' && (
-                  <div className="p-4 rounded-xl bg-slate-950/80 border border-sky-500/30 space-y-3">
-                    <div className="flex items-center justify-between">
-                      <div className="flex items-center gap-2 text-sky-400 font-bold">
-                        <Clock className="w-4 h-4" />
-                        <span>Configurações do Timer</span>
-                      </div>
-                      <button
-                        onClick={() => openTimerModal()}
-                        className="px-2.5 py-1 rounded-lg bg-sky-500 hover:bg-sky-600 text-white text-xs font-semibold flex items-center gap-1.5 shadow-sm cursor-pointer"
-                      >
-                        <Sliders className="w-3.5 h-3.5" />
-                        <span>Abrir Modal</span>
-                      </button>
+                <div className="pt-2 border-t border-slate-800">
+                  {/* Sequência Lead */}
+                  <div
+                    onClick={() => addMacroBlock('sequence_lead')}
+                    className="flex flex-col items-center justify-center p-3 rounded-xl bg-[#1b1e27] hover:bg-[#232733] border border-dashed border-red-500/40 hover:border-red-400 cursor-pointer transition-all group"
+                  >
+                    <div className="flex items-center gap-1 mb-2 text-red-400 group-hover:text-red-300">
+                      <div className="w-2 h-2 rounded-full border border-current" />
+                      <div className="w-2 h-0.5 bg-current" />
+                      <div className="w-1 h-1 rounded-full bg-current" />
+                      <div className="w-1 h-1 rounded-full bg-current" />
+                      <div className="w-2 h-0.5 bg-current" />
+                      <div className="w-2 h-2 rounded-full border border-current" />
                     </div>
-
-                    <div className="text-slate-300 text-[11px] leading-relaxed">
-                      {(selectedNode.data.config as any)?.timerType === 'SPECIFIC_DATE' ? (
-                        <>
-                          <div className="font-medium text-sky-300">Modo: Data e Horário Específico</div>
-                          <div>Agendado para: {(selectedNode.data.config as any)?.specificDate || 'Não definido'}</div>
-                        </>
-                      ) : (
-                        <>
-                          <div className="font-medium text-sky-300">Modo: Tempo Contínuo</div>
-                          <div>
-                            Espera: {(selectedNode.data.config as any)?.value || (selectedNode.data.config as any)?.days || 1}{' '}
-                            {(selectedNode.data.config as any)?.unit || 'dias'}
-                          </div>
-                        </>
-                      )}
-                    </div>
-                  </div>
-                )}
-
-                {/* Bloco de TAGS: Criar, Editar e Selecionar Tags diretamente no fluxo */}
-                {(selectedNode.data.subtype === 'ADD_TAG' ||
-                  selectedNode.data.subtype === 'REMOVE_TAG' ||
-                  selectedNode.data.subtype === 'HAS_TAG') && (
-                  <div className="space-y-3 p-4 rounded-xl bg-slate-950/70 border border-purple-500/30">
-                    <div className="flex items-center justify-between">
-                      <div className="flex items-center gap-1.5 text-purple-400 font-bold">
-                        <TagIcon className="w-4 h-4" />
-                        <span>Gerenciar Tag no Fluxo</span>
-                      </div>
-
-                      <button
-                        type="button"
-                        onClick={() => setIsCreateTagOpen(true)}
-                        className="px-2.5 py-1 bg-purple-600 hover:bg-purple-700 text-white rounded-lg text-[11px] font-semibold flex items-center gap-1 transition-colors cursor-pointer"
-                      >
-                        <Plus className="w-3 h-3" />
-                        <span>Nova Tag</span>
-                      </button>
-                    </div>
-
-                    <div>
-                      <label className="block text-slate-400 text-[11px] font-semibold mb-1">
-                        Selecione a Tag Existente
-                      </label>
-                      <div className="max-h-48 overflow-y-auto space-y-1.5 pr-1">
-                        {availableTags.length === 0 ? (
-                          <div className="p-3 text-center text-slate-500 text-xs">
-                            Nenhuma tag cadastrada ainda. Clique em &quot;Nova Tag&quot; acima.
-                          </div>
-                        ) : (
-                          availableTags.map((tag) => {
-                            const isSelected =
-                              (selectedNode.data.config as any)?.tagName === tag.name ||
-                              (selectedNode.data.config as any)?.tagId === tag.id;
-
-                            return (
-                              <div
-                                key={tag.id}
-                                className={`flex items-center justify-between p-2 rounded-xl border transition-all ${
-                                  isSelected
-                                    ? 'bg-purple-500/20 border-purple-500 text-white font-medium'
-                                    : 'bg-slate-900 border-slate-800 text-slate-300 hover:border-slate-700'
-                                }`}
-                              >
-                                <button
-                                  type="button"
-                                  onClick={() => handleSelectTagForNode(tag)}
-                                  className="flex items-center gap-2 flex-1 text-left cursor-pointer"
-                                >
-                                  <span
-                                    className="w-3 h-3 rounded-full shrink-0"
-                                    style={{ backgroundColor: tag.color }}
-                                  />
-                                  <span className="truncate">{tag.name}</span>
-                                  {tag._count?.contacts !== undefined && (
-                                    <span className="text-[10px] text-slate-500">
-                                      ({tag._count.contacts} leads)
-                                    </span>
-                                  )}
-                                </button>
-
-                                <button
-                                  type="button"
-                                  onClick={() => {
-                                    setTagBeingEdited(tag);
-                                    setIsEditTagOpen(true);
-                                  }}
-                                  title="Editar esta Tag"
-                                  className="text-slate-400 hover:text-white p-1 hover:bg-slate-800 rounded-lg cursor-pointer ml-1"
-                                >
-                                  <Edit2 className="w-3 h-3" />
-                                </button>
-                              </div>
-                            );
-                          })
-                        )}
-                      </div>
-                    </div>
-                  </div>
-                )}
-
-                {/* Bloco de Mensagem WhatsApp */}
-                {selectedNode.data.subtype === 'SEND_WHATSAPP' && (
-                  <div>
-                    <label className="block text-slate-300 font-semibold mb-1">Texto da Mensagem</label>
-                    <textarea
-                      rows={5}
-                      value={(selectedNode.data.config as any)?.text || ''}
-                      onChange={(e) => updateSelectedNodeConfig('text', e.target.value)}
-                      placeholder="Olá {{nome}}, seu link de acesso é..."
-                      className="w-full p-2.5 bg-slate-950 border border-slate-700 rounded-xl text-white focus:outline-none focus:border-indigo-500"
-                    />
-                    <span className="text-[10px] text-slate-500">
-                      Variáveis disponíveis: {'{{nome}}'}, {'{{email}}'}, {'{{telefone}}'}
+                    <span className="text-xs font-semibold text-red-300 group-hover:text-white">
+                      Sequência Lead
                     </span>
                   </div>
-                )}
+                </div>
+              </div>
+            ) : (
+              /* SE ESTIVER NO NÍVEL 2 (DENTRO DA SEQUÊNCIA): TIMER, WHATSAPP, E-MAIL */
+              <div className="space-y-4">
+                <div>
+                  <span className="text-[10px] text-slate-500 px-1 font-medium block mb-2">
+                    Controladores
+                  </span>
+                  {/* Timer */}
+                  <div
+                    onClick={() => addSequenceBlock('timer')}
+                    className="flex flex-col items-center justify-center p-3 rounded-xl bg-[#1b1e27] hover:bg-[#232733] border border-slate-800 hover:border-slate-700 cursor-pointer transition-all group"
+                  >
+                    <Clock className="w-6 h-6 text-slate-300 group-hover:text-white mb-1.5 transition-colors" />
+                    <span className="text-xs font-medium text-slate-300 group-hover:text-white">Timer</span>
+                  </div>
+                </div>
 
-                {/* Bloco de E-mail */}
-                {selectedNode.data.subtype === 'SEND_EMAIL' && (
-                  <div className="space-y-3">
-                    <div>
-                      <label className="block text-slate-300 font-semibold mb-1">Assunto do E-mail</label>
-                      <input
-                        type="text"
-                        value={(selectedNode.data.config as any)?.subject || ''}
-                        onChange={(e) => updateSelectedNodeConfig('subject', e.target.value)}
-                        placeholder="Ex: Sua vaga está confirmada!"
-                        className="w-full p-2.5 bg-slate-950 border border-slate-700 rounded-xl text-white focus:outline-none focus:border-indigo-500"
-                      />
+                <div className="pt-2 border-t border-slate-800">
+                  <span className="text-[10px] text-slate-500 px-1 font-medium block mb-2">
+                    Disparos
+                  </span>
+                  <div className="space-y-2">
+                    {/* WhatsApp */}
+                    <div
+                      onClick={() => addSequenceBlock('whatsapp')}
+                      className="flex flex-col items-center justify-center p-3 rounded-xl bg-[#1b1e27] hover:bg-[#232733] border border-slate-800 hover:border-green-600/60 cursor-pointer transition-all group"
+                    >
+                      <MessageSquare className="w-6 h-6 text-emerald-400 group-hover:scale-110 mb-1.5 transition-all" />
+                      <span className="text-xs font-medium text-slate-300 group-hover:text-white">
+                        WhatsApp
+                      </span>
                     </div>
-                    <div>
-                      <label className="block text-slate-300 font-semibold mb-1">Conteúdo do E-mail</label>
-                      <textarea
-                        rows={5}
-                        value={(selectedNode.data.config as any)?.content || ''}
-                        onChange={(e) => updateSelectedNodeConfig('content', e.target.value)}
-                        className="w-full p-2.5 bg-slate-950 border border-slate-700 rounded-xl text-white font-mono text-[11px] focus:outline-none focus:border-indigo-500"
-                      />
+
+                    {/* E-mail */}
+                    <div
+                      onClick={() => addSequenceBlock('email')}
+                      className="flex flex-col items-center justify-center p-3 rounded-xl bg-[#1b1e27] hover:bg-[#232733] border border-slate-800 hover:border-orange-600/60 cursor-pointer transition-all group"
+                    >
+                      <Mail className="w-6 h-6 text-orange-400 group-hover:scale-110 mb-1.5 transition-all" />
+                      <span className="text-xs font-medium text-slate-300 group-hover:text-white">
+                        E-mail
+                      </span>
                     </div>
                   </div>
-                )}
+                </div>
+              </div>
+            )}
+          </div>
+
+          {/* Dica no rodapé da barra */}
+          <div className="p-2.5 rounded-lg bg-[#181a20] border border-slate-800/80 text-[10px] text-slate-400 leading-relaxed">
+            {viewMode === 'MACRO' ? (
+              <span>💡 Clique na <b>Sequência Lead</b> para entrar e montar os disparos internos.</span>
+            ) : (
+              <span>💡 Clique em <b>Voltar</b> no topo para salvar e retornar ao fluxo principal.</span>
+            )}
+          </div>
+        </div>
+
+        {/* CANVAS REACT FLOW */}
+        <div className="flex-1 h-full relative">
+          <ReactFlow
+            nodes={viewMode === 'MACRO' ? macroNodes : sequenceNodes}
+            edges={viewMode === 'MACRO' ? macroEdges : sequenceEdges}
+            onNodesChange={viewMode === 'MACRO' ? onMacroNodesChange : onSequenceNodesChange}
+            onEdgesChange={viewMode === 'MACRO' ? onMacroEdgesChange : onSequenceEdgesChange}
+            onConnect={viewMode === 'MACRO' ? onMacroConnect : onSequenceConnect}
+            onNodeClick={onNodeClick}
+            nodeTypes={nodeTypes}
+            fitView
+            className="bg-[#0e1015]"
+          >
+            <Background
+              color="#2a2e39"
+              gap={24}
+              size={1}
+              variant={BackgroundVariant.Dots}
+            />
+            <Controls className="!bg-[#181a20] !border-slate-800 !text-slate-300" />
+          </ReactFlow>
+
+          {/* ============================================================ */}
+          {/* BARRA INFERIOR DE ESTATÍSTICAS DA SEQUÊNCIA (COMO NO PRINT) */}
+          {/* ============================================================ */}
+          {viewMode === 'SEQUENCE' && (
+            <div className="absolute bottom-5 left-1/2 -translate-x-1/2 bg-[#14161d]/90 backdrop-blur-md border border-slate-800/80 px-6 py-2 rounded-2xl shadow-2xl flex items-center gap-8 text-xs text-slate-300 z-10">
+              <div className="flex items-center gap-2">
+                <MessageSquare className="w-4 h-4 text-emerald-400" />
+                <span>
+                  <strong className="text-white">2 msg/minuto</strong> Envios de WhatsApp
+                </span>
+              </div>
+              <div className="w-px h-4 bg-slate-800" />
+              <div className="flex items-center gap-2">
+                <Users className="w-4 h-4 text-indigo-400" />
+                <span>
+                  <strong className="text-white">0</strong> Leads na sequência
+                </span>
+              </div>
+              <div className="w-px h-4 bg-slate-800" />
+              <div className="flex items-center gap-2">
+                <XCircle className="w-4 h-4 text-rose-400" />
+                <span>
+                  <strong className="text-white">0</strong> Leads que saíram da sequência
+                </span>
               </div>
             </div>
-
-            <button
-              onClick={deleteSelectedNode}
-              className="mt-6 w-full py-2.5 bg-rose-500/10 hover:bg-rose-500/20 text-rose-400 border border-rose-500/30 font-semibold rounded-xl transition-colors flex items-center justify-center gap-1.5 cursor-pointer"
-            >
-              <Trash2 className="w-3.5 h-3.5" />
-              <span>Excluir Bloco do Fluxo</span>
-            </button>
-          </div>
-        )}
+          )}
+        </div>
       </div>
 
-      {/* ========================================================================= */}
-      {/* MODAL CONFIGURAR TIMER (INSPIRADO EXATAMENTE NAS IMAGENS 3 E 4) */}
-      {/* ========================================================================= */}
-      {isTimerModalOpen && selectedNode && (
-        <div className="fixed inset-0 bg-slate-950/80 backdrop-blur-sm z-50 flex items-center justify-center p-4">
-          <div className="bg-slate-900 border border-slate-800 rounded-2xl shadow-2xl max-w-lg w-full overflow-hidden animate-in fade-in zoom-in-95 text-xs">
-            {/* Cabeçalho do Modal */}
-            <div className="p-5 border-b border-slate-800 flex items-center justify-between">
-              <div>
-                <div className="text-[11px] text-slate-500 font-mono">ID - {selectedNode.id}</div>
-                <h2 className="text-base font-bold text-white">Configurar Timer</h2>
+      {/* ============================================================ */}
+      {/* MODAL / DRAWER DE CONFIGURAÇÃO DE TAG */}
+      {/* ============================================================ */}
+      {isTagModalOpen && (
+        <div className="fixed inset-0 bg-black/60 backdrop-blur-sm z-50 flex items-center justify-center p-4">
+          <div className="bg-[#181c25] rounded-2xl shadow-2xl border border-slate-800 max-w-md w-full p-6 text-xs text-slate-200">
+            <div className="flex items-center justify-between pb-3 border-b border-slate-800">
+              <div className="flex items-center gap-2">
+                <TagIcon className="w-4 h-4 text-purple-400" />
+                <h3 className="font-bold text-white text-sm">Selecionar Tag de Entrada</h3>
               </div>
               <button
-                onClick={() => setIsTimerModalOpen(false)}
-                className="text-slate-400 hover:text-white p-1 rounded-lg hover:bg-slate-800 cursor-pointer"
+                onClick={() => setIsTagModalOpen(false)}
+                className="text-slate-400 hover:text-white"
               >
                 <X className="w-4 h-4" />
               </button>
             </div>
 
-            {/* Abas Superiores (Tempo contínuo | Data específica) */}
-            <div className="flex border-b border-slate-800 bg-slate-950/50 px-5 pt-3">
+            <p className="text-slate-400 text-xs mt-3">
+              Qualquer lead que receber esta tag entrará automaticamente na sequência conectada.
+            </p>
+
+            <div className="mt-4 space-y-2 max-h-56 overflow-y-auto pr-1">
+              {availableTags.length === 0 ? (
+                <div className="text-center py-6 text-slate-500">
+                  Nenhuma tag cadastrada ainda. Crie uma abaixo:
+                </div>
+              ) : (
+                availableTags.map((t) => (
+                  <div
+                    key={t.id}
+                    onClick={() => handleSelectTag(t)}
+                    className="p-3 rounded-xl bg-[#12141a] hover:bg-slate-800/80 border border-slate-800 flex items-center justify-between cursor-pointer transition-all"
+                  >
+                    <div className="flex items-center gap-2.5">
+                      <div className="w-3 h-3 rounded-full" style={{ backgroundColor: t.color }} />
+                      <span className="font-semibold text-white">{t.name}</span>
+                    </div>
+                    <span className="text-[10px] text-slate-400 font-mono">
+                      {t._count?.contacts || 0} leads
+                    </span>
+                  </div>
+                ))
+              )}
+            </div>
+
+            {/* Criar Nova Tag Rápida */}
+            {!isCreateTagOpen ? (
+              <button
+                type="button"
+                onClick={() => setIsCreateTagOpen(true)}
+                className="w-full mt-3 py-2 border border-dashed border-slate-700 hover:border-purple-500 text-purple-300 rounded-xl text-xs font-semibold flex items-center justify-center gap-1.5 transition-colors"
+              >
+                <Plus className="w-3.5 h-3.5" />
+                <span>Criar Nova Tag</span>
+              </button>
+            ) : (
+              <form onSubmit={handleQuickCreateTag} className="mt-3 p-3 rounded-xl bg-[#12141a] border border-slate-700 space-y-2">
+                <input
+                  type="text"
+                  required
+                  value={newTagName}
+                  onChange={(e) => setNewTagName(e.target.value)}
+                  placeholder="Nome da tag (ex: VIP Lançamento)"
+                  className="w-full p-2 bg-[#181c25] border border-slate-700 rounded-lg text-xs text-white focus:outline-none focus:border-purple-500"
+                />
+                <div className="flex items-center justify-between">
+                  <div className="flex items-center gap-1.5">
+                    {['#8b5cf6', '#10b981', '#f59e0b', '#ef4444', '#3b82f6'].map((c) => (
+                      <div
+                        key={c}
+                        onClick={() => setNewTagColor(c)}
+                        style={{ backgroundColor: c }}
+                        className={`w-5 h-5 rounded-full cursor-pointer transition-transform ${
+                          newTagColor === c ? 'scale-125 ring-2 ring-white' : ''
+                        }`}
+                      />
+                    ))}
+                  </div>
+                  <div className="flex items-center gap-1.5">
+                    <button
+                      type="button"
+                      onClick={() => setIsCreateTagOpen(false)}
+                      className="px-2.5 py-1 text-slate-400 hover:text-white"
+                    >
+                      Cancelar
+                    </button>
+                    <button
+                      type="submit"
+                      className="px-3 py-1 bg-purple-600 hover:bg-purple-500 text-white rounded-lg font-semibold"
+                    >
+                      Salvar Tag
+                    </button>
+                  </div>
+                </div>
+              </form>
+            )}
+
+            <div className="pt-4 mt-4 border-t border-slate-800 flex items-center justify-between">
+              <button
+                onClick={handleDeleteCurrentNode}
+                className="text-red-400 hover:text-red-300 flex items-center gap-1 text-xs"
+              >
+                <Trash2 className="w-3.5 h-3.5" />
+                <span>Excluir Gatilho</span>
+              </button>
+              <button
+                onClick={() => setIsTagModalOpen(false)}
+                className="px-4 py-1.5 border border-slate-700 hover:bg-slate-800 rounded-lg text-slate-300 font-semibold text-xs"
+              >
+                Fechar
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* ============================================================ */}
+      {/* DRAWER / MODAL DE CONFIGURAÇÃO DE MENSAGEM (WHATSAPP & E-MAIL) */}
+      {/* ============================================================ */}
+      {isMessageDrawerOpen && selectedNode && (
+        <div className="fixed inset-0 bg-black/60 backdrop-blur-sm z-50 flex items-center justify-center p-4">
+          <div className="bg-[#181c25] rounded-2xl shadow-2xl border border-slate-800 max-w-lg w-full p-6 text-xs text-slate-200">
+            <div className="flex items-center justify-between pb-3 border-b border-slate-800">
+              <div className="flex items-center gap-2">
+                {selectedNode.type === 'whatsapp' ? (
+                  <>
+                    <MessageSquare className="w-5 h-5 text-emerald-400" />
+                    <div>
+                      <h3 className="font-bold text-white text-sm">Disparo de WhatsApp</h3>
+                      <p className="text-[11px] text-slate-400">Mensagem que será enviada para o lead</p>
+                    </div>
+                  </>
+                ) : (
+                  <>
+                    <Mail className="w-5 h-5 text-orange-400" />
+                    <div>
+                      <h3 className="font-bold text-white text-sm">Disparo de E-mail</h3>
+                      <p className="text-[11px] text-slate-400">Assunto e corpo da mensagem</p>
+                    </div>
+                  </>
+                )}
+              </div>
+              <button
+                onClick={() => setIsMessageDrawerOpen(false)}
+                className="text-slate-400 hover:text-white"
+              >
+                <X className="w-4 h-4" />
+              </button>
+            </div>
+
+            <div className="mt-4 space-y-3">
+              {/* Se for E-mail, pede o assunto */}
+              {selectedNode.type === 'email' && (
+                <div>
+                  <label className="block text-slate-300 font-semibold mb-1">Assunto do E-mail</label>
+                  <input
+                    type="text"
+                    defaultValue={(selectedNode.data.config as any)?.subject || ''}
+                    id="email_subject_input"
+                    placeholder="Ex: Seu link exclusivo de acesso"
+                    className="w-full p-2.5 bg-[#12141a] border border-slate-700 rounded-xl text-xs text-white focus:outline-none focus:border-indigo-500"
+                  />
+                </div>
+              )}
+
+              {/* Mensagem / Conteúdo */}
+              <div>
+                <label className="block text-slate-300 font-semibold mb-1">
+                  {selectedNode.type === 'whatsapp' ? 'Mensagem do WhatsApp' : 'Conteúdo do E-mail'}
+                </label>
+                <textarea
+                  rows={6}
+                  id="message_body_input"
+                  defaultValue={
+                    selectedNode.type === 'whatsapp'
+                      ? (selectedNode.data.config as any)?.message ||
+                        (selectedNode.data.config as any)?.text ||
+                        ''
+                      : (selectedNode.data.config as any)?.content || ''
+                  }
+                  placeholder={
+                    selectedNode.type === 'whatsapp'
+                      ? 'Olá {{nome}}! Seu link foi liberado: ...'
+                      : 'Olá {{nome}},\n\nAqui está o seu acesso...'
+                  }
+                  className="w-full p-2.5 bg-[#12141a] border border-slate-700 rounded-xl text-xs text-white focus:outline-none focus:border-indigo-500 font-sans leading-relaxed"
+                />
+              </div>
+
+              {/* Tags de variáveis dinâmicas */}
+              <div className="flex items-center gap-1.5 flex-wrap">
+                <span className="text-[10px] text-slate-400">Variáveis disponíveis:</span>
+                {['{{nome}}', '{{primeiro_nome}}', '{{email}}', '{{telefone}}'].map((v) => (
+                  <button
+                    key={v}
+                    type="button"
+                    onClick={() => {
+                      const el = document.getElementById('message_body_input') as HTMLTextAreaElement;
+                      if (el) {
+                        el.value += ` ${v}`;
+                      }
+                    }}
+                    className="px-2 py-0.5 rounded bg-slate-800 hover:bg-slate-700 text-indigo-300 font-mono text-[10px] border border-slate-700"
+                  >
+                    {v}
+                  </button>
+                ))}
+              </div>
+            </div>
+
+            <div className="pt-4 mt-4 border-t border-slate-800 flex items-center justify-between">
+              <button
+                type="button"
+                onClick={handleDeleteCurrentNode}
+                className="text-red-400 hover:text-red-300 flex items-center gap-1 text-xs"
+              >
+                <Trash2 className="w-3.5 h-3.5" />
+                <span>Excluir Bloco</span>
+              </button>
+
+              <div className="flex items-center gap-2">
+                <button
+                  type="button"
+                  onClick={() => setIsMessageDrawerOpen(false)}
+                  className="px-4 py-2 border border-slate-700 hover:bg-slate-800 rounded-xl text-slate-300 font-semibold"
+                >
+                  Cancelar
+                </button>
+                <button
+                  type="button"
+                  onClick={() => {
+                    const bodyEl = document.getElementById('message_body_input') as HTMLTextAreaElement;
+                    const subEl = document.getElementById('email_subject_input') as HTMLInputElement;
+                    handleSaveMessage(bodyEl?.value || '', subEl?.value || '');
+                  }}
+                  className="px-5 py-2 bg-indigo-600 hover:bg-indigo-500 text-white rounded-xl font-semibold shadow-lg shadow-indigo-600/30"
+                >
+                  Salvar Mensagem
+                </button>
+              </div>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* ============================================================ */}
+      {/* MODAL AVANÇADO DE CONFIGURAR TIMER (IDÊNTICO AO DAS IMAGENS) */}
+      {/* ============================================================ */}
+      {isTimerModalOpen && (
+        <div className="fixed inset-0 bg-black/70 backdrop-blur-sm z-50 flex items-center justify-center p-4">
+          <div className="bg-[#181c25] rounded-2xl shadow-2xl border border-slate-800 max-w-lg w-full p-6 text-xs text-slate-200">
+            {/* Cabeçalho */}
+            <div className="flex items-center justify-between pb-3 border-b border-slate-800">
+              <div>
+                <span className="text-[10px] text-slate-400 font-mono block">ID - {selectedNode?.id || 'TIMER'}</span>
+                <h3 className="font-bold text-white text-base">Configurar Timer</h3>
+              </div>
+              <button
+                onClick={() => setIsTimerModalOpen(false)}
+                className="text-slate-400 hover:text-white"
+              >
+                <X className="w-4 h-4" />
+              </button>
+            </div>
+
+            {/* Abas: Tempo contínuo | Data específica */}
+            <div className="flex items-center gap-8 border-b border-slate-800 mt-4 text-xs font-semibold">
               <button
                 type="button"
                 onClick={() => setTimerTab('CONTINUOUS')}
-                className={`pb-3 px-4 font-semibold text-xs transition-colors relative cursor-pointer ${
-                  timerTab === 'CONTINUOUS'
-                    ? 'text-indigo-400 border-b-2 border-indigo-500'
-                    : 'text-slate-400 hover:text-slate-200'
+                className={`pb-2.5 relative transition-colors cursor-pointer ${
+                  timerTab === 'CONTINUOUS' ? 'text-indigo-400' : 'text-slate-400 hover:text-white'
                 }`}
               >
                 Tempo contínuo
+                {timerTab === 'CONTINUOUS' && (
+                  <div className="absolute bottom-0 left-0 right-0 h-0.5 bg-indigo-500 rounded-full" />
+                )}
               </button>
               <button
                 type="button"
                 onClick={() => setTimerTab('SPECIFIC_DATE')}
-                className={`pb-3 px-4 font-semibold text-xs transition-colors relative cursor-pointer ${
-                  timerTab === 'SPECIFIC_DATE'
-                    ? 'text-indigo-400 border-b-2 border-indigo-500'
-                    : 'text-slate-400 hover:text-slate-200'
+                className={`pb-2.5 relative transition-colors cursor-pointer ${
+                  timerTab === 'SPECIFIC_DATE' ? 'text-indigo-400' : 'text-slate-400 hover:text-white'
                 }`}
               >
                 Data específica
+                {timerTab === 'SPECIFIC_DATE' && (
+                  <div className="absolute bottom-0 left-0 right-0 h-0.5 bg-indigo-500 rounded-full" />
+                )}
               </button>
             </div>
 
-            {/* Conteúdo das Abas */}
-            <div className="p-6 space-y-5 max-h-[65vh] overflow-y-auto">
-              {/* ABA 1: TEMPO CONTÍNUO (Imagem 3) */}
-              {timerTab === 'CONTINUOUS' && (
-                <>
-                  {/* Card Selecionar um tempo de espera */}
-                  <div className="p-4 rounded-xl bg-slate-950/70 border border-slate-800 space-y-3">
-                    <div className="flex items-start gap-2.5">
-                      <Clock className="w-4 h-4 text-sky-400 mt-0.5 shrink-0" />
-                      <div>
-                        <div className="font-bold text-white text-xs">Selecionar um tempo de espera?</div>
-                        <p className="text-[11px] text-slate-400 mt-0.5">
-                          O lead irá aguardar um determinado tempo para ser liberado pelo timer.
-                        </p>
-                      </div>
-                    </div>
-
-                    <div className="flex items-center gap-3 pt-1">
-                      <input
-                        type="number"
-                        min={1}
-                        value={timerValue}
-                        onChange={(e) => setTimerValue(Math.max(1, Number(e.target.value)))}
-                        className="w-28 p-2.5 bg-slate-900 border border-slate-700 rounded-xl text-white font-bold text-center text-sm focus:outline-none focus:border-indigo-500"
-                      />
-
-                      <select
-                        value={timerUnit}
-                        onChange={(e) => setTimerUnit(e.target.value as any)}
-                        className="flex-1 p-2.5 bg-slate-900 border border-slate-700 rounded-xl text-white font-medium text-xs focus:outline-none focus:border-indigo-500"
-                      >
-                        <option value="minutes">Minutos</option>
-                        <option value="hours">Horas</option>
-                        <option value="days">Dias</option>
-                      </select>
-                    </div>
-                  </div>
-
-                  {/* Switch Determinar intervalo de tempo */}
-                  <div className="p-4 rounded-xl bg-slate-950/70 border border-slate-800 space-y-2">
-                    <div className="flex items-center justify-between">
-                      <div className="flex items-center gap-2">
-                        <Calendar className="w-4 h-4 text-slate-400" />
-                        <div>
-                          <span className="font-semibold text-white block">Determinar um intervalo de tempo?</span>
-                          <span className="text-[11px] text-slate-400">
-                            O timer vai liberar os leads entre os horários de início e fim.
-                          </span>
-                        </div>
-                      </div>
-                      <button
-                        type="button"
-                        onClick={() => setTimerHasInterval(!timerHasInterval)}
-                        className={`w-9 h-5 flex items-center rounded-full p-0.5 transition-colors cursor-pointer ${
-                          timerHasInterval ? 'bg-indigo-600' : 'bg-slate-700'
-                        }`}
-                      >
-                        <div
-                          className={`bg-white w-4 h-4 rounded-full shadow-md transform transition-transform ${
-                            timerHasInterval ? 'translate-x-4' : 'translate-x-0'
-                          }`}
-                        />
-                      </button>
-                    </div>
-
-                    {timerHasInterval && (
-                      <div className="grid grid-cols-2 gap-3 pt-2">
-                        <div>
-                          <label className="text-[10px] text-slate-400 block mb-1">Horário de início</label>
-                          <input
-                            type="time"
-                            value={timerIntervalStart}
-                            onChange={(e) => setTimerIntervalStart(e.target.value)}
-                            className="w-full p-2 bg-slate-900 border border-slate-700 rounded-lg text-white"
-                          />
-                        </div>
-                        <div>
-                          <label className="text-[10px] text-slate-400 block mb-1">Horário de fim</label>
-                          <input
-                            type="time"
-                            value={timerIntervalEnd}
-                            onChange={(e) => setTimerIntervalEnd(e.target.value)}
-                            className="w-full p-2 bg-slate-900 border border-slate-700 rounded-lg text-white"
-                          />
-                        </div>
-                      </div>
-                    )}
-                  </div>
-
-                  {/* Switch Dias da semana */}
-                  <div className="p-4 rounded-xl bg-slate-950/70 border border-slate-800 space-y-2">
-                    <div className="flex items-center justify-between">
-                      <div className="flex items-center gap-2">
-                        <Layers className="w-4 h-4 text-slate-400" />
-                        <div>
-                          <span className="font-semibold text-white block">Selecionar os dias da semana?</span>
-                          <span className="text-[11px] text-slate-400">
-                            Determine quais dias da semana o timer vai ser acionado.
-                          </span>
-                        </div>
-                      </div>
-                      <button
-                        type="button"
-                        onClick={() => setTimerHasWeekDays(!timerHasWeekDays)}
-                        className={`w-9 h-5 flex items-center rounded-full p-0.5 transition-colors cursor-pointer ${
-                          timerHasWeekDays ? 'bg-indigo-600' : 'bg-slate-700'
-                        }`}
-                      >
-                        <div
-                          className={`bg-white w-4 h-4 rounded-full shadow-md transform transition-transform ${
-                            timerHasWeekDays ? 'translate-x-4' : 'translate-x-0'
-                          }`}
-                        />
-                      </button>
-                    </div>
-
-                    {timerHasWeekDays && (
-                      <div className="flex gap-1.5 pt-2 flex-wrap">
-                        {['seg', 'ter', 'qua', 'qui', 'sex', 'sab', 'dom'].map((dia) => {
-                          const isChecked = timerWeekDays.includes(dia);
-                          return (
-                            <button
-                              key={dia}
-                              type="button"
-                              onClick={() => {
-                                if (isChecked) {
-                                  setTimerWeekDays(timerWeekDays.filter((d) => d !== dia));
-                                } else {
-                                  setTimerWeekDays([...timerWeekDays, dia]);
-                                }
-                              }}
-                              className={`px-2.5 py-1 rounded-lg text-[10px] font-bold uppercase transition-all cursor-pointer ${
-                                isChecked
-                                  ? 'bg-indigo-600 text-white'
-                                  : 'bg-slate-800 text-slate-400 border border-slate-700'
-                              }`}
-                            >
-                              {dia}
-                            </button>
-                          );
-                        })}
-                      </div>
-                    )}
-                  </div>
-                </>
-              )}
-
-              {/* ABA 2: DATA ESPECÍFICA (Imagem 4) */}
-              {timerTab === 'SPECIFIC_DATE' && (
-                <>
-                  <div className="p-4 rounded-xl bg-slate-950/70 border border-slate-800 space-y-3">
-                    <div className="flex items-start gap-2.5">
-                      <Calendar className="w-4 h-4 text-sky-400 mt-0.5 shrink-0" />
-                      <div>
-                        <div className="font-bold text-white text-xs">
-                          Agendar a liberação para um momento específico?
-                        </div>
-                        <p className="text-[11px] text-slate-400 mt-0.5">
-                          O timer vai liberar os leads apenas na data e hora determinada.
-                        </p>
-                      </div>
-                    </div>
-
-                    <div className="pt-1">
-                      <input
-                        type="datetime-local"
-                        value={timerSpecificDate}
-                        onChange={(e) => setTimerSpecificDate(e.target.value)}
-                        className="w-full p-2.5 bg-slate-900 border border-slate-700 rounded-xl text-white font-medium text-xs focus:outline-none focus:border-indigo-500"
-                      />
-                    </div>
-
-                    {/* Fuso Horário São Paulo */}
-                    <div className="p-3 rounded-lg bg-slate-900/60 border border-slate-800 text-[11px] space-y-1">
-                      <div className="font-bold text-slate-300">Fuso horário: SAO PAULO</div>
-                      <div className="text-slate-400">
-                        Horário atual de São Paulo: {new Date().toLocaleDateString('pt-BR')} {new Date().toLocaleTimeString('pt-BR', { hour: '2-digit', minute: '2-digit' })}
-                      </div>
-                      <div className="text-[10px] text-slate-500">
-                        Os leads aguardarão até este exato momento para receberem a mensagem programada.
-                      </div>
-                    </div>
-                  </div>
-                </>
-              )}
-
-              {/* Condição de Cancelamento Inteligente */}
-              <div className="p-4 rounded-xl bg-slate-950/70 border border-slate-800 space-y-2">
-                <div className="flex items-center gap-2">
-                  <CheckCircle2 className="w-4 h-4 text-emerald-400" />
-                  <span className="font-semibold text-white">Cancelar espera se comprar na Hotmart?</span>
+            {/* Conteúdo Aba Tempo Contínuo */}
+            {timerTab === 'CONTINUOUS' ? (
+              <div className="mt-4 p-4 rounded-xl bg-[#12141a] border border-slate-800/80 space-y-2">
+                <div className="flex items-center gap-2 text-indigo-400 font-semibold text-xs">
+                  <Clock className="w-4 h-4" />
+                  <span>Selecionar um tempo de espera?</span>
                 </div>
-                <select
-                  value={timerCancelCondition}
-                  onChange={(e) => setTimerCancelCondition(e.target.value as any)}
-                  className="w-full p-2.5 bg-slate-900 border border-slate-700 rounded-xl text-white text-xs"
-                >
-                  <option value="PURCHASE_APPROVED">Sim (Cancela cobrança se compra for aprovada)</option>
-                  <option value="NONE">Não cancelar (Enviar mesmo se já comprou)</option>
-                </select>
-              </div>
-            </div>
-
-            {/* Rodapé do Modal com Botão Verde SALVAR (como na Imagem 4) */}
-            <div className="p-4 border-t border-slate-800 bg-slate-950 flex items-center justify-end gap-3">
-              <button
-                type="button"
-                onClick={() => setIsTimerModalOpen(false)}
-                className="px-4 py-2 rounded-xl text-slate-400 hover:text-white font-medium text-xs transition-colors cursor-pointer"
-              >
-                Cancelar
-              </button>
-
-              <button
-                type="button"
-                onClick={handleSaveTimer}
-                className="px-6 py-2.5 rounded-xl bg-emerald-600 hover:bg-emerald-500 text-white font-bold text-xs uppercase tracking-wider shadow-lg shadow-emerald-600/25 transition-all cursor-pointer"
-              >
-                Salvar
-              </button>
-            </div>
-          </div>
-        </div>
-      )}
-
-      {/* ========================================================================= */}
-      {/* MODAL CRIAR NOVA TAG (DENTRO DO FLUXO) */}
-      {/* ========================================================================= */}
-      {isCreateTagOpen && (
-        <div className="fixed inset-0 bg-slate-950/80 backdrop-blur-sm z-50 flex items-center justify-center p-4">
-          <div className="bg-slate-900 border border-slate-800 rounded-2xl shadow-2xl max-w-sm w-full p-6 animate-in fade-in zoom-in-95 text-xs">
-            <div className="flex items-center justify-between pb-3 border-b border-slate-800 mb-4">
-              <div className="flex items-center gap-2 text-purple-400 font-bold text-sm">
-                <TagIcon className="w-4 h-4" />
-                <span>Nova Tag</span>
-              </div>
-              <button
-                onClick={() => setIsCreateTagOpen(false)}
-                className="text-slate-400 hover:text-white"
-              >
-                <X className="w-4 h-4" />
-              </button>
-            </div>
-
-            <form onSubmit={handleCreateTag} className="space-y-4">
-              <div>
-                <label className="block text-slate-300 font-medium mb-1">Nome da Tag</label>
-                <input
-                  type="text"
-                  required
-                  autoFocus
-                  placeholder="Ex: Lead inscreveu tráfego"
-                  value={newTagName}
-                  onChange={(e) => setNewTagName(e.target.value)}
-                  className="w-full p-2.5 bg-slate-950 border border-slate-700 rounded-xl text-white focus:outline-none focus:border-purple-500 text-xs"
-                />
-              </div>
-
-              <div>
-                <label className="block text-slate-300 font-medium mb-1.5">Cor da Tag</label>
-                <div className="flex items-center gap-2 mb-2">
-                  {['#8b5cf6', '#3b82f6', '#10b981', '#f59e0b', '#ef4444', '#ec4899', '#6366f1'].map((c) => (
-                    <button
-                      key={c}
-                      type="button"
-                      onClick={() => setNewTagColor(c)}
-                      className={`w-6 h-6 rounded-full transition-transform cursor-pointer ${
-                        newTagColor === c ? 'scale-125 ring-2 ring-white ring-offset-2 ring-offset-slate-900' : ''
-                      }`}
-                      style={{ backgroundColor: c }}
-                    />
-                  ))}
-                </div>
-                <input
-                  type="color"
-                  value={newTagColor}
-                  onChange={(e) => setNewTagColor(e.target.value)}
-                  className="w-full h-8 bg-transparent cursor-pointer rounded-lg border border-slate-700 p-0.5"
-                />
-              </div>
-
-              <div className="pt-2 flex items-center justify-end gap-2">
-                <button
-                  type="button"
-                  onClick={() => setIsCreateTagOpen(false)}
-                  className="px-3 py-2 text-slate-400 hover:text-white"
-                >
-                  Cancelar
-                </button>
-                <button
-                  type="submit"
-                  className="px-4 py-2 bg-purple-600 hover:bg-purple-500 text-white font-semibold rounded-xl shadow-md cursor-pointer"
-                >
-                  Criar e Adicionar
-                </button>
-              </div>
-            </form>
-          </div>
-        </div>
-      )}
-
-      {/* ========================================================================= */}
-      {/* MODAL EDITAR TAG (DENTRO DO FLUXO) */}
-      {/* ========================================================================= */}
-      {isEditTagOpen && tagBeingEdited && (
-        <div className="fixed inset-0 bg-slate-950/80 backdrop-blur-sm z-50 flex items-center justify-center p-4">
-          <div className="bg-slate-900 border border-slate-800 rounded-2xl shadow-2xl max-w-sm w-full p-6 animate-in fade-in zoom-in-95 text-xs">
-            <div className="flex items-center justify-between pb-3 border-b border-slate-800 mb-4">
-              <div className="flex items-center gap-2 text-purple-400 font-bold text-sm">
-                <Edit2 className="w-4 h-4" />
-                <span>Editar Tag</span>
-              </div>
-              <button
-                onClick={() => {
-                  setIsEditTagOpen(false);
-                  setTagBeingEdited(null);
-                }}
-                className="text-slate-400 hover:text-white"
-              >
-                <X className="w-4 h-4" />
-              </button>
-            </div>
-
-            <form onSubmit={handleUpdateTag} className="space-y-4">
-              <div>
-                <label className="block text-slate-300 font-medium mb-1">Nome da Tag</label>
-                <input
-                  type="text"
-                  required
-                  value={tagBeingEdited.name}
-                  onChange={(e) =>
-                    setTagBeingEdited({ ...tagBeingEdited, name: e.target.value })
-                  }
-                  className="w-full p-2.5 bg-slate-950 border border-slate-700 rounded-xl text-white focus:outline-none focus:border-purple-500 text-xs"
-                />
-              </div>
-
-              <div>
-                <label className="block text-slate-300 font-medium mb-1.5">Cor da Tag</label>
-                <div className="flex items-center gap-2 mb-2">
-                  {['#8b5cf6', '#3b82f6', '#10b981', '#f59e0b', '#ef4444', '#ec4899', '#6366f1'].map((c) => (
-                    <button
-                      key={c}
-                      type="button"
-                      onClick={() => setTagBeingEdited({ ...tagBeingEdited, color: c })}
-                      className={`w-6 h-6 rounded-full transition-transform cursor-pointer ${
-                        tagBeingEdited.color === c ? 'scale-125 ring-2 ring-white ring-offset-2 ring-offset-slate-900' : ''
-                      }`}
-                      style={{ backgroundColor: c }}
-                    />
-                  ))}
-                </div>
-                <input
-                  type="color"
-                  value={tagBeingEdited.color}
-                  onChange={(e) =>
-                    setTagBeingEdited({ ...tagBeingEdited, color: e.target.value })
-                  }
-                  className="w-full h-8 bg-transparent cursor-pointer rounded-lg border border-slate-700 p-0.5"
-                />
-              </div>
-
-              <div className="pt-2 flex items-center justify-end gap-2">
-                <button
-                  type="button"
-                  onClick={() => {
-                    setIsEditTagOpen(false);
-                    setTagBeingEdited(null);
-                  }}
-                  className="px-3 py-2 text-slate-400 hover:text-white"
-                >
-                  Cancelar
-                </button>
-                <button
-                  type="submit"
-                  className="px-4 py-2 bg-indigo-600 hover:bg-indigo-500 text-white font-semibold rounded-xl shadow-md cursor-pointer"
-                >
-                  Salvar Alterações
-                </button>
-              </div>
-            </form>
-          </div>
-        </div>
-      )}
-
-      {/* ========================================================================= */}
-      {/* MODAL DE SIMULAÇÃO DE FLUXO */}
-      {/* ========================================================================= */}
-      {isSimulateOpen && (
-        <div className="fixed inset-0 bg-slate-950/80 backdrop-blur-sm z-50 flex items-center justify-center p-4">
-          <div className="bg-slate-900 rounded-2xl shadow-2xl border border-slate-800 max-w-lg w-full p-6 max-h-[85vh] flex flex-col justify-between text-xs text-slate-200">
-            <div>
-              <div className="flex items-center justify-between pb-3 border-b border-slate-800">
-                <div className="flex items-center gap-2 text-purple-400 font-bold text-base">
-                  <Sparkles className="w-5 h-5" />
-                  <span>Simulador de Automação</span>
-                </div>
-                <button onClick={() => setIsSimulateOpen(false)} className="text-slate-400 hover:text-white cursor-pointer">
-                  <X className="w-4 h-4" />
-                </button>
-              </div>
-
-              <div className="py-4 space-y-4">
-                <p className="text-slate-400 text-xs">
-                  Simule o comportamento de um lead passando por cada etapa deste fluxo antes de publicá-lo.
+                <p className="text-[11px] text-slate-400 leading-tight">
+                  O lead irá aguardar um determinado tempo para ser liberado pelo timer.
                 </p>
-
-                <div className="bg-slate-950 p-4 rounded-xl border border-slate-800 space-y-2">
-                  <span className="font-bold text-slate-200 block text-xs">Cenário de Teste:</span>
-                  <div className="flex items-center justify-between">
-                    <span>Lead já comprou (Possui tag Cliente)?</span>
-                    <input
-                      type="checkbox"
-                      checked={simClientStatus}
-                      onChange={(e) => setSimClientStatus(e.target.checked)}
-                      className="rounded border-slate-700 bg-slate-800 text-indigo-600 w-4 h-4"
-                    />
-                  </div>
-                  <div className="flex items-center justify-between">
-                    <span>Lead gerou Pix na Hotmart?</span>
-                    <input
-                      type="checkbox"
-                      checked={simPixStatus}
-                      onChange={(e) => setSimPixStatus(e.target.checked)}
-                      className="rounded border-slate-700 bg-slate-800 text-indigo-600 w-4 h-4"
-                    />
-                  </div>
-                </div>
-
-                <div className="space-y-2">
-                  <span className="font-bold text-slate-300 block text-xs">Resultado dos Passos:</span>
-                  <div className="max-h-52 overflow-y-auto space-y-2 p-1">
-                    {simulating ? (
-                      <div className="text-center py-6 text-slate-500">Executando simulação...</div>
-                    ) : simulationSteps.length === 0 ? (
-                      <div className="text-center py-6 text-slate-500">Nenhum passo executado no cenário</div>
-                    ) : (
-                      simulationSteps.map((step, idx) => (
-                        <div key={idx} className="p-3 bg-slate-950 border border-slate-800 rounded-xl space-y-1">
-                          <div className="flex items-center justify-between font-bold text-slate-200">
-                            <span>
-                              {idx + 1}. {step.label}
-                            </span>
-                            <span className="text-[10px] text-indigo-400 uppercase font-mono">{step.type}</span>
-                          </div>
-                          {step.details && (
-                            <div className="text-[11px] text-slate-400">
-                              {step.details.message && <div>{step.details.message}</div>}
-                              {step.details.branch && (
-                                <div className="text-emerald-400 font-semibold">
-                                  Ramificação tomada: {step.details.branch === 'yes' ? 'SIM (Verde)' : 'NÃO (Vermelha)'}
-                                </div>
-                              )}
-                              {step.details.scheduledUntil && (
-                                <div className="text-sky-400">
-                                  Aguardará até: {new Date(step.details.scheduledUntil).toLocaleString('pt-BR')}
-                                </div>
-                              )}
-                            </div>
-                          )}
-                        </div>
-                      ))
-                    )}
-                  </div>
+                <div className="flex items-center gap-3 pt-2">
+                  <input
+                    type="number"
+                    min={1}
+                    value={timerValue}
+                    onChange={(e) => setTimerValue(Math.max(1, parseInt(e.target.value) || 1))}
+                    className="w-24 p-2 bg-[#181c25] border border-slate-700 rounded-lg text-white font-bold text-center focus:outline-none focus:border-indigo-500 text-sm"
+                  />
+                  <select
+                    value={timerUnit}
+                    onChange={(e) => setTimerUnit(e.target.value as any)}
+                    className="flex-1 p-2 bg-[#181c25] border border-slate-700 rounded-lg text-white font-medium focus:outline-none focus:border-indigo-500 text-xs"
+                  >
+                    <option value="minutes">Minutos</option>
+                    <option value="hours">Horas</option>
+                    <option value="days">Dias</option>
+                  </select>
                 </div>
               </div>
+            ) : (
+              /* Conteúdo Aba Data Específica */
+              <div className="mt-4 p-4 rounded-xl bg-[#12141a] border border-slate-800/80 space-y-2">
+                <div className="flex items-center gap-2 text-indigo-400 font-semibold text-xs">
+                  <Calendar className="w-4 h-4" />
+                  <span>Agendar a liberação para um momento específico?</span>
+                </div>
+                <p className="text-[11px] text-slate-400 leading-tight">
+                  O timer vai liberar os leads apenas na data e hora determinada.
+                </p>
+                <div className="pt-2">
+                  <input
+                    type="datetime-local"
+                    value={timerSpecificDate}
+                    onChange={(e) => setTimerSpecificDate(e.target.value)}
+                    className="w-full p-2.5 bg-[#181c25] border border-slate-700 rounded-lg text-white focus:outline-none focus:border-indigo-500 font-mono text-xs"
+                  />
+                </div>
+                <div className="pt-2 text-[10px] text-slate-400 space-y-0.5">
+                  <span className="font-semibold text-slate-300 block">Fuso horário: SÃO PAULO</span>
+                  <span>Esta configuração é aplicada somente para este timer.</span>
+                </div>
+              </div>
+            )}
+
+            {/* Configuração de Intervalo e Dias da Semana */}
+            <div className="mt-3 space-y-2">
+              <div className="p-3 rounded-xl bg-[#12141a] border border-slate-800/80 flex items-center justify-between">
+                <div>
+                  <span className="font-semibold text-slate-200 block text-xs">
+                    Interromper se a compra for aprovada?
+                  </span>
+                  <span className="text-[10px] text-slate-400">
+                    Se o lead comprar antes, ele não recebe as mensagens restantes deste funil.
+                  </span>
+                </div>
+                <input
+                  type="checkbox"
+                  checked={timerCancelCondition === 'PURCHASE_APPROVED'}
+                  onChange={(e) =>
+                    setTimerCancelCondition(e.target.checked ? 'PURCHASE_APPROVED' : 'NONE')
+                  }
+                  className="w-4 h-4 rounded text-emerald-500 focus:ring-emerald-500"
+                />
+              </div>
+
+              <div className="p-3 rounded-xl bg-[#12141a] border border-slate-800/80 flex items-center justify-between">
+                <div>
+                  <span className="font-semibold text-slate-200 block text-xs">
+                    Selecionar os dias da semana?
+                  </span>
+                  <span className="text-[10px] text-slate-400">
+                    Determine quais dias o timer pode liberar mensagens.
+                  </span>
+                </div>
+                <input
+                  type="checkbox"
+                  checked={timerHasWeekDays}
+                  onChange={(e) => setTimerHasWeekDays(e.target.checked)}
+                  className="w-4 h-4 rounded text-indigo-500 focus:ring-indigo-500"
+                />
+              </div>
+
+              {timerHasWeekDays && (
+                <div className="p-2.5 rounded-xl bg-[#12141a] border border-slate-800 flex items-center justify-center gap-1.5 flex-wrap">
+                  {['seg', 'ter', 'qua', 'qui', 'sex', 'sáb', 'dom'].map((day) => {
+                    const active = timerWeekDays.includes(day);
+                    return (
+                      <button
+                        key={day}
+                        type="button"
+                        onClick={() => {
+                          if (active) {
+                            setTimerWeekDays(timerWeekDays.filter((d) => d !== day));
+                          } else {
+                            setTimerWeekDays([...timerWeekDays, day]);
+                          }
+                        }}
+                        className={`px-2.5 py-1 rounded-lg text-[10px] font-bold uppercase transition-all ${
+                          active
+                            ? 'bg-indigo-600 text-white'
+                            : 'bg-slate-800 text-slate-400 hover:bg-slate-700'
+                        }`}
+                      >
+                        {day}
+                      </button>
+                    );
+                  })}
+                </div>
+              )}
             </div>
 
-            <div className="pt-3 border-t border-slate-800 flex justify-end gap-2">
+            {/* Rodapé */}
+            <div className="pt-4 mt-4 border-t border-slate-800 flex items-center justify-between">
               <button
-                onClick={() => setIsSimulateOpen(false)}
-                className="px-4 py-2 border border-slate-700 text-slate-300 rounded-xl hover:bg-slate-800 text-xs font-semibold cursor-pointer"
+                type="button"
+                onClick={handleDeleteCurrentNode}
+                className="text-red-400 hover:text-red-300 flex items-center gap-1 text-xs"
               >
-                Fechar
+                <Trash2 className="w-3.5 h-3.5" />
+                <span>Excluir Timer</span>
               </button>
-              <button
-                onClick={runSimulation}
-                className="px-4 py-2 bg-indigo-600 hover:bg-indigo-500 text-white rounded-xl text-xs font-semibold shadow-md cursor-pointer"
-              >
-                Rodar Novamente
-              </button>
+
+              <div className="flex items-center gap-2">
+                <button
+                  type="button"
+                  onClick={() => setIsTimerModalOpen(false)}
+                  className="px-4 py-2 border border-slate-700 hover:bg-slate-800 rounded-xl text-slate-300 font-semibold"
+                >
+                  Cancelar
+                </button>
+                <button
+                  type="button"
+                  onClick={handleSaveTimerConfig}
+                  className="px-6 py-2 bg-emerald-600 hover:bg-emerald-500 text-white rounded-xl font-bold uppercase tracking-wider text-xs shadow-lg shadow-emerald-600/30"
+                >
+                  Salvar
+                </button>
+              </div>
             </div>
           </div>
         </div>
