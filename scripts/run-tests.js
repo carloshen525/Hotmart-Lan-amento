@@ -377,7 +377,9 @@ async function runTestSuite() {
     // -------------------------------------------------------------
     console.log('\n[TESTE 13] Isolamento 1:1 Multi-Tenant da Evolution API...');
     const instName = `inst_test_${Date.now()}`;
-    await prisma.whatsappInstance.deleteMany({ where: { tenantId: testTenant.id } });
+    await prisma.whatsappInstance.deleteMany({
+      where: { tenantId: { in: [testTenant.id, otherTenant.id] } },
+    });
 
     const userInstance = await prisma.whatsappInstance.create({
       data: {

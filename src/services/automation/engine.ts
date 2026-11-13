@@ -251,9 +251,31 @@ export class AutomationEngine {
           }
         }
       } else if (nodeType === 'delay') {
-        // Temporizador persistente
-        const waitMinutes = Number(config.minutes) || (Number(config.hours) ? Number(config.hours) * 60 : 0) || (Number(config.days) ? Number(config.days) * 1440 : 1);
-        const executeAt = new Date(Date.now() + waitMinutes * 60 * 1000);
+        // Temporizador persistente - suporta Tempo Contínuo (minutos, horas, dias) ou Data Específica
+        let executeAt: Date;
+        let summaryText = '';
+
+        if (config.timerType === 'SPECIFIC_DATE' || config.delayType === 'specific_date' || config.specificDate) {
+          const target = new Date(config.specificDate);
+          executeAt = !isNaN(target.getTime()) ? target : new Date(Date.now() + 60 * 1000);
+          summaryText = `Data específica: ${executeAt.toISOString()}`;
+        } else {
+          const unit = config.unit || (config.minutes !== undefined ? 'minutes' : config.hours !== undefined ? 'hours' : 'days');
+          const amount = Number(config.value ?? config.duration ?? config.minutes ?? config.hours ?? config.days ?? 1);
+          let waitMinutes = 1;
+
+          if (unit === 'minutes') {
+            waitMinutes = Math.max(1, amount);
+          } else if (unit === 'hours') {
+            waitMinutes = Math.max(1, amount * 60);
+          } else {
+            // days
+            waitMinutes = Math.max(1, amount * 1440);
+          }
+
+          executeAt = new Date(Date.now() + waitMinutes * 60 * 1000);
+          summaryText = `${amount} ${unit}`;
+        }
 
         // Encontrar os próximos nós após o delay
         const outgoing = edges.filter((e) => e.source === node.id);
@@ -278,7 +300,7 @@ export class AutomationEngine {
             data: { status: 'WAITING' },
           });
 
-          stepDetails = { scheduledUntil: executeAt, waitMinutes, cancelCondition: config.cancelCondition || 'PURCHASE_APPROVED' };
+          stepDetails = { scheduledUntil: executeAt, summary: summaryText, cancelCondition: config.cancelCondition || 'PURCHASE_APPROVED' };
           shouldHaltExecution = true; // A execução pausa aqui até o job vencer
         }
       }
