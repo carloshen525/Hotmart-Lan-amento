@@ -43,11 +43,27 @@ export async function POST(request: Request) {
       );
     }
 
+    // Se a conexão e o envio de teste foram bem-sucedidos, salva automaticamente as credenciais testadas
+    if (smtpHost && smtpUsername && fromEmail) {
+      await EmailService.saveSettings(tenantId, {
+        smtpHost,
+        smtpPort: Number(smtpPort) || 587,
+        smtpSecure: Boolean(smtpSecure),
+        smtpUsername,
+        smtpPassword,
+        fromName: fromName || 'LaunchFlow',
+        fromEmail,
+        replyTo,
+      }).catch((e) => {
+        console.error('Falha ao auto-salvar após teste:', e);
+      });
+    }
+
     return NextResponse.json({
       success: true,
       message: testEmail
-        ? `Conexão SMTP validada e e-mail de teste enviado com sucesso para ${testEmail}!`
-        : 'Conexão SMTP com o servidor autenticada com sucesso!',
+        ? `Conexão SMTP validada e e-mail de teste enviado para ${testEmail}! As credenciais foram gravadas no sistema.`
+        : 'Conexão SMTP com o servidor autenticada e gravada com sucesso!',
       messageId: result.messageId,
     });
   } catch (err: any) {

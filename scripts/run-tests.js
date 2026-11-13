@@ -663,11 +663,30 @@ async function runTestSuite() {
     const rawPasswordA = 'super_secret_smtp_expert_A_999!';
     const rawPasswordB = 'outra_senha_isolada_expert_B_111!';
 
-    // Salva configurações para testTenant
-    await prisma.emailSettings.upsert({
-      where: { tenantId: testTenant.id },
+    // Cria tenants dedicados para o teste de e-mail sem sobrescrever o tenant do usuário
+    const emailTenantA = await prisma.tenant.upsert({
+      where: { slug: 'test-email-tenant-a' },
+      update: {},
       create: {
-        tenantId: testTenant.id,
+        name: 'Email Test Expert A',
+        slug: 'test-email-tenant-a',
+      },
+    });
+
+    const emailTenantB = await prisma.tenant.upsert({
+      where: { slug: 'test-email-tenant-b' },
+      update: {},
+      create: {
+        name: 'Email Test Expert B',
+        slug: 'test-email-tenant-b',
+      },
+    });
+
+    // Salva configurações para emailTenantA
+    await prisma.emailSettings.upsert({
+      where: { tenantId: emailTenantA.id },
+      create: {
+        tenantId: emailTenantA.id,
         provider: 'SMTP',
         smtpHost: 'smtp.expert-a.com',
         smtpPort: 587,
@@ -683,11 +702,11 @@ async function runTestSuite() {
       },
     });
 
-    // Salva configurações para otherTenant
+    // Salva configurações para emailTenantB
     await prisma.emailSettings.upsert({
-      where: { tenantId: otherTenant.id },
+      where: { tenantId: emailTenantB.id },
       create: {
-        tenantId: otherTenant.id,
+        tenantId: emailTenantB.id,
         provider: 'SMTP',
         smtpHost: 'smtp.expert-b.com',
         smtpPort: 465,
@@ -704,12 +723,12 @@ async function runTestSuite() {
     });
 
     // 1. Verifica se a senha foi salva criptografada no banco (nunca em texto puro)
-    const storedA = await prisma.emailSettings.findUnique({ where: { tenantId: testTenant.id } });
+    const storedA = await prisma.emailSettings.findUnique({ where: { tenantId: emailTenantA.id } });
     assert.notStrictEqual(storedA.smtpPassword, rawPasswordA, 'Senha NÃO pode ser salva em texto puro');
     assert.strictEqual(decrypt(storedA.smtpPassword), rawPasswordA, 'Descriptografia deve recuperar senha original');
 
     // 2. Verifica isolamento estrito entre tenants
-    const storedB = await prisma.emailSettings.findUnique({ where: { tenantId: otherTenant.id } });
+    const storedB = await prisma.emailSettings.findUnique({ where: { tenantId: emailTenantB.id } });
     assert.strictEqual(storedB.smtpHost, 'smtp.expert-b.com');
     assert.strictEqual(storedB.smtpPort, 465);
     assert.strictEqual(decrypt(storedB.smtpPassword), rawPasswordB);
@@ -726,7 +745,7 @@ async function runTestSuite() {
     // Registra log para Tenant A
     const logA = await prisma.emailLog.create({
       data: {
-        tenantId: testTenant.id,
+        tenantId: emailTenantA.id,
         to: 'aluno_expert_a@gmail.com',
         subject: 'Bem-vindo ao Lançamento Expert A',
         status: 'SENT',
@@ -738,7 +757,7 @@ async function runTestSuite() {
     // Registra log para Tenant B
     const logB = await prisma.emailLog.create({
       data: {
-        tenantId: otherTenant.id,
+        tenantId: emailTenantB.id,
         to: 'aluno_expert_b@hotmail.com',
         subject: 'Lembrete de Aula Expert B',
         status: 'SENT',
@@ -748,12 +767,12 @@ async function runTestSuite() {
     });
 
     // Verifica que Tenant A vê apenas seus logs
-    const tenantALogs = await prisma.emailLog.findMany({ where: { tenantId: testTenant.id } });
+    const tenantALogs = await prisma.emailLog.findMany({ where: { tenantId: emailTenantA.id } });
     assert.ok(tenantALogs.some((l) => l.id === logA.id));
     assert.ok(!tenantALogs.some((l) => l.id === logB.id), 'Tenant A NÃO pode acessar logs do Tenant B');
 
     // Verifica que Tenant B vê apenas seus logs
-    const tenantBLogs = await prisma.emailLog.findMany({ where: { tenantId: otherTenant.id } });
+    const tenantBLogs = await prisma.emailLog.findMany({ where: { tenantId: emailTenantB.id } });
     assert.ok(tenantBLogs.some((l) => l.id === logB.id));
     assert.ok(!tenantBLogs.some((l) => l.id === logA.id), 'Tenant B NÃO pode acessar logs do Tenant A');
 

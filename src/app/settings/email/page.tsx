@@ -80,32 +80,32 @@ export default function EmailSettingsPage() {
   const [logs, setLogs] = useState<EmailLogItem[]>([]);
   const [loadingLogs, setLoadingLogs] = useState(false);
 
-  const fetchSettings = async () => {
-    setLoading(true);
+  const fetchSettings = async (silent = false) => {
+    if (!silent) setLoading(true);
     try {
       const res = await fetch('/api/email/settings');
       const data = await res.json();
       if (res.ok && data.settings) {
-        setForm({
+        setForm((prev) => ({
           provider: data.settings.provider || 'SMTP',
-          smtpHost: data.settings.smtpHost || '',
-          smtpPort: data.settings.smtpPort || 587,
+          smtpHost: data.settings.smtpHost || prev.smtpHost,
+          smtpPort: data.settings.smtpPort || prev.smtpPort || 587,
           smtpSecure: Boolean(data.settings.smtpSecure),
-          smtpUsername: data.settings.smtpUsername || '',
-          smtpPassword: data.settings.smtpPassword || '',
-          hasPassword: data.settings.hasPassword,
-          fromName: data.settings.fromName || '',
-          fromEmail: data.settings.fromEmail || '',
-          replyTo: data.settings.replyTo || '',
-        });
-        if (data.settings.fromEmail) {
+          smtpUsername: data.settings.smtpUsername || prev.smtpUsername,
+          smtpPassword: prev.smtpPassword || '',
+          hasPassword: Boolean(data.settings.hasPassword),
+          fromName: data.settings.fromName || prev.fromName,
+          fromEmail: data.settings.fromEmail || prev.fromEmail,
+          replyTo: data.settings.replyTo || prev.replyTo,
+        }));
+        if (data.settings.fromEmail && !testEmail) {
           setTestEmail(data.settings.fromEmail);
         }
       }
     } catch {
       // Ignora erro inicial
     } finally {
-      setLoading(false);
+      if (!silent) setLoading(false);
     }
   };
 
@@ -125,7 +125,7 @@ export default function EmailSettingsPage() {
   };
 
   useEffect(() => {
-    fetchSettings();
+    fetchSettings(false);
     fetchLogs();
   }, []);
 
@@ -145,9 +145,9 @@ export default function EmailSettingsPage() {
       if (res.ok && data.success) {
         setSaveNotice({
           success: true,
-          message: 'Configurações de e-mail salvas com sucesso! A senha foi criptografada.',
+          message: 'Configurações de e-mail salvas com sucesso! A senha foi criptografada e está ativa no sistema.',
         });
-        fetchSettings();
+        fetchSettings(true);
       } else {
         setSaveNotice({
           success: false,
@@ -202,8 +202,9 @@ export default function EmailSettingsPage() {
       if (res.ok && data.success) {
         setTestFeedback({
           success: true,
-          message: data.message || 'Conexão e disparo de teste realizados com sucesso!',
+          message: data.message || 'Conexão validada e e-mail de teste enviado com sucesso! Configurações gravadas.',
         });
+        fetchSettings(true);
         fetchLogs();
       } else {
         setTestFeedback({
