@@ -170,6 +170,14 @@ export default function EmailSettingsPage() {
       return;
     }
 
+    if (!form.smtpPassword && !form.hasPassword) {
+      setTestFeedback({
+        success: false,
+        message: 'Informe a Senha SMTP no formulário (no caso do Gmail, uma "Senha de Aplicativo") antes de testar.',
+      });
+      return;
+    }
+
     setTesting(true);
     setTestFeedback(null);
 

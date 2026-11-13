@@ -25,7 +25,7 @@ export class EmailService {
    * Obtém as configurações de e-mail de um tenant específico com a senha descriptografada
    */
   static async getSettings(tenantId: string): Promise<EmailSettingsData | null> {
-    if (!tenantId) return null;
+    if (!tenantId || !prisma.emailSettings) return null;
 
     const row = await prisma.emailSettings.findUnique({
       where: { tenantId },
@@ -161,10 +161,10 @@ export class EmailService {
       settings = await this.getSettings(tenantId);
     }
 
-    if (!settings || !settings.smtpHost || !settings.smtpUsername) {
+    if (!settings || !settings.smtpHost || !settings.smtpUsername || !settings.smtpPassword) {
       return {
         success: false,
-        error: 'Configurações de SMTP incompletas. Preencha Servidor, Usuário e Senha.',
+        error: 'Configurações de SMTP incompletas. Informe o Servidor, Usuário e a Senha SMTP (ou Senha de Aplicativo do Gmail).',
       };
     }
 
