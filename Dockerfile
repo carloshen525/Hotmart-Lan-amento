@@ -22,5 +22,5 @@ ENV NODE_ENV=production
 ENV PORT=3000
 EXPOSE 3000
 
-# Ao subir o container no Easypanel: sincroniza banco, cria usuário se necessário e inicia o servidor
-CMD ["sh", "-c", "npx prisma db push --accept-data-loss && node prisma/seed.js && npm run start"]
+# Ao subir o container no Easypanel: regenera Prisma, sincroniza banco, cria usuário se necessário e inicia o servidor
+CMD ["sh", "-c", "npx prisma generate && npx prisma db push --accept-data-loss && node prisma/seed.js && npm run start"]

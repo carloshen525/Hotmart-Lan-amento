@@ -11,6 +11,49 @@ import {
 
 export class EmailService {
   /**
+   * Garante que as tabelas de e-mail existam no banco SQLite mesmo se o push do Prisma
+   * ainda não tiver sido executado no ambiente de produção/deploy (ex: Easypanel/Docker)
+   */
+  private static async ensureTables(): Promise<void> {
+    try {
+      await prisma.$executeRawUnsafe(`
+        CREATE TABLE IF NOT EXISTS email_settings (
+          id TEXT PRIMARY KEY,
+          tenantId TEXT UNIQUE NOT NULL,
+          provider TEXT NOT NULL DEFAULT 'SMTP',
+          smtpHost TEXT NOT NULL,
+          smtpPort INTEGER NOT NULL DEFAULT 587,
+          smtpSecure INTEGER NOT NULL DEFAULT 0,
+          smtpUsername TEXT NOT NULL,
+          smtpPassword TEXT NOT NULL,
+          fromName TEXT NOT NULL,
+          fromEmail TEXT NOT NULL,
+          replyTo TEXT,
+          createdAt DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
+          updatedAt DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP
+        );
+      `);
+
+      await prisma.$executeRawUnsafe(`
+        CREATE TABLE IF NOT EXISTS email_logs (
+          id TEXT PRIMARY KEY,
+          tenantId TEXT NOT NULL,
+          "to" TEXT NOT NULL,
+          subject TEXT NOT NULL,
+          status TEXT NOT NULL DEFAULT 'SENT',
+          provider TEXT NOT NULL DEFAULT 'SMTP',
+          errorMessage TEXT,
+          messageId TEXT,
+          metadata TEXT,
+          createdAt DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP
+        );
+      `);
+    } catch {
+      // Ignora erro se já existirem ou se for outro dialeto
+    }
+  }
+
+  /**
    * Instancia o provedor apropriado para o tenant com base nas configurações
    */
   private static createProvider(settings: EmailSettingsData): EmailProvider {
@@ -25,29 +68,66 @@ export class EmailService {
    * Obtém as configurações de e-mail de um tenant específico com a senha descriptografada
    */
   static async getSettings(tenantId: string): Promise<EmailSettingsData | null> {
-    if (!tenantId || !prisma.emailSettings) return null;
+    if (!tenantId) return null;
 
-    const row = await prisma.emailSettings.findUnique({
-      where: { tenantId },
-    });
+    try {
+      // 1. Tenta via ORM Prisma se o delegate estiver disponível
+      if ((prisma as any).emailSettings) {
+        const row = await (prisma as any).emailSettings.findUnique({
+          where: { tenantId },
+        });
 
-    if (!row) return null;
+        if (!row) return null;
 
-    return {
-      id: row.id,
-      tenantId: row.tenantId,
-      provider: row.provider as any,
-      smtpHost: row.smtpHost,
-      smtpPort: row.smtpPort,
-      smtpSecure: row.smtpSecure,
-      smtpUsername: row.smtpUsername,
-      smtpPassword: decryptSecret(row.smtpPassword),
-      fromName: row.fromName,
-      fromEmail: row.fromEmail,
-      replyTo: row.replyTo,
-      createdAt: row.createdAt,
-      updatedAt: row.updatedAt,
-    };
+        return {
+          id: row.id,
+          tenantId: row.tenantId,
+          provider: row.provider as any,
+          smtpHost: row.smtpHost,
+          smtpPort: Number(row.smtpPort) || 587,
+          smtpSecure: Boolean(row.smtpSecure),
+          smtpUsername: row.smtpUsername,
+          smtpPassword: decryptSecret(row.smtpPassword),
+          fromName: row.fromName,
+          fromEmail: row.fromEmail,
+          replyTo: row.replyTo,
+          createdAt: row.createdAt,
+          updatedAt: row.updatedAt,
+        };
+      }
+    } catch {
+      // Fallback para query direta caso o delegate do Prisma não esteja ativo
+    }
+
+    // 2. Fallback SQL resiliente
+    try {
+      await this.ensureTables();
+      const rows: any[] = await prisma.$queryRawUnsafe(
+        `SELECT * FROM email_settings WHERE tenantId = ? LIMIT 1;`,
+        tenantId
+      );
+
+      if (!rows || rows.length === 0) return null;
+      const row = rows[0];
+
+      return {
+        id: row.id,
+        tenantId: row.tenantId,
+        provider: row.provider || 'SMTP',
+        smtpHost: row.smtpHost,
+        smtpPort: Number(row.smtpPort) || 587,
+        smtpSecure: Boolean(row.smtpSecure === 1 || row.smtpSecure === true),
+        smtpUsername: row.smtpUsername,
+        smtpPassword: decryptSecret(row.smtpPassword),
+        fromName: row.fromName,
+        fromEmail: row.fromEmail,
+        replyTo: row.replyTo,
+        createdAt: new Date(row.createdAt),
+        updatedAt: new Date(row.updatedAt),
+      };
+    } catch {
+      return null;
+    }
   }
 
   /**
@@ -71,59 +151,124 @@ export class EmailService {
       throw new Error('Tenant ID é obrigatório para salvar configurações de e-mail.');
     }
 
-    // Se a senha não foi informada ou veio como máscara (••••••••), mantém a anterior
-    let finalEncryptedPassword = '';
-    const existing = await prisma.emailSettings.findUnique({
-      where: { tenantId },
-    });
+    // Obtém configuração atual para manter a senha caso não tenha sido alterada
+    const existing = await this.getSettings(tenantId);
 
+    let finalEncryptedPassword = '';
     if (data.smtpPassword && !data.smtpPassword.includes('••••')) {
       finalEncryptedPassword = encryptSecret(data.smtpPassword);
-    } else if (existing) {
-      finalEncryptedPassword = existing.smtpPassword;
+    } else if (existing?.smtpPassword) {
+      finalEncryptedPassword = encryptSecret(existing.smtpPassword);
     }
 
-    const saved = await prisma.emailSettings.upsert({
-      where: { tenantId },
-      create: {
-        tenantId,
-        provider: data.provider || 'SMTP',
-        smtpHost: data.smtpHost.trim(),
-        smtpPort: Number(data.smtpPort) || 587,
-        smtpSecure: Boolean(data.smtpSecure),
-        smtpUsername: data.smtpUsername.trim(),
-        smtpPassword: finalEncryptedPassword,
-        fromName: data.fromName.trim(),
-        fromEmail: data.fromEmail.trim(),
-        replyTo: data.replyTo?.trim() || null,
-      },
-      update: {
-        provider: data.provider || 'SMTP',
-        smtpHost: data.smtpHost.trim(),
-        smtpPort: Number(data.smtpPort) || 587,
-        smtpSecure: Boolean(data.smtpSecure),
-        smtpUsername: data.smtpUsername.trim(),
-        smtpPassword: finalEncryptedPassword,
-        fromName: data.fromName.trim(),
-        fromEmail: data.fromEmail.trim(),
-        replyTo: data.replyTo?.trim() || null,
-      },
-    });
+    const providerName = data.provider || 'SMTP';
+    const host = data.smtpHost.trim();
+    const port = Number(data.smtpPort) || 587;
+    const secure = Boolean(data.smtpSecure);
+    const user = data.smtpUsername.trim();
+    const fromN = data.fromName.trim();
+    const fromE = data.fromEmail.trim();
+    const reply = data.replyTo?.trim() || null;
+
+    // 1. Tenta persistência via delegate do Prisma
+    try {
+      if ((prisma as any).emailSettings) {
+        const saved = await (prisma as any).emailSettings.upsert({
+          where: { tenantId },
+          create: {
+            tenantId,
+            provider: providerName,
+            smtpHost: host,
+            smtpPort: port,
+            smtpSecure: secure,
+            smtpUsername: user,
+            smtpPassword: finalEncryptedPassword,
+            fromName: fromN,
+            fromEmail: fromE,
+            replyTo: reply,
+          },
+          update: {
+            provider: providerName,
+            smtpHost: host,
+            smtpPort: port,
+            smtpSecure: secure,
+            smtpUsername: user,
+            smtpPassword: finalEncryptedPassword,
+            fromName: fromN,
+            fromEmail: fromE,
+            replyTo: reply,
+          },
+        });
+
+        return {
+          id: saved.id,
+          tenantId: saved.tenantId,
+          provider: saved.provider as any,
+          smtpHost: saved.smtpHost,
+          smtpPort: Number(saved.smtpPort) || 587,
+          smtpSecure: Boolean(saved.smtpSecure),
+          smtpUsername: saved.smtpUsername,
+          smtpPassword: decryptSecret(saved.smtpPassword),
+          fromName: saved.fromName,
+          fromEmail: saved.fromEmail,
+          replyTo: saved.replyTo,
+          createdAt: saved.createdAt,
+          updatedAt: saved.updatedAt,
+        };
+      }
+    } catch {
+      // Falha no delegate, aciona fallback SQL
+    }
+
+    // 2. Fallback SQL resiliente para Easypanel / Docker
+    await this.ensureTables();
+    const existingId = existing?.id || `email_set_${Date.now()}_${Math.random().toString(36).substring(2, 7)}`;
+    const secureInt = secure ? 1 : 0;
+
+    await prisma.$executeRawUnsafe(
+      `
+      INSERT INTO email_settings (
+        id, tenantId, provider, smtpHost, smtpPort, smtpSecure, smtpUsername, smtpPassword, fromName, fromEmail, replyTo, createdAt, updatedAt
+      ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, CURRENT_TIMESTAMP, CURRENT_TIMESTAMP)
+      ON CONFLICT(tenantId) DO UPDATE SET
+        provider = excluded.provider,
+        smtpHost = excluded.smtpHost,
+        smtpPort = excluded.smtpPort,
+        smtpSecure = excluded.smtpSecure,
+        smtpUsername = excluded.smtpUsername,
+        smtpPassword = excluded.smtpPassword,
+        fromName = excluded.fromName,
+        fromEmail = excluded.fromEmail,
+        replyTo = excluded.replyTo,
+        updatedAt = CURRENT_TIMESTAMP;
+      `,
+      existingId,
+      tenantId,
+      providerName,
+      host,
+      port,
+      secureInt,
+      user,
+      finalEncryptedPassword,
+      fromN,
+      fromE,
+      reply
+    );
 
     return {
-      id: saved.id,
-      tenantId: saved.tenantId,
-      provider: saved.provider as any,
-      smtpHost: saved.smtpHost,
-      smtpPort: saved.smtpPort,
-      smtpSecure: saved.smtpSecure,
-      smtpUsername: saved.smtpUsername,
-      smtpPassword: decryptSecret(saved.smtpPassword),
-      fromName: saved.fromName,
-      fromEmail: saved.fromEmail,
-      replyTo: saved.replyTo,
-      createdAt: saved.createdAt,
-      updatedAt: saved.updatedAt,
+      id: existingId,
+      tenantId,
+      provider: providerName as any,
+      smtpHost: host,
+      smtpPort: port,
+      smtpSecure: secure,
+      smtpUsername: user,
+      smtpPassword: decryptSecret(finalEncryptedPassword),
+      fromName: fromN,
+      fromEmail: fromE,
+      replyTo: reply,
+      createdAt: new Date(),
+      updatedAt: new Date(),
     };
   }
 
@@ -202,18 +347,16 @@ export class EmailService {
         html,
       });
 
-      // Registrar log do teste
-      await prisma.emailLog.create({
-        data: {
-          tenantId,
-          to: testEmail,
-          subject: '[LaunchFlow] Teste de Conexão SMTP',
-          status: sendRes.status,
-          provider: 'SMTP',
-          errorMessage: sendRes.error || null,
-          messageId: sendRes.messageId || null,
-          metadata: JSON.stringify({ isTest: true }),
-        },
+      // Registrar log do teste de forma resiliente
+      await this.recordLog({
+        tenantId,
+        to: testEmail,
+        subject: '[LaunchFlow] Teste de Conexão SMTP',
+        status: sendRes.status,
+        provider: 'SMTP',
+        errorMessage: sendRes.error || null,
+        messageId: sendRes.messageId || null,
+        metadata: JSON.stringify({ isTest: true }),
       });
 
       if (!sendRes.success) {
@@ -240,15 +383,13 @@ export class EmailService {
     const settings = await this.getSettings(tenantId);
     if (!settings || !settings.smtpHost) {
       const errMsg = 'Configurações de e-mail (SMTP) não encontradas ou incompletas para este expert.';
-      await prisma.emailLog.create({
-        data: {
-          tenantId,
-          to: options.to,
-          subject: options.subject,
-          status: 'FAILED',
-          provider: 'SMTP',
-          errorMessage: errMsg,
-        },
+      await this.recordLog({
+        tenantId,
+        to: options.to,
+        subject: options.subject,
+        status: 'FAILED',
+        provider: 'SMTP',
+        errorMessage: errMsg,
       });
       return {
         success: false,
@@ -292,17 +433,15 @@ export class EmailService {
     });
 
     // Registrar na tabela de auditoria email_logs
-    await prisma.emailLog.create({
-      data: {
-        tenantId,
-        to: options.to,
-        subject: options.subject,
-        status: result.status,
-        provider: result.provider,
-        errorMessage: result.error || null,
-        messageId: result.messageId || null,
-        metadata: options.metadata ? JSON.stringify(options.metadata) : null,
-      },
+    await this.recordLog({
+      tenantId,
+      to: options.to,
+      subject: options.subject,
+      status: result.status,
+      provider: result.provider,
+      errorMessage: result.error || null,
+      messageId: result.messageId || null,
+      metadata: options.metadata ? JSON.stringify(options.metadata) : null,
     });
 
     // Opcional: registrar também no CRM MessageLog se o lead estiver cadastrado
@@ -328,15 +467,87 @@ export class EmailService {
   }
 
   /**
+   * Grava log de envio na tabela de auditoria de forma 100% segura e resiliente
+   */
+  private static async recordLog(data: {
+    tenantId: string;
+    to: string;
+    subject: string;
+    status: string;
+    provider: string;
+    errorMessage?: string | null;
+    messageId?: string | null;
+    metadata?: string | null;
+  }): Promise<void> {
+    try {
+      if ((prisma as any).emailLog) {
+        await (prisma as any).emailLog.create({ data });
+        return;
+      }
+    } catch {}
+
+    // Fallback SQL
+    try {
+      await this.ensureTables();
+      const logId = `elog_${Date.now()}_${Math.random().toString(36).substring(2, 7)}`;
+      await prisma.$executeRawUnsafe(
+        `
+        INSERT INTO email_logs (id, tenantId, "to", subject, status, provider, errorMessage, messageId, metadata, createdAt)
+        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, CURRENT_TIMESTAMP);
+        `,
+        logId,
+        data.tenantId,
+        data.to,
+        data.subject,
+        data.status,
+        data.provider,
+        data.errorMessage || null,
+        data.messageId || null,
+        data.metadata || null
+      );
+    } catch (e) {
+      console.error('Falha ao gravar log de email (fallback):', e);
+    }
+  }
+
+  /**
    * Lista o histórico de logs de e-mail do tenant
    */
   static async getLogs(tenantId: string, limit = 50) {
     if (!tenantId) return [];
 
-    return prisma.emailLog.findMany({
-      where: { tenantId },
-      orderBy: { createdAt: 'desc' },
-      take: limit,
-    });
+    try {
+      if ((prisma as any).emailLog) {
+        return await (prisma as any).emailLog.findMany({
+          where: { tenantId },
+          orderBy: { createdAt: 'desc' },
+          take: limit,
+        });
+      }
+    } catch {}
+
+    // Fallback SQL
+    try {
+      await this.ensureTables();
+      const rows: any[] = await prisma.$queryRawUnsafe(
+        `SELECT * FROM email_logs WHERE tenantId = ? ORDER BY createdAt DESC LIMIT ?;`,
+        tenantId,
+        limit
+      );
+      return rows.map((r) => ({
+        id: r.id,
+        tenantId: r.tenantId,
+        to: r.to,
+        subject: r.subject,
+        status: r.status,
+        provider: r.provider,
+        errorMessage: r.errorMessage,
+        messageId: r.messageId,
+        metadata: r.metadata,
+        createdAt: new Date(r.createdAt),
+      }));
+    } catch {
+      return [];
+    }
   }
 }
