@@ -48,6 +48,7 @@ import {
   Settings,
   HelpCircle,
   RotateCw,
+  RefreshCw,
   RotateCcw,
   Share2,
   Users,
@@ -104,6 +105,21 @@ export default function AutomationCanvasPage() {
   const [loading, setLoading] = useState(true);
   const [saving, setSaving] = useState(false);
   const [saveNotice, setSaveNotice] = useState<string | null>(null);
+
+  // Estatísticas e progresso dos leads em tempo real
+  const [realtimeStats, setRealtimeStats] = useState<{
+    totalLeads: number;
+    activeInSequence: number;
+    exitedFromSequence: number;
+    nodeStats: Record<string, { leadsCount: number; waitingCount: number; successCount: number; failedCount: number }>;
+  }>({
+    totalLeads: 0,
+    activeInSequence: 0,
+    exitedFromSequence: 0,
+    nodeStats: {},
+  });
+  const [isRefreshingStats, setIsRefreshingStats] = useState(false);
+  const [lastUpdatedText, setLastUpdatedText] = useState<string | null>(null);
 
   // Tags disponíveis no expert
   const [availableTags, setAvailableTags] = useState<TagItem[]>([]);
@@ -220,6 +236,121 @@ export default function AutomationCanvasPage() {
     } catch {}
   };
 
+  const applyStatsToNodeList = useCallback(
+    (nodesList: Node[], statsMap: Record<string, any>): Node[] => {
+      if (!statsMap || Object.keys(statsMap).length === 0) return nodesList;
+
+      return nodesList.map((node): Node => {
+        const s = statsMap[node.id] || {
+          leadsCount: 0,
+          waitingCount: 0,
+          successCount: 0,
+          failedCount: 0,
+        };
+
+        let updatedSubflow = node.data?.subflow as any;
+        if (updatedSubflow && Array.isArray(updatedSubflow.nodes)) {
+          updatedSubflow = {
+            ...updatedSubflow,
+            nodes: updatedSubflow.nodes.map((subNode: Node): Node => {
+              const subS = statsMap[subNode.id] || {
+                leadsCount: 0,
+                waitingCount: 0,
+                successCount: 0,
+                failedCount: 0,
+              };
+              return {
+                ...subNode,
+                data: {
+                  ...subNode.data,
+                  leadsCount: subS.leadsCount,
+                  config: {
+                    ...((subNode.data?.config as any) || {}),
+                    leadsCount: subS.leadsCount,
+                    waitingCount: subS.waitingCount,
+                    successCount: subS.successCount,
+                    failedCount: subS.failedCount,
+                  },
+                },
+              };
+            }),
+          };
+        }
+
+        return {
+          ...node,
+          data: {
+            ...node.data,
+            leadsCount: s.leadsCount,
+            subflow: updatedSubflow,
+            config: {
+              ...((node.data?.config as any) || {}),
+              leadsCount: s.leadsCount,
+              waitingCount: s.waitingCount,
+              successCount: s.successCount,
+              failedCount: s.failedCount,
+            },
+          },
+        };
+      });
+    },
+    []
+  );
+
+  const fetchRealtimeStats = useCallback(async () => {
+    setIsRefreshingStats(true);
+    try {
+      const res = await fetch(`/api/automations/${automationId}/stats`);
+      const data = await res.json();
+      if (res.ok && data.stats) {
+        const stats = data.stats;
+        setRealtimeStats(stats);
+        const now = new Date();
+        const timeStr = now.toLocaleTimeString('pt-BR', {
+          hour: '2-digit',
+          minute: '2-digit',
+          second: '2-digit',
+        });
+        setLastUpdatedText(`às ${timeStr}`);
+
+        // Atualiza nós no canvas Macro
+        setMacroNodes((prev) => applyStatsToNodeList(prev, stats.nodeStats || {}));
+
+        // Atualiza nós no canvas da Sequência
+        setSequenceNodes((prev) => applyStatsToNodeList(prev, stats.nodeStats || {}));
+
+        // Se estiver dentro de uma sequência, atualiza a referência local
+        if (activeSequenceNode && stats.nodeStats) {
+          const seqNodeStat = stats.nodeStats[activeSequenceNode.id];
+          if (seqNodeStat) {
+            setActiveSequenceNode((prev) =>
+              prev
+                ? {
+                    ...prev,
+                    data: {
+                      ...prev.data,
+                      leadsCount: seqNodeStat.leadsCount,
+                      config: {
+                        ...(prev.data?.config || {}),
+                        leadsCount: seqNodeStat.leadsCount,
+                        waitingCount: seqNodeStat.waitingCount,
+                        successCount: seqNodeStat.successCount,
+                        failedCount: seqNodeStat.failedCount,
+                      },
+                    },
+                  }
+                : null
+            );
+          }
+        }
+      }
+    } catch (err) {
+      console.error('Erro ao recarregar estatísticas em tempo real:', err);
+    } finally {
+      setIsRefreshingStats(false);
+    }
+  }, [automationId, applyStatsToNodeList, activeSequenceNode]);
+
   useEffect(() => {
     fetchTags();
 
@@ -249,6 +380,16 @@ export default function AutomationCanvasPage() {
                 : data.automation.edges || [];
           } catch {
             parsedEdges = [];
+          }
+
+          if (data.stats) {
+            setRealtimeStats(data.stats);
+            const now = new Date();
+            const timeStr = now.toLocaleTimeString('pt-BR', {
+              hour: '2-digit',
+              minute: '2-digit',
+            });
+            setLastUpdatedText(`às ${timeStr}`);
           }
 
           // Se for uma campanha nova em branco, inicializa no padrão Tag > Sequência Lead
@@ -339,17 +480,26 @@ export default function AutomationCanvasPage() {
               },
             ];
 
-            setMacroNodes([initialTag, initialSequence]);
+            const initialNodesWithStats = data.stats
+              ? applyStatsToNodeList([initialTag, initialSequence], data.stats.nodeStats || {})
+              : [initialTag, initialSequence];
+
+            setMacroNodes(initialNodesWithStats);
             setMacroEdges(initialEdges);
           } else {
             // Migra/garante compatibilidade dos tipos de nós para a nova interface
-            const normalizedNodes = parsedNodes.map((n) => {
+            let normalizedNodes: Node[] = parsedNodes.map((n) => {
               let t = n.type;
               if (t === 'trigger') t = 'tag';
               if (t === 'action') t = 'sequence_lead';
               if (t === 'delay') t = 'timer';
               return { ...n, type: t };
             });
+
+            if (data.stats) {
+              normalizedNodes = applyStatsToNodeList(normalizedNodes, data.stats.nodeStats || {});
+            }
+
             setMacroNodes(normalizedNodes);
             setMacroEdges(parsedEdges);
           }
@@ -357,7 +507,7 @@ export default function AutomationCanvasPage() {
         setLoading(false);
       })
       .catch(() => setLoading(false));
-  }, [automationId]);
+  }, [automationId, applyStatsToNodeList]);
 
   // Handlers para nós do Macro Canvas
   const onMacroNodesChange: OnNodesChange = useCallback(
@@ -438,6 +588,10 @@ export default function AutomationCanvasPage() {
         { id: 'e_init_1', source: 'seq_start', target: subNodes[1].id, animated: true },
         { id: 'e_init_2', source: subNodes[1].id, target: subNodes[2].id, animated: true },
       ];
+    }
+
+    if (realtimeStats.nodeStats && Object.keys(realtimeStats.nodeStats).length > 0) {
+      subNodes = applyStatsToNodeList(subNodes, realtimeStats.nodeStats);
     }
 
     setSequenceNodes(subNodes);
@@ -1162,6 +1316,27 @@ export default function AutomationCanvasPage() {
             </button>
           </div>
 
+          {/* Botão Atualizar (Recarregar em Tempo Real o avanço dos leads no fluxo) */}
+          <button
+            type="button"
+            onClick={fetchRealtimeStats}
+            disabled={isRefreshingStats}
+            className="flex items-center gap-1.5 px-3 py-1.5 rounded-xl border border-slate-700/80 bg-[#1b1e27] hover:bg-[#232733] hover:border-sky-500/50 text-slate-200 text-xs font-semibold transition-all cursor-pointer shadow-md active:scale-95 group disabled:opacity-60"
+            title="Recarregar e ver o avanço dos leads em tempo real em cada etapa do fluxo"
+          >
+            <RefreshCw
+              className={`w-3.5 h-3.5 text-sky-400 transition-transform duration-500 ${
+                isRefreshingStats ? 'animate-spin text-sky-300' : 'group-hover:rotate-180'
+              }`}
+            />
+            <span>{isRefreshingStats ? 'Atualizando...' : 'Atualizar'}</span>
+            {lastUpdatedText && (
+              <span className="text-[10px] text-slate-400 font-normal hidden md:inline border-l border-slate-700/80 pl-1.5">
+                {lastUpdatedText}
+              </span>
+            )}
+          </button>
+
           {/* Feedback de salvamento */}
           {saveNotice && (
             <span className="text-xs font-semibold text-emerald-400 bg-emerald-950/60 px-3 py-1 rounded-full border border-emerald-500/30">
@@ -1370,14 +1545,14 @@ export default function AutomationCanvasPage() {
               <div className="flex items-center gap-2">
                 <Users className="w-4 h-4 text-indigo-400" />
                 <span>
-                  <strong className="text-white">0</strong> Leads na sequência
+                  <strong className="text-white">{realtimeStats.activeInSequence}</strong> Leads na sequência
                 </span>
               </div>
               <div className="w-px h-4 bg-slate-800" />
               <div className="flex items-center gap-2">
                 <XCircle className="w-4 h-4 text-rose-400" />
                 <span>
-                  <strong className="text-white">0</strong> Leads que saíram da sequência
+                  <strong className="text-white">{realtimeStats.exitedFromSequence}</strong> Leads que saíram da sequência
                 </span>
               </div>
             </div>
