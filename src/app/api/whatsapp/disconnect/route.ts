@@ -4,12 +4,15 @@ import { messageManager } from '@/services/messaging';
 
 /**
  * POST /api/whatsapp/disconnect
- * Desconecta exclusivamente a instância do usuário logado
+ * Desconecta uma instância específica ({ instanceId }) ou padrão
  */
-export async function POST() {
+export async function POST(request: Request) {
   try {
     const tenantId = await getActiveTenantId();
-    await messageManager.evolutionApi.disconnect(tenantId);
+    const body = await request.json().catch(() => ({}));
+    const targetId = body.instanceId || tenantId;
+
+    await messageManager.evolutionApi.disconnect(targetId);
     return NextResponse.json({ success: true, status: 'DISCONNECTED' });
   } catch (err: any) {
     return NextResponse.json({ error: err.message }, { status: 500 });

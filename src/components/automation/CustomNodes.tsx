@@ -344,6 +344,12 @@ export const WhatsAppNode = memo(({ data, selected }: any) => {
           WhatsApp | {count} lead{count === 1 ? '' : 's'}
         </span>
 
+        {Boolean(data.config?.whatsappInstanceName || data.config?.whatsappPhone) && (
+          <span className="text-[10px] text-emerald-400 font-medium block truncate max-w-[130px] mx-auto">
+            📱 {data.config.whatsappInstanceName || data.config.whatsappPhone}
+          </span>
+        )}
+
         {/* Pílulas de status */}
         <div className="flex items-center justify-center gap-1 mt-1">
           <span className="px-2 py-0.2 rounded-md bg-[#848c26] text-black font-bold text-[10px] min-w-[20px] text-center">

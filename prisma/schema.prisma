@@ -45,7 +45,7 @@ model Tenant {
   productRules       HotmartProductRule[]
   campaigns          Campaign[]
   auditLogs          AuditLog[]
-  whatsappInstance   WhatsappInstance?
+  whatsappInstances  WhatsappInstance[]
   emailSettings      EmailSettings?
   emailLogs          EmailLog[]
   emailQueue         EmailQueue[]
@@ -320,11 +320,12 @@ model AuditLog {
 }
 
 // -------------------------------------------------------------
-// 8. MULTI-TENANT EVOLUTION API (INSTÂNCIA EXCLUSIVA POR EXPERT)
+// 8. MULTI-TENANT EVOLUTION API (INSTÂNCIAS DE WHATSAPP COMPARTILHADAS ENTRE EXPERTS)
 // -------------------------------------------------------------
 model WhatsappInstance {
   id              String    @id @default(cuid())
-  tenantId        String    @unique
+  tenantId        String?
+  name            String?   // Apelido / Nome amigável (ex: "Denis Dominique - Principal", "Suporte Vendas")
   instanceName    String    @unique
   instanceToken   String
   phone           String?
@@ -332,11 +333,13 @@ model WhatsappInstance {
   profilePicUrl   String?
   status          String    @default("DISCONNECTED") // CONNECTED, DISCONNECTED, CONNECTING
   qrcode          String?   // Base64 para exibição única no frontend
+  isDefault       Boolean   @default(false)
   lastConnectedAt DateTime?
   createdAt       DateTime  @default(now())
   updatedAt       DateTime  @updatedAt
 
-  tenant          Tenant    @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+  tenant          Tenant?   @relation(fields: [tenantId], references: [id], onDelete: SetNull)
+  @@index([tenantId])
 }
 
 // -------------------------------------------------------------

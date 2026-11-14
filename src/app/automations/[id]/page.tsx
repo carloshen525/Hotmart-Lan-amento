@@ -63,6 +63,8 @@ import {
   Paperclip,
   FileText,
   Eye,
+  Smartphone,
+  ExternalLink,
 } from 'lucide-react';
 
 import {
@@ -169,6 +171,10 @@ export default function AutomationCanvasPage() {
   const [uploadingBlockId, setUploadingBlockId] = useState<string | null>(null);
   const [showAddBlockMenu, setShowAddBlockMenu] = useState(false);
 
+  // Instâncias / Números de WhatsApp disponíveis no sistema
+  const [availableWppInstances, setAvailableWppInstances] = useState<any[]>([]);
+  const [selectedWppInstanceId, setSelectedWppInstanceId] = useState<string>('');
+
   // Construtor Visual de E-mails
   const [isVisualEmailBuilderOpen, setIsVisualEmailBuilderOpen] = useState(false);
 
@@ -253,6 +259,16 @@ export default function AutomationCanvasPage() {
       const res = await fetch('/api/tags');
       const data = await res.json();
       setAvailableTags(data.tags || []);
+    } catch {}
+  };
+
+  const fetchWppInstances = async () => {
+    try {
+      const res = await fetch('/api/whatsapp');
+      const data = await res.json();
+      if (Array.isArray(data.instances)) {
+        setAvailableWppInstances(data.instances);
+      }
     } catch {}
   };
 
@@ -373,6 +389,7 @@ export default function AutomationCanvasPage() {
 
   useEffect(() => {
     fetchTags();
+    fetchWppInstances();
 
     fetch(`/api/automations/${automationId}`)
       .then((res) => res.json())
@@ -1152,6 +1169,8 @@ export default function AutomationCanvasPage() {
 
     const cfg = (target.data?.config as any) || {};
     if (target.type === 'whatsapp') {
+      setSelectedWppInstanceId(cfg.whatsappInstanceId || '');
+      fetchWppInstances();
       if (Array.isArray(cfg.blocks) && cfg.blocks.length > 0) {
         setWppBlocks(cfg.blocks);
       } else {
@@ -1353,12 +1372,16 @@ export default function AutomationCanvasPage() {
           if (isWpp) {
             const firstMedia = wppBlocks.find((b) => b.type !== 'text');
             const firstText = wppBlocks.find((b) => b.type === 'text');
+            const selectedInst = availableWppInstances.find((i) => i.id === selectedWppInstanceId);
             return {
               ...n,
               data: {
                 ...n.data,
                 config: {
                   ...((n.data.config as object) || {}),
+                  whatsappInstanceId: selectedWppInstanceId || undefined,
+                  whatsappInstanceName: selectedInst?.name || undefined,
+                  whatsappPhone: selectedInst?.phone || undefined,
                   blocks: wppBlocks,
                   messageType: firstMedia ? firstMedia.type : 'text',
                   mediaUrl: firstMedia?.mediaUrl,
@@ -2135,6 +2158,44 @@ export default function AutomationCanvasPage() {
               {/* SE FOR WHATSAPP: NOVO BUILDER DE BLOCOS MÚLTIPLOS (TEXTO + ARQUIVOS) */}
               {selectedNode.type === 'whatsapp' && (
                 <div className="space-y-3">
+                  {/* SELEÇÃO DO NÚMERO DE WHATSAPP PARA DISPARO DESTE BLOCO */}
+                  <div className="bg-[#12141a] border border-slate-800 rounded-xl p-3.5 space-y-2">
+                    <div className="flex items-center justify-between">
+                      <label className="text-slate-200 font-bold text-xs flex items-center gap-1.5">
+                        <Smartphone className="w-4 h-4 text-emerald-400" />
+                        <span>Número de Envio do WhatsApp</span>
+                      </label>
+                      <a
+                        href="/whatsapp"
+                        target="_blank"
+                        className="text-[11px] text-emerald-400 hover:text-emerald-300 hover:underline flex items-center gap-1 transition-colors"
+                        title="Abrir gerenciador de números de WhatsApp em nova aba"
+                      >
+                        <span>Gerenciar números</span>
+                        <ExternalLink className="w-3 h-3" />
+                      </a>
+                    </div>
+
+                    <select
+                      value={selectedWppInstanceId}
+                      onChange={(e) => setSelectedWppInstanceId(e.target.value)}
+                      className="w-full bg-[#181c25] border border-slate-700/80 rounded-lg px-3 py-2 text-xs text-white focus:outline-none focus:border-emerald-500 font-medium cursor-pointer"
+                    >
+                      <option value="">
+                        Automático (Usar número padrão / primeiro conectado)
+                      </option>
+                      {availableWppInstances.map((inst) => (
+                        <option key={inst.id} value={inst.id}>
+                          {inst.name || 'WhatsApp'} {inst.phone ? `(${inst.phone})` : ''} - {inst.connected ? '🟢 Operacional' : '🔴 Desconectado'} {inst.isDefault ? '★ [Principal]' : ''}
+                        </option>
+                      ))}
+                    </select>
+
+                    <p className="text-[10px] text-slate-400">
+                      Escolha qual número cadastrado fará o disparo desta mensagem. Todos os números cadastrados na plataforma são válidos para todos os Experts.
+                    </p>
+                  </div>
+
                   <div className="flex items-center justify-between">
                     <label className="text-slate-200 font-bold text-sm flex items-center gap-2">
                       Mensagem

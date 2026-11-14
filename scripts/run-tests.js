@@ -373,48 +373,55 @@ async function runTestSuite() {
     passed++;
 
     // -------------------------------------------------------------
-    // TESTE 13: Isolamento 1:1 Multi-Tenant da Evolution API
+    // TESTE 13: Suporte a Múltiplos Números de WhatsApp e Compartilhamento Global entre Experts
     // -------------------------------------------------------------
-    console.log('\n[TESTE 13] Isolamento 1:1 Multi-Tenant da Evolution API...');
+    console.log('\n[TESTE 13] Suporte a Múltiplos Números e Compartilhamento Global...');
     const instName = `inst_test_${Date.now()}`;
-    await prisma.whatsappInstance.deleteMany({
-      where: { tenantId: { in: [testTenant.id, otherTenant.id] } },
-    });
+    await prisma.whatsappInstance.deleteMany({});
 
-    const userInstance = await prisma.whatsappInstance.create({
+    // 1. Cria primeiro número
+    const userInstance1 = await prisma.whatsappInstance.create({
       data: {
         tenantId: testTenant.id,
+        name: 'Número Principal - Denis',
         instanceName: instName,
         instanceToken: 'token_secreto_user_1',
         status: 'CONNECTED',
         phone: '+556282002147',
         profileName: 'Expert Teste',
+        isDefault: true,
       },
     });
 
-    assert.strictEqual(userInstance.tenantId, testTenant.id);
-
-    // Tentar criar segunda instância para o mesmo tenant deve falhar (relação 1:1 estrita)
-    let threwDuplicateTenant = false;
-    try {
-      await prisma.whatsappInstance.create({
-        data: {
-          tenantId: testTenant.id,
-          instanceName: `inst_second_${Date.now()}`,
-          instanceToken: 'token_secreto_user_2',
-        },
-      });
-    } catch {
-      threwDuplicateTenant = true;
-    }
-    assert.ok(threwDuplicateTenant, 'Cada tenant só pode possuir 1 única instância de WhatsApp');
-
-    // Outro tenant nunca visualiza a instância do testTenant
-    const otherTenantInstance = await prisma.whatsappInstance.findUnique({
-      where: { tenantId: otherTenant.id },
+    // 2. Cria segundo número (múltiplos números agora permitidos)
+    const instName2 = `inst_test2_${Date.now()}`;
+    const userInstance2 = await prisma.whatsappInstance.create({
+      data: {
+        tenantId: otherTenant.id,
+        name: 'Atendimento & Suporte',
+        instanceName: instName2,
+        instanceToken: 'token_secreto_user_2',
+        status: 'CONNECTED',
+        phone: '+5511999887766',
+        profileName: 'Suporte Vendas',
+        isDefault: false,
+      },
     });
-    assert.strictEqual(otherTenantInstance, null, 'Outro tenant não deve enxergar instância alheia');
-    console.log('✔ PASSOU: Instância 1:1 isolada por tenant com bloqueio estrito contra vazamento.');
+
+    assert.ok(userInstance1.id && userInstance2.id, 'Ambas as instâncias devem ser criadas com sucesso');
+
+    // 3. Verifica listagem global acessível por qualquer expert
+    const allInstances = await prisma.whatsappInstance.findMany({
+      orderBy: [{ isDefault: 'desc' }, { createdAt: 'desc' }],
+    });
+    assert.strictEqual(allInstances.length, 2, 'Todos os números cadastrados devem estar disponíveis no sistema');
+
+    // 4. Verifica recuperação por ID para uso direcionado no fluxo
+    const foundInst = await prisma.whatsappInstance.findUnique({
+      where: { id: userInstance2.id },
+    });
+    assert.strictEqual(foundInst?.name, 'Atendimento & Suporte');
+    console.log('✔ PASSOU: Múltiplos números de WhatsApp cadastrados e válidos entre todos os experts.');
     passed++;
 
     // -------------------------------------------------------------

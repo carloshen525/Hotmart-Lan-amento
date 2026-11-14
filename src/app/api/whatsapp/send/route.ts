@@ -6,7 +6,18 @@ import { prisma } from '@/lib/prisma';
 export async function POST(request: Request) {
   try {
     const tenantId = await getActiveTenantId();
-    const { phone, text, contactId, messageType, mediaUrl, mediaBase64, mediaMimeType, mediaFileName, caption } = await request.json();
+    const {
+      phone,
+      text,
+      contactId,
+      messageType,
+      mediaUrl,
+      mediaBase64,
+      mediaMimeType,
+      mediaFileName,
+      caption,
+      whatsappInstanceId,
+    } = await request.json();
 
     if (!phone || (!text && !mediaUrl && !mediaBase64)) {
       return NextResponse.json({ error: 'Telefone e mensagem ou mídia são obrigatórios' }, { status: 400 });
@@ -40,6 +51,7 @@ export async function POST(request: Request) {
       tenantId,
       contactId: targetContactId,
       phone,
+      whatsappInstanceId,
       text,
       messageType,
       mediaUrl,

@@ -2,6 +2,8 @@ export interface SendWhatsAppParams {
   tenantId: string;
   contactId: string;
   phone: string;
+  whatsappInstanceId?: string;
+  senderPhone?: string;
   templateName?: string;
   text?: string;
   messageType?: 'text' | 'image' | 'video' | 'audio';
