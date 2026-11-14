@@ -44,7 +44,7 @@ export function Sidebar() {
         </div>
         <div>
           <span className="font-bold text-white text-base tracking-tight block">LaunchFlow</span>
-          <span className="text-[10px] text-slate-400 font-medium tracking-wide uppercase">Automações Hotmart</span>
+          <span className="text-[10px] text-slate-400 font-medium tracking-wide uppercase">Plataformas de Checkout</span>
         </div>
       </div>
 

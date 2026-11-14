@@ -49,6 +49,9 @@ model Tenant {
   emailSettings      EmailSettings?
   emailLogs          EmailLog[]
   emailQueue         EmailQueue[]
+  checkoutIntegrations  CheckoutIntegration[]
+  checkoutWebhookEvents CheckoutWebhookEvent[]
+  checkoutProducts      CheckoutProduct[]
 }
 
 model TenantMembership {
@@ -393,4 +396,70 @@ model EmailQueue {
   @@map("email_queue")
   @@index([tenantId, status])
   @@index([status, scheduledAt])
+}
+
+// -------------------------------------------------------------
+// 11. PLATAFORMAS DE CHECKOUT E INTEGRAÇÕES MULTI-PLATAFORMA
+// -------------------------------------------------------------
+model CheckoutIntegration {
+  id            String                 @id @default(cuid())
+  tenantId      String                 @map("tenant_id")
+  platform      String                 // HOTMART, KIWIFY, CAKTO, MONETIZZE, PERFECTPAY, EDUZZ, BRAIP, CUSTOM
+  name          String
+  status        String                 @default("ACTIVE") // ACTIVE, INACTIVE
+  secretKey     String?                @map("secret_key")
+  allowedEvents String                 @default("[\"purchase_approved\",\"purchase_waiting_payment\",\"billet_printed\",\"pix_generated\",\"cart_abandoned\",\"canceled\",\"refunded\",\"chargeback\"]") @map("allowed_events")
+  productName   String?                @map("product_name")
+  productId     String?                @map("product_id")
+  createdAt     DateTime               @default(now()) @map("created_at")
+  updatedAt     DateTime               @updatedAt @map("updated_at")
+
+  tenant        Tenant                 @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+  webhookEvents CheckoutWebhookEvent[]
+  products      CheckoutProduct[]
+
+  @@map("integrations")
+  @@index([tenantId, platform])
+}
+
+model CheckoutWebhookEvent {
+  id             String               @id @default(cuid())
+  tenantId       String               @map("tenant_id")
+  integrationId  String?              @map("integration_id")
+  platform       String
+  eventType      String               @map("event_type")
+  payload        String               // JSON string
+  status         String               @default("PROCESSED") // PROCESSED, FAILED, IGNORED
+  customerEmail  String?              @map("customer_email")
+  customerName   String?              @map("customer_name")
+  customerPhone  String?              @map("customer_phone")
+  productName    String?              @map("product_name")
+  priceValue     Float?               @map("price_value")
+  paymentType    String?              @map("payment_type")
+  transactionId  String?              @map("transaction_id")
+  errorMessage   String?              @map("error_message")
+  createdAt      DateTime             @default(now()) @map("created_at")
+
+  tenant         Tenant               @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+  integration    CheckoutIntegration? @relation(fields: [integrationId], references: [id], onDelete: SetNull)
+
+  @@map("webhook_events")
+  @@index([tenantId, createdAt])
+  @@index([integrationId, status])
+  @@index([transactionId])
+}
+
+model CheckoutProduct {
+  id            String              @id @default(cuid())
+  tenantId      String              @map("tenant_id")
+  integrationId String              @map("integration_id")
+  externalId    String?             @map("external_id")
+  name          String
+  createdAt     DateTime            @default(now()) @map("created_at")
+
+  tenant        Tenant              @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+  integration   CheckoutIntegration @relation(fields: [integrationId], references: [id], onDelete: Cascade)
+
+  @@map("products")
+  @@index([tenantId, integrationId])
 }

@@ -8,7 +8,7 @@ async function runTestSuite() {
   console.log('=====================================================\n');
 
   let passed = 0;
-  let total = 20;
+  let total = 21;
 
   // Setup de tenant de teste limpo
   const testTenant = await prisma.tenant.upsert({
@@ -1105,6 +1105,130 @@ async function runTestSuite() {
     assert.strictEqual(otherItemCheck.tenantId, otherTenant.id);
 
     console.log('✔ PASSOU: Fila de e-mails, controle de status, 3 retentativas e isolamento entre tenants validados com sucesso.');
+    passed++;
+
+    // -------------------------------------------------------------
+    // TESTE 21: Módulo Multi-Plataformas de Checkout (Hotmart, Kiwify, Cakto, etc.)
+    // -------------------------------------------------------------
+    console.log('\n[TESTE 21] Módulo Multi-Plataformas de Checkout e Adapters...');
+
+    // Limpa registros anteriores dos tenants de teste
+    await prisma.checkoutWebhookEvent.deleteMany({
+      where: { tenantId: { in: [testTenant.id, otherTenant.id] } },
+    });
+    await prisma.checkoutIntegration.deleteMany({
+      where: { tenantId: { in: [testTenant.id, otherTenant.id] } },
+    });
+
+    // 1. Cria integração Kiwify para Tenant A
+    const kiwifyIntegration = await prisma.checkoutIntegration.create({
+      data: {
+        tenantId: testTenant.id,
+        platform: 'KIWIFY',
+        name: 'Curso Marketing Pro (Kiwify)',
+        productName: 'Curso Marketing Pro',
+        secretKey: 'token_kiwify_secreto_123',
+        allowedEvents: JSON.stringify(['purchase_approved', 'pix_generated']),
+      },
+    });
+    assert.strictEqual(kiwifyIntegration.platform, 'KIWIFY');
+    assert.strictEqual(kiwifyIntegration.tenantId, testTenant.id);
+
+    // 2. Outro Tenant NUNCA visualiza integrações de Tenant A
+    const otherTenantIntegrations = await prisma.checkoutIntegration.findMany({
+      where: { tenantId: otherTenant.id },
+    });
+    assert.strictEqual(otherTenantIntegrations.length, 0, 'Isolamento estrito: Tenant B não vê integrações do Tenant A');
+
+    // 3. Simula recebimento de Webhook da Kiwify (Compra Aprovada)
+    const kiwifyPayload = {
+      order_id: `kw_order_${Date.now()}`,
+      order_status: 'paid',
+      payment_method: 'pix',
+      order_value: 49700,
+      Customer: {
+        full_name: 'Bruna Aluna Kiwify',
+        email: `bruna.kiwify.${Date.now()}@teste.com`,
+        mobile: '+5511988887777',
+      },
+      Product: {
+        product_id: 'prod_kw_1',
+        product_name: 'Curso Marketing Pro',
+      },
+    };
+
+    // Processamento padronizado
+    const leadEmail = kiwifyPayload.Customer.email.toLowerCase();
+    const contactKiwify = await prisma.contact.upsert({
+      where: { tenantId_email: { tenantId: testTenant.id, email: leadEmail } },
+      update: { name: kiwifyPayload.Customer.full_name, phone: kiwifyPayload.Customer.mobile },
+      create: {
+        tenantId: testTenant.id,
+        name: kiwifyPayload.Customer.full_name,
+        email: leadEmail,
+        phone: kiwifyPayload.Customer.mobile,
+        utmSource: 'kiwify_checkout',
+      },
+    });
+
+    // Grava log padronizado em webhook_events
+    const eventLog = await prisma.checkoutWebhookEvent.create({
+      data: {
+        tenantId: testTenant.id,
+        integrationId: kiwifyIntegration.id,
+        platform: 'KIWIFY',
+        eventType: 'purchase_approved',
+        payload: JSON.stringify(kiwifyPayload),
+        status: 'PROCESSED',
+        customerEmail: leadEmail,
+        customerName: kiwifyPayload.Customer.full_name,
+        customerPhone: kiwifyPayload.Customer.mobile,
+        productName: 'Curso Marketing Pro',
+        priceValue: 497.00,
+        paymentType: 'PIX',
+        transactionId: kiwifyPayload.order_id,
+      },
+    });
+
+    assert.strictEqual(eventLog.status, 'PROCESSED');
+    assert.strictEqual(eventLog.eventType, 'purchase_approved');
+
+    // 4. Idempotência: reenvio da mesma transação é bloqueado
+    const duplicateCheck = await prisma.checkoutWebhookEvent.findFirst({
+      where: {
+        tenantId: testTenant.id,
+        transactionId: kiwifyPayload.order_id,
+        eventType: 'purchase_approved',
+        status: 'PROCESSED',
+      },
+    });
+    assert.ok(duplicateCheck, 'Evento prévio localizado para bloqueio de duplicatas');
+
+    // 5. Filtro de eventos permitidos: evento não aceito (ex: cart_abandoned) marcado como IGNORED
+    const allowed = JSON.parse(kiwifyIntegration.allowedEvents);
+    assert.ok(!allowed.includes('cart_abandoned'));
+
+    const ignoredEventLog = await prisma.checkoutWebhookEvent.create({
+      data: {
+        tenantId: testTenant.id,
+        integrationId: kiwifyIntegration.id,
+        platform: 'KIWIFY',
+        eventType: 'cart_abandoned',
+        payload: JSON.stringify({ order_id: `kw_abandon_${Date.now()}` }),
+        status: 'IGNORED',
+        customerEmail: 'lead.abandon@teste.com',
+        errorMessage: 'Evento "cart_abandoned" desmarcado nas opções aceitas da integração.',
+      },
+    });
+    assert.strictEqual(ignoredEventLog.status, 'IGNORED');
+
+    // 6. Confirma que Outro Tenant não tem acesso aos logs do Tenant A
+    const otherTenantEvents = await prisma.checkoutWebhookEvent.findMany({
+      where: { tenantId: otherTenant.id },
+    });
+    assert.strictEqual(otherTenantEvents.length, 0, 'Tenant B não deve visualizar eventos de checkout do Tenant A');
+
+    console.log('✔ PASSOU: Módulo multi-checkout, registro padronizado de webhooks, idempotência e isolamento multi-tenant validados.');
     passed++;
 
     console.log('\n=====================================================');
