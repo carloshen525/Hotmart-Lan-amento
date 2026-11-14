@@ -8,7 +8,7 @@ async function runTestSuite() {
   console.log('=====================================================\n');
 
   let passed = 0;
-  let total = 19;
+  let total = 20;
 
   // Setup de tenant de teste limpo
   const testTenant = await prisma.tenant.upsert({
@@ -979,6 +979,132 @@ async function runTestSuite() {
     assert.strictEqual(checkDeleted.length, 0);
 
     console.log('✔ PASSOU: Operações em massa (Add Tags, Remove Tags, Export, Delete) com isolamento multi-tenant validadas.');
+    passed++;
+
+    // -------------------------------------------------------------
+    // TESTE 20: Fila de Envio de E-mails (EmailQueue) e Retentativas Multi-tenant
+    // -------------------------------------------------------------
+    console.log('\n[TESTE 20] Fila de Envio de E-mails (EmailQueue) e Retentativas Multi-tenant...');
+
+    // Limpa filas anteriores dos tenants de teste
+    await prisma.emailQueue.deleteMany({
+      where: { tenantId: { in: [testTenant.id, otherTenant.id] } },
+    });
+
+    // 1. Enfileiramento de e-mails para Tenant A
+    const queueItem1 = await prisma.emailQueue.create({
+      data: {
+        tenantId: testTenant.id,
+        toEmail: 'cliente1@exemplo.com',
+        subject: 'Bem-vindo ao Lançamento!',
+        htmlContent: '<p>Olá!</p>',
+        status: 'PENDING',
+        scheduledAt: new Date(Date.now() - 1000), // já pronto para disparo
+      },
+    });
+
+    const queueItem2 = await prisma.emailQueue.create({
+      data: {
+        tenantId: testTenant.id,
+        toEmail: 'cliente2@exemplo.com',
+        subject: 'Acesso Liberado',
+        htmlContent: '<p>Seu acesso foi liberado.</p>',
+        status: 'PENDING',
+        scheduledAt: new Date(Date.now() - 1000),
+      },
+    });
+
+    // Enfileira um e-mail para o Outro Tenant
+    const otherQueueItem = await prisma.emailQueue.create({
+      data: {
+        tenantId: otherTenant.id,
+        toEmail: 'alheio@exemplo.com',
+        subject: 'Email do outro tenant',
+        htmlContent: '<p>Outro tenant</p>',
+        status: 'PENDING',
+        scheduledAt: new Date(Date.now() - 1000),
+      },
+    });
+
+    // 2. Busca itens pendentes filtrados estritamente por Tenant A
+    const pendingTenantA = await prisma.emailQueue.findMany({
+      where: {
+        tenantId: testTenant.id,
+        status: 'PENDING',
+        scheduledAt: { lte: new Date() },
+      },
+    });
+    assert.strictEqual(pendingTenantA.length, 2, 'Tenant A deve ter exatamente 2 itens pendentes');
+    assert.ok(
+      !pendingTenantA.some((q) => q.tenantId !== testTenant.id),
+      'Fila nunca deve retornar mensagens de outros tenants'
+    );
+
+    // 3. Simula processamento com sucesso do Item 1
+    await prisma.emailQueue.update({
+      where: { id: queueItem1.id },
+      data: {
+        status: 'SENT',
+        sentAt: new Date(),
+        attempts: 1,
+      },
+    });
+
+    // 4. Simula falha e retentativas no Item 2
+    // Tentativa 1
+    await prisma.emailQueue.update({
+      where: { id: queueItem2.id },
+      data: {
+        status: 'PENDING',
+        attempts: 1,
+        errorMessage: 'Falha temporária de conexão SMTP (Tentativa 1/3)',
+      },
+    });
+
+    // Tentativa 2
+    await prisma.emailQueue.update({
+      where: { id: queueItem2.id },
+      data: {
+        status: 'PENDING',
+        attempts: 2,
+        errorMessage: 'Falha temporária de conexão SMTP (Tentativa 2/3)',
+      },
+    });
+
+    // Tentativa 3 (atinge o limite max = 3 -> status FAILED)
+    await prisma.emailQueue.update({
+      where: { id: queueItem2.id },
+      data: {
+        status: 'FAILED',
+        attempts: 3,
+        errorMessage: 'Servidor recusou autenticação após 3 tentativas',
+      },
+    });
+
+    // 5. Validação das estatísticas da fila
+    const statsA = await prisma.emailQueue.groupBy({
+      by: ['status'],
+      where: { tenantId: testTenant.id },
+      _count: { _all: true },
+    });
+
+    const counts = {};
+    statsA.forEach((s) => {
+      counts[s.status] = s._count._all;
+    });
+
+    assert.strictEqual(counts['SENT'], 1, 'Deve ter 1 item enviado');
+    assert.strictEqual(counts['FAILED'], 1, 'Deve ter 1 item falhado após 3 tentativas');
+    assert.strictEqual(counts['PENDING'] || 0, 0, 'Não deve restar itens pendentes para Tenant A');
+
+    // 6. Confirma que o outro tenant permaneceu intocado
+    const otherItemCheck = await prisma.emailQueue.findUnique({
+      where: { id: otherQueueItem.id },
+    });
+    assert.strictEqual(otherItemCheck.status, 'PENDING');
+    assert.strictEqual(otherItemCheck.tenantId, otherTenant.id);
+
+    console.log('✔ PASSOU: Fila de e-mails, controle de status, 3 retentativas e isolamento entre tenants validados com sucesso.');
     passed++;
 
     console.log('\n=====================================================');

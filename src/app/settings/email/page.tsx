@@ -279,6 +279,19 @@ export default function EmailSettingsPage() {
   const [logs, setLogs] = useState<EmailLogItem[]>([]);
   const [loadingLogs, setLoadingLogs] = useState(false);
 
+  // Fila de e-mails (Email Queue)
+  const [activeBottomTab, setActiveBottomTab] = useState<'queue' | 'logs'>('queue');
+  const [queueStats, setQueueStats] = useState({
+    pending: 0,
+    processing: 0,
+    sent: 0,
+    failed: 0,
+    total: 0,
+  });
+  const [queueItems, setQueueItems] = useState<any[]>([]);
+  const [loadingQueue, setLoadingQueue] = useState(false);
+  const [processingQueue, setProcessingQueue] = useState(false);
+
   // Encontra preset ativo
   const activePreset =
     PROVIDER_PRESETS.find((p) => p.id === selectedProviderId) ||
@@ -353,9 +366,41 @@ export default function EmailSettingsPage() {
     }
   };
 
+  const fetchQueue = async () => {
+    setLoadingQueue(true);
+    try {
+      const res = await fetch('/api/email/queue');
+      const data = await res.json();
+      if (res.ok) {
+        if (data.stats) setQueueStats(data.stats);
+        if (data.queue) setQueueItems(data.queue);
+      }
+    } catch {
+      // Ignora erro
+    } finally {
+      setLoadingQueue(false);
+    }
+  };
+
+  const handleProcessQueue = async () => {
+    setProcessingQueue(true);
+    try {
+      const res = await fetch('/api/email/queue', { method: 'POST' });
+      const data = await res.json();
+      if (res.ok) {
+        fetchQueue();
+        fetchLogs();
+      }
+    } catch {
+    } finally {
+      setProcessingQueue(false);
+    }
+  };
+
   useEffect(() => {
     fetchSettings(false);
     fetchLogs();
+    fetchQueue();
   }, []);
 
   // Quando o usuário escolhe um provedor diferente no assistente inteligente
@@ -981,87 +1026,268 @@ export default function EmailSettingsPage() {
             </div>
           </div>
 
-          {/* Histórico Recente de Disparos de E-mail */}
+          {/* SEÇÃO INFERIOR: Fila de Envio (Queue) e Histórico de Disparos (Logs) */}
           <div className="lg:col-span-3 bg-white rounded-2xl border border-slate-200 shadow-sm overflow-hidden">
-            <div className="p-5 border-b border-slate-100 flex items-center justify-between bg-slate-50/50">
+            {/* Cabeçalho com Abas */}
+            <div className="p-4 sm:p-5 border-b border-slate-100 flex flex-col sm:flex-row sm:items-center justify-between gap-4 bg-slate-50/50">
               <div className="flex items-center gap-2">
-                <Clock className="w-4 h-4 text-slate-500" />
-                <h3 className="font-bold text-slate-900 text-sm">
-                  Histórico Recente de Disparos de E-mail
-                </h3>
+                <button
+                  type="button"
+                  onClick={() => setActiveBottomTab('queue')}
+                  className={`flex items-center gap-2 px-3.5 py-1.5 rounded-lg text-xs font-bold transition-colors ${
+                    activeBottomTab === 'queue'
+                      ? 'bg-indigo-600 text-white shadow-sm'
+                      : 'text-slate-600 hover:text-slate-900 hover:bg-slate-200/60'
+                  }`}
+                >
+                  <Clock className="w-3.5 h-3.5" />
+                  <span>Fila de Disparos (Email Queue)</span>
+                  {queueStats.pending > 0 && (
+                    <span className="ml-1 px-1.5 py-0.2 rounded-full text-[10px] bg-amber-400 text-amber-950 font-black">
+                      {queueStats.pending}
+                    </span>
+                  )}
+                </button>
+
+                <button
+                  type="button"
+                  onClick={() => setActiveBottomTab('logs')}
+                  className={`flex items-center gap-2 px-3.5 py-1.5 rounded-lg text-xs font-bold transition-colors ${
+                    activeBottomTab === 'logs'
+                      ? 'bg-indigo-600 text-white shadow-sm'
+                      : 'text-slate-600 hover:text-slate-900 hover:bg-slate-200/60'
+                  }`}
+                >
+                  <Send className="w-3.5 h-3.5" />
+                  <span>Histórico Recente (Logs)</span>
+                </button>
               </div>
-              <button
-                onClick={fetchLogs}
-                disabled={loadingLogs}
-                className="text-xs text-indigo-600 hover:text-indigo-800 font-semibold flex items-center gap-1"
-              >
-                <RotateCw className={`w-3 h-3 ${loadingLogs ? 'animate-spin' : ''}`} />
-                <span>Atualizar</span>
-              </button>
+
+              <div className="flex items-center gap-2">
+                {activeBottomTab === 'queue' && (
+                  <button
+                    type="button"
+                    onClick={handleProcessQueue}
+                    disabled={processingQueue || queueStats.pending === 0}
+                    className="flex items-center gap-1.5 px-3 py-1.5 rounded-lg bg-emerald-600 hover:bg-emerald-700 text-white text-xs font-semibold shadow-sm transition-colors disabled:opacity-40"
+                  >
+                    <RotateCw className={`w-3 h-3 ${processingQueue ? 'animate-spin' : ''}`} />
+                    <span>{processingQueue ? 'Processando Fila...' : 'Processar Fila Agora'}</span>
+                  </button>
+                )}
+
+                <button
+                  onClick={() => (activeBottomTab === 'queue' ? fetchQueue() : fetchLogs())}
+                  disabled={loadingQueue || loadingLogs}
+                  className="text-xs text-indigo-600 hover:text-indigo-800 font-semibold flex items-center gap-1 px-2 py-1 rounded-md hover:bg-indigo-50"
+                >
+                  <RotateCw
+                    className={`w-3 h-3 ${
+                      loadingQueue || loadingLogs ? 'animate-spin' : ''
+                    }`}
+                  />
+                  <span>Atualizar</span>
+                </button>
+              </div>
             </div>
 
-            <div className="overflow-x-auto">
-              <table className="w-full text-left text-xs">
-                <thead className="bg-slate-50 text-slate-500 font-semibold border-b border-slate-100 uppercase tracking-wider text-[10px]">
-                  <tr>
-                    <th className="p-3.5">Destinatário</th>
-                    <th className="p-3.5">Assunto</th>
-                    <th className="p-3.5">Status</th>
-                    <th className="p-3.5">Data / Hora</th>
-                    <th className="p-3.5">Detalhes</th>
-                  </tr>
-                </thead>
-                <tbody className="divide-y divide-slate-100 text-slate-700">
-                  {loadingLogs ? (
+            {/* CONTEÚDO DA ABA 1: FILA DE E-MAILS */}
+            {activeBottomTab === 'queue' && (
+              <div className="p-5 space-y-5">
+                {/* 4 Cards de Estatísticas da Fila */}
+                <div className="grid grid-cols-2 sm:grid-cols-4 gap-3">
+                  <div className="p-3.5 rounded-xl border border-amber-200 bg-amber-50/60 flex flex-col justify-between">
+                    <span className="text-[11px] font-bold uppercase tracking-wider text-amber-700">
+                      Pendentes
+                    </span>
+                    <div className="mt-2 flex items-baseline justify-between">
+                      <span className="text-2xl font-black text-amber-900 font-mono">
+                        {queueStats.pending}
+                      </span>
+                      <span className="text-[10px] text-amber-700 font-medium">Aguardando</span>
+                    </div>
+                  </div>
+
+                  <div className="p-3.5 rounded-xl border border-blue-200 bg-blue-50/60 flex flex-col justify-between">
+                    <span className="text-[11px] font-bold uppercase tracking-wider text-blue-700">
+                      Processando
+                    </span>
+                    <div className="mt-2 flex items-baseline justify-between">
+                      <span className="text-2xl font-black text-blue-900 font-mono">
+                        {queueStats.processing}
+                      </span>
+                      <span className="text-[10px] text-blue-700 font-medium">Em voo</span>
+                    </div>
+                  </div>
+
+                  <div className="p-3.5 rounded-xl border border-emerald-200 bg-emerald-50/60 flex flex-col justify-between">
+                    <span className="text-[11px] font-bold uppercase tracking-wider text-emerald-700">
+                      Enviados
+                    </span>
+                    <div className="mt-2 flex items-baseline justify-between">
+                      <span className="text-2xl font-black text-emerald-900 font-mono">
+                        {queueStats.sent}
+                      </span>
+                      <span className="text-[10px] text-emerald-700 font-medium">Sucesso</span>
+                    </div>
+                  </div>
+
+                  <div className="p-3.5 rounded-xl border border-red-200 bg-red-50/60 flex flex-col justify-between">
+                    <span className="text-[11px] font-bold uppercase tracking-wider text-red-700">
+                      Falhas
+                    </span>
+                    <div className="mt-2 flex items-baseline justify-between">
+                      <span className="text-2xl font-black text-red-900 font-mono">
+                        {queueStats.failed}
+                      </span>
+                      <span className="text-[10px] text-red-700 font-medium">Erros</span>
+                    </div>
+                  </div>
+                </div>
+
+                {/* Tabela de Itens da Fila */}
+                <div className="overflow-x-auto rounded-xl border border-slate-200">
+                  <table className="w-full text-left text-xs">
+                    <thead className="bg-slate-50 text-slate-500 font-semibold border-b border-slate-100 uppercase tracking-wider text-[10px]">
+                      <tr>
+                        <th className="p-3.5">Destinatário</th>
+                        <th className="p-3.5">Assunto</th>
+                        <th className="p-3.5">Status</th>
+                        <th className="p-3.5">Tentativas</th>
+                        <th className="p-3.5">Data / Agendamento</th>
+                        <th className="p-3.5">Detalhes / Erro</th>
+                      </tr>
+                    </thead>
+                    <tbody className="divide-y divide-slate-100 text-slate-700">
+                      {loadingQueue ? (
+                        <tr>
+                          <td colSpan={6} className="p-6 text-center text-slate-400">
+                            Carregando itens da fila...
+                          </td>
+                        </tr>
+                      ) : queueItems.length === 0 ? (
+                        <tr>
+                          <td colSpan={6} className="p-6 text-center text-slate-400">
+                            Fila vazia. Todos os e-mails estão em dia!
+                          </td>
+                        </tr>
+                      ) : (
+                        queueItems.map((item) => (
+                          <tr key={item.id} className="hover:bg-slate-50/50">
+                            <td className="p-3.5 font-medium text-slate-800">{item.toEmail}</td>
+                            <td className="p-3.5 truncate max-w-xs">{item.subject}</td>
+                            <td className="p-3.5">
+                              <span
+                                className={`inline-flex items-center gap-1 px-2 py-0.5 rounded-full text-[10px] font-semibold ${
+                                  item.status === 'SENT'
+                                    ? 'bg-emerald-50 text-emerald-700 border border-emerald-200'
+                                    : item.status === 'PROCESSING'
+                                    ? 'bg-blue-50 text-blue-700 border border-blue-200 animate-pulse'
+                                    : item.status === 'PENDING'
+                                    ? 'bg-amber-50 text-amber-700 border border-amber-200'
+                                    : 'bg-red-50 text-red-700 border border-red-200'
+                                }`}
+                              >
+                                {item.status === 'SENT' && <CheckCircle2 className="w-3 h-3" />}
+                                {item.status === 'PROCESSING' && (
+                                  <RotateCw className="w-3 h-3 animate-spin" />
+                                )}
+                                {item.status === 'PENDING' && <Clock className="w-3 h-3" />}
+                                {item.status === 'FAILED' && <AlertCircle className="w-3 h-3" />}
+                                <span>
+                                  {item.status === 'SENT'
+                                    ? 'Enviado'
+                                    : item.status === 'PROCESSING'
+                                    ? 'Processando'
+                                    : item.status === 'PENDING'
+                                    ? 'Pendente'
+                                    : 'Falhou'}
+                                </span>
+                              </span>
+                            </td>
+                            <td className="p-3.5 font-mono text-[11px] text-slate-600">
+                              {item.attempts} / 3
+                            </td>
+                            <td className="p-3.5 text-slate-500 font-mono text-[11px]">
+                              {new Date(item.scheduledAt || item.createdAt).toLocaleString('pt-BR')}
+                            </td>
+                            <td className="p-3.5 text-slate-400 truncate max-w-xs text-[11px]">
+                              {item.errorMessage || (item.sentAt ? `Enviado em ${new Date(item.sentAt).toLocaleTimeString('pt-BR')}` : '-')}
+                            </td>
+                          </tr>
+                        ))
+                      )}
+                    </tbody>
+                  </table>
+                </div>
+              </div>
+            )}
+
+            {/* CONTEÚDO DA ABA 2: LOGS RECENTES */}
+            {activeBottomTab === 'logs' && (
+              <div className="overflow-x-auto">
+                <table className="w-full text-left text-xs">
+                  <thead className="bg-slate-50 text-slate-500 font-semibold border-b border-slate-100 uppercase tracking-wider text-[10px]">
                     <tr>
-                      <td colSpan={5} className="p-6 text-center text-slate-400">
-                        Carregando histórico...
-                      </td>
+                      <th className="p-3.5">Destinatário</th>
+                      <th className="p-3.5">Assunto</th>
+                      <th className="p-3.5">Status</th>
+                      <th className="p-3.5">Data / Hora</th>
+                      <th className="p-3.5">Detalhes</th>
                     </tr>
-                  ) : logs.length === 0 ? (
-                    <tr>
-                      <td colSpan={5} className="p-6 text-center text-slate-400">
-                        Nenhum e-mail disparado recentemente por este expert.
-                      </td>
-                    </tr>
-                  ) : (
-                    logs.map((log) => (
-                      <tr key={log.id} className="hover:bg-slate-50/50">
-                        <td className="p-3.5 font-medium text-slate-800">{log.to}</td>
-                        <td className="p-3.5 truncate max-w-xs">{log.subject}</td>
-                        <td className="p-3.5">
-                          <span
-                            className={`inline-flex items-center gap-1 px-2 py-0.5 rounded-full text-[10px] font-semibold ${
-                              log.status === 'SENT'
-                                ? 'bg-emerald-50 text-emerald-700 border border-emerald-200'
-                                : 'bg-red-50 text-red-700 border border-red-200'
-                            }`}
-                          >
-                            {log.status === 'SENT' ? (
-                              <>
-                                <CheckCircle2 className="w-3 h-3" />
-                                <span>Entregue</span>
-                              </>
-                            ) : (
-                              <>
-                                <AlertCircle className="w-3 h-3" />
-                                <span>Falha</span>
-                              </>
-                            )}
-                          </span>
-                        </td>
-                        <td className="p-3.5 text-slate-500 font-mono text-[11px]">
-                          {new Date(log.createdAt).toLocaleString('pt-BR')}
-                        </td>
-                        <td className="p-3.5 text-slate-400 truncate max-w-xs text-[11px]">
-                          {log.errorMessage || log.messageId || '-'}
+                  </thead>
+                  <tbody className="divide-y divide-slate-100 text-slate-700">
+                    {loadingLogs ? (
+                      <tr>
+                        <td colSpan={5} className="p-6 text-center text-slate-400">
+                          Carregando histórico...
                         </td>
                       </tr>
-                    ))
-                  )}
-                </tbody>
-              </table>
-            </div>
+                    ) : logs.length === 0 ? (
+                      <tr>
+                        <td colSpan={5} className="p-6 text-center text-slate-400">
+                          Nenhum e-mail disparado recentemente por este expert.
+                        </td>
+                      </tr>
+                    ) : (
+                      logs.map((log) => (
+                        <tr key={log.id} className="hover:bg-slate-50/50">
+                          <td className="p-3.5 font-medium text-slate-800">{log.to}</td>
+                          <td className="p-3.5 truncate max-w-xs">{log.subject}</td>
+                          <td className="p-3.5">
+                            <span
+                              className={`inline-flex items-center gap-1 px-2 py-0.5 rounded-full text-[10px] font-semibold ${
+                                log.status === 'SENT'
+                                  ? 'bg-emerald-50 text-emerald-700 border border-emerald-200'
+                                  : 'bg-red-50 text-red-700 border border-red-200'
+                              }`}
+                            >
+                              {log.status === 'SENT' ? (
+                                <>
+                                  <CheckCircle2 className="w-3 h-3" />
+                                  <span>Entregue</span>
+                                </>
+                              ) : (
+                                <>
+                                  <AlertCircle className="w-3 h-3" />
+                                  <span>Falha</span>
+                                </>
+                              )}
+                            </span>
+                          </td>
+                          <td className="p-3.5 text-slate-500 font-mono text-[11px]">
+                            {new Date(log.createdAt).toLocaleString('pt-BR')}
+                          </td>
+                          <td className="p-3.5 text-slate-400 truncate max-w-xs text-[11px]">
+                            {log.errorMessage || log.messageId || '-'}
+                          </td>
+                        </tr>
+                      ))
+                    )}
+                  </tbody>
+                </table>
+              </div>
+            )}
           </div>
         </div>
       )}

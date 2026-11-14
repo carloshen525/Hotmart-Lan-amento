@@ -38,7 +38,7 @@ export class MessageManager {
   }
 
   async sendEmail(params: SendEmailParams): Promise<SendResult> {
-    // 1. Prioriza o módulo Multi-Tenant EmailService (com credenciais exclusivas por tenant)
+    // 1. Prioriza o módulo Multi-Tenant EmailService (com envio pela Email Queue)
     const settings = await EmailService.getSettings(params.tenantId).catch(() => null);
     if (settings && settings.smtpHost) {
       const emailRes = await EmailService.send(params.tenantId, {
@@ -51,9 +51,12 @@ export class MessageManager {
 
       return {
         success: emailRes.success,
-        messageId: emailRes.messageId || '',
+        messageId: emailRes.messageId || emailRes.queueId || '',
         provider: emailRes.provider,
-        status: emailRes.status === 'SENT' ? 'DELIVERED' : 'FAILED',
+        status:
+          emailRes.status === 'SENT' || emailRes.status === 'QUEUED'
+            ? 'DELIVERED'
+            : 'FAILED',
         error: emailRes.error,
       };
     }

@@ -2,6 +2,7 @@ import { prisma } from '@/lib/prisma';
 import { encryptSecret, decryptSecret } from '@/lib/crypto';
 import { EmailProvider } from './provider.interface';
 import { SMTPProvider } from './providers/smtp.provider';
+import { EmailQueueService, EnqueueEmailOptions } from './queue.service';
 import {
   EmailOptions,
   EmailResult,
@@ -373,9 +374,43 @@ export class EmailService {
   }
 
   /**
-   * Envia e-mail utilizando strictly as credenciais do tenant autenticado
+   * Envia e-mail passando obrigatoriamente pela fila organizada (Email Queue),
+   * a menos que seja solicitado envio imediato (ex: testes de conexão)
    */
   static async send(tenantId: string, options: EmailOptions): Promise<EmailResult> {
+    if (!tenantId) {
+      throw new Error('Tenant ID não fornecido. O envio de e-mails exige autenticação de tenant.');
+    }
+
+    // Se solicitado envio imediato explícito (ex: tela de teste)
+    if (options.immediate) {
+      return this.sendDirect(tenantId, options);
+    }
+
+    // Passagem obrigatória pela fila (Email Queue)
+    const queueId = await EmailQueueService.enqueue({
+      tenantId,
+      to: options.to,
+      subject: options.subject,
+      html: options.html,
+      scheduledAt: options.scheduledAt,
+      contactId: options.contactId,
+      metadata: options.metadata,
+    });
+
+    return {
+      success: true,
+      messageId: queueId,
+      queueId,
+      provider: 'SMTP',
+      status: 'QUEUED',
+    };
+  }
+
+  /**
+   * Envia e-mail de forma direta através do provedor SMTP (utilizado pelo Worker da fila e por testes manuais)
+   */
+  static async sendDirect(tenantId: string, options: EmailOptions): Promise<EmailResult> {
     if (!tenantId) {
       throw new Error('Tenant ID não fornecido. O envio de e-mails exige autenticação de tenant.');
     }
@@ -437,7 +472,7 @@ export class EmailService {
       tenantId,
       to: options.to,
       subject: options.subject,
-      status: result.status,
+      status: result.status as any,
       provider: result.provider,
       errorMessage: result.error || null,
       messageId: result.messageId || null,
@@ -464,6 +499,13 @@ export class EmailService {
     }
 
     return result;
+  }
+
+  /**
+   * Enfileira diretamente na fila de e-mails
+   */
+  static async enqueue(options: EnqueueEmailOptions): Promise<string> {
+    return EmailQueueService.enqueue(options);
   }
 
   /**

@@ -48,6 +48,7 @@ model Tenant {
   whatsappInstance   WhatsappInstance?
   emailSettings      EmailSettings?
   emailLogs          EmailLog[]
+  emailQueue         EmailQueue[]
 }
 
 model TenantMembership {
@@ -367,4 +368,29 @@ model EmailLog {
 
   @@index([tenantId, createdAt])
   @@index([tenantId, status])
+}
+
+// -------------------------------------------------------------
+// 10. FILA DE ENVIO DE E-MAILS (EMAIL QUEUE & RATE LIMITING)
+// -------------------------------------------------------------
+model EmailQueue {
+  id           String    @id @default(cuid())
+  tenantId     String
+  toEmail      String    @map("to_email")
+  subject      String
+  htmlContent  String    @map("html_content")
+  status       String    @default("PENDING") // PENDING, PROCESSING, SENT, FAILED
+  attempts     Int       @default(0)
+  maxAttempts  Int       @default(3) @map("max_attempts")
+  errorMessage String?   @map("error_message")
+  scheduledAt  DateTime  @default(now()) @map("scheduled_at")
+  sentAt       DateTime? @map("sent_at")
+  createdAt    DateTime  @default(now()) @map("created_at")
+  updatedAt    DateTime  @updatedAt @map("updated_at")
+
+  tenant       Tenant    @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+
+  @@map("email_queue")
+  @@index([tenantId, status])
+  @@index([status, scheduledAt])
 }

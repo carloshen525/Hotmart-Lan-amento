@@ -27,13 +27,16 @@ export interface EmailOptions {
   variables?: Record<string, string>;
   contactId?: string;
   metadata?: Record<string, any>;
+  immediate?: boolean; // Se true, envia diretamente sem passar pela fila (ex: teste de conexão)
+  scheduledAt?: Date;  // Data agendada para envio na fila
 }
 
 export interface EmailResult {
   success: boolean;
   messageId?: string;
+  queueId?: string;
   provider: string;
-  status: 'SENT' | 'FAILED';
+  status: 'SENT' | 'FAILED' | 'QUEUED';
   error?: string;
 }
 
