@@ -211,13 +211,27 @@ export class SMTPProvider implements EmailProvider {
       const { processedHtml, attachments } = processHtmlInlineImages(options.html);
       const allAttachments = [...(options.attachments || []), ...attachments];
 
+      // Injeta token invisível anti-agrupamento no HTML para impedir que o Gmail oculte partes do conteúdo sob reticências (...)
+      const uniqueToken = `lf_${Date.now()}_${Math.random().toString(36).substring(2, 7)}`;
+      const antiCollapseToken = `<div style="display:none !important;visibility:hidden;mso-hide:all;font-size:1px;color:#ffffff;line-height:1px;max-height:0px;max-width:0px;opacity:0;overflow:hidden;">&#8203;&zwnj;&nbsp;${uniqueToken}</div>`;
+
+      let finalHtml = processedHtml;
+      if (finalHtml.includes('</body>')) {
+        finalHtml = finalHtml.replace('</body>', `${antiCollapseToken}</body>`);
+      } else {
+        finalHtml = `${finalHtml}${antiCollapseToken}`;
+      }
+
       const info = await this.transporter.sendMail({
         from: fromHeader,
         to: options.to,
         replyTo: replyToHeader,
         subject: options.subject,
-        html: processedHtml,
+        html: finalHtml,
         text: options.text,
+        headers: {
+          'X-Entity-Ref-ID': uniqueToken,
+        },
         attachments: allAttachments.length > 0 ? allAttachments : undefined,
       });
 

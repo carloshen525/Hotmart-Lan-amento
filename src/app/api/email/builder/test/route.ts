@@ -37,10 +37,15 @@ export async function POST(request: Request) {
       .replace(/{{nome}}/g, testVars.nome)
       .replace(/{{primeiro_nome}}/g, testVars.primeiro_nome);
 
+    // Adiciona timestamp no assunto de teste para evitar que o Gmail agrupe em conversas antigas (Thread)
+    // o que causava o Gmail a ocultar o texto e rodapé sob reticências (...)
+    const timeNow = new Date().toLocaleTimeString('pt-BR', { hour: '2-digit', minute: '2-digit', second: '2-digit' });
+    const testSubject = `[TESTE ${timeNow}] ${finalSubject}`;
+
     // Envio pelo EmailService do tenant
     const res = await EmailService.send(tenantId, {
       to,
-      subject: `[TESTE] ${finalSubject}`,
+      subject: testSubject,
       html,
       immediate: true, // Disparo direto de validação
     });
