@@ -53,6 +53,8 @@ model Tenant {
   checkoutIntegrations  CheckoutIntegration[]
   checkoutWebhookEvents CheckoutWebhookEvent[]
   checkoutProducts      CheckoutProduct[]
+  formIntegrations      FormIntegration[]
+  formWebhookEvents     FormWebhookEvent[]
 }
 
 model TenantMembership {
@@ -110,8 +112,9 @@ model Tag {
   createdAt       DateTime         @default(now())
 
   tenant          Tenant           @relation(fields: [tenantId], references: [id], onDelete: Cascade)
-  contacts        ContactTag[]
-  integrationTags IntegrationTag[]
+  contacts            ContactTag[]
+  integrationTags     IntegrationTag[]
+  formIntegrationTags FormIntegrationTag[]
 
   @@unique([tenantId, name])
 }
@@ -501,4 +504,75 @@ model CheckoutProduct {
 
   @@map("products")
   @@index([tenantId, integrationId])
+}
+
+// -------------------------------------------------------------
+// 12. INTEGRAÇÃO WORDPRESS / ELEMENTOR E FORMULÁRIOS DE CAPTAÇÃO
+// -------------------------------------------------------------
+model FormIntegration {
+  id                 String               @id @default(cuid())
+  tenantId           String               @map("tenant_id")
+  name               String
+  platform           String               @default("ELEMENTOR") // ELEMENTOR, WORDPRESS, CONTACT_FORM_7, WPFORMS, CUSTOM
+  status             String               @default("ACTIVE") // ACTIVE, INACTIVE
+  webhookUrl         String?              @map("webhook_url")
+  secretKey          String?              @map("secret_key")
+  allowReentry       String               @default("ALWAYS") @map("allow_reentry") // ALWAYS, NEVER
+  targetAutomationId String?              @map("target_automation_id")
+  fieldMapping       String?              @map("field_mapping") // JSON string
+  samplePayload      String?              @map("sample_payload") // JSON string
+  totalEvents        Int                  @default(0) @map("total_events")
+  newContacts        Int                  @default(0) @map("new_contacts")
+  updatedContacts    Int                  @default(0) @map("updated_contacts")
+  lastEventAt        DateTime?            @map("last_event_at")
+  createdAt          DateTime             @default(now()) @map("created_at")
+  updatedAt          DateTime             @updatedAt @map("updated_at")
+
+  tenant             Tenant               @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+  integrationTags    FormIntegrationTag[]
+  events             FormWebhookEvent[]
+
+  @@map("form_integrations")
+  @@index([tenantId])
+}
+
+model FormIntegrationTag {
+  id            String          @id @default(cuid())
+  integrationId String          @map("integration_id")
+  tagId         String          @map("tag_id")
+  createdAt     DateTime        @default(now()) @map("created_at")
+
+  integration   FormIntegration @relation(fields: [integrationId], references: [id], onDelete: Cascade)
+  tag           Tag             @relation(fields: [tagId], references: [id], onDelete: Cascade)
+
+  @@unique([integrationId, tagId])
+  @@map("form_integration_tags")
+  @@index([integrationId])
+  @@index([tagId])
+}
+
+model FormWebhookEvent {
+  id                   String           @id @default(cuid())
+  tenantId             String           @map("tenant_id")
+  integrationId        String?          @map("integration_id")
+  status               String           @default("PROCESSED") // PROCESSED, FAILED, SIMULATED
+  payload              String           // JSON string
+  parsedData           String?          @map("parsed_data") // JSON string
+  contactId            String?          @map("contact_id")
+  contactEmail         String?          @map("contact_email")
+  contactName          String?          @map("contact_name")
+  contactPhone         String?          @map("contact_phone")
+  tagsApplied          String?          @map("tags_applied") // JSON array string
+  automationsTriggered String?          @map("automations_triggered") // JSON array string
+  errorMessage         String?          @map("error_message")
+  ipAddress            String?          @map("ip_address")
+  userAgent            String?          @map("user_agent")
+  createdAt            DateTime         @default(now()) @map("created_at")
+
+  tenant               Tenant           @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+  integration          FormIntegration? @relation(fields: [integrationId], references: [id], onDelete: SetNull)
+
+  @@map("form_webhook_events")
+  @@index([tenantId, createdAt])
+  @@index([integrationId, status])
 }

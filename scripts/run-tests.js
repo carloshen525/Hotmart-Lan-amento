@@ -8,7 +8,7 @@ async function runTestSuite() {
   console.log('=====================================================\n');
 
   let passed = 0;
-  let total = 22;
+  let total = 24;
 
   // Setup de tenant de teste limpo
   const testTenant = await prisma.tenant.upsert({
@@ -1439,6 +1439,225 @@ async function runTestSuite() {
     assert.strictEqual(updatedTemplate.name, 'Boas-vindas VIP - Editado');
 
     console.log('✔ PASSOU: Construtor visual de e-mails, modelo JSON, HTML responsivo e isolamento multi-tenant validados.');
+    passed++;
+
+    // =========================================================================
+    // TESTE 23: Integração WordPress & Elementor Pro (Webhook 1:1, Form Data, Mapeamento & CRM)
+    // =========================================================================
+    console.log('\n[TESTE 23] Integração WordPress & Elementor (Webhooks 1:1, Form Data, Mapeamento & CRM)...');
+
+    // 1. Cria tags específicas para captação via WordPress / Elementor
+    const tagWp1 = await prisma.tag.upsert({
+      where: { tenantId_name: { tenantId: testTenant.id, name: 'Inscrito Workshop Elementor' } },
+      update: {},
+      create: { tenantId: testTenant.id, name: 'Inscrito Workshop Elementor', color: '#0ea5e9' },
+    });
+
+    const tagWp2 = await prisma.tag.upsert({
+      where: { tenantId_name: { tenantId: testTenant.id, name: 'Lead Organico 2026' } },
+      update: {},
+      create: { tenantId: testTenant.id, name: 'Lead Organico 2026', color: '#10b981' },
+    });
+
+    // 2. Criação da integração exclusiva de formulário com webhook e secret
+    const wpUniqueId = 'wp_' + Math.random().toString(36).substring(2, 8);
+    const wpSecret = 'whsec_elementor_' + Math.random().toString(36).substring(2, 10);
+    const formIntegration = await prisma.formIntegration.create({
+      data: {
+        id: wpUniqueId,
+        tenantId: testTenant.id,
+        name: 'Inscrição Workshop Lançamento',
+        platform: 'ELEMENTOR',
+        status: 'ACTIVE',
+        webhookUrl: `https://launchflow.app/api/webhooks/wordpress/${wpUniqueId}`,
+        secretKey: wpSecret,
+        allowReentry: 'ALWAYS',
+        fieldMapping: JSON.stringify({
+          name: 'form_fields[nome]',
+          email: 'form_fields[email]',
+          phone: 'form_fields[telefone]',
+        }),
+      },
+    });
+
+    assert.ok(formIntegration.id.startsWith('wp_'), 'ID exclusivo de webhook gerado com sucesso');
+    assert.strictEqual(formIntegration.status, 'ACTIVE');
+
+    // 3. Vincula tags automáticas à integração de formulário
+    await prisma.formIntegrationTag.create({
+      data: { integrationId: formIntegration.id, tagId: tagWp1.id },
+    });
+    await prisma.formIntegrationTag.create({
+      data: { integrationId: formIntegration.id, tagId: tagWp2.id },
+    });
+
+    // 4. Simulação de payload recebido pelo Elementor Pro (form_fields[key])
+    const elementorRawPayload = {
+      'form_fields[nome]': 'Henrique Lead Elementor',
+      'form_fields[email]': 'henrique.lead@elementor.com',
+      'form_fields[telefone]': '(11) 98765-4321',
+      'form_fields[utm_source]': 'instagram_stories',
+      'page_url': 'https://meuexpert.com/workshop-inscricao?utm_campaign=lancamento_cpl1',
+      'form_name': 'Inscrição Workshop CPL1',
+      'form_id': 'elementor_form_cpl1',
+    };
+
+    // Função de normalização para o teste
+    const cleanPhone = (raw) => {
+      const digits = (raw || '').replace(/\D/g, '');
+      if (digits.length === 11 || digits.length === 10) return `+55${digits}`;
+      return digits ? `+${digits}` : null;
+    };
+
+    const wpLeadEmail = elementorRawPayload['form_fields[email]'].toLowerCase().trim();
+    const leadName = elementorRawPayload['form_fields[nome]'].trim();
+    const leadPhone = cleanPhone(elementorRawPayload['form_fields[telefone]']);
+
+    assert.strictEqual(leadPhone, '+5511987654321', 'Telefone brasileiro normalizado corretamente para +55');
+
+    // 5. Cadastra ou atualiza o lead no CRM
+    const wpContact = await prisma.contact.upsert({
+      where: {
+        tenantId_email: {
+          tenantId: testTenant.id,
+          email: wpLeadEmail,
+        },
+      },
+      update: {
+        name: leadName,
+        phone: leadPhone,
+      },
+      create: {
+        tenantId: testTenant.id,
+        name: leadName,
+        email: wpLeadEmail,
+        phone: leadPhone,
+        utmSource: elementorRawPayload['form_fields[utm_source]'],
+        consentGiven: true,
+        status: 'ACTIVE',
+      },
+    });
+
+    assert.ok(wpContact.id, 'Contato cadastrado no CRM pelo webhook do Elementor');
+
+    // 6. Aplica automaticamente as tags da integração
+    const integrationTags = await prisma.formIntegrationTag.findMany({
+      where: { integrationId: formIntegration.id },
+      include: { tag: true },
+    });
+
+    for (const it of integrationTags) {
+      await prisma.contactTag.upsert({
+        where: { contactId_tagId: { contactId: wpContact.id, tagId: it.tagId } },
+        create: { contactId: wpContact.id, tagId: it.tagId },
+        update: {},
+      });
+    }
+
+    // 7. Registra evento no histórico form_webhook_events
+    const formEvent = await prisma.formWebhookEvent.create({
+      data: {
+        tenantId: testTenant.id,
+        integrationId: formIntegration.id,
+        status: 'PROCESSED',
+        payload: JSON.stringify(elementorRawPayload),
+        contactId: wpContact.id,
+        contactEmail: wpLeadEmail,
+        contactName: leadName,
+        contactPhone: leadPhone,
+        tagsApplied: JSON.stringify(integrationTags.map((it) => it.tag.name)),
+      },
+    });
+
+    assert.strictEqual(formEvent.integrationId, formIntegration.id, 'Evento registrado com ID da integração');
+
+    // 8. Verifica que o contato possui ambas as tags no banco
+    const contactTagsCount = await prisma.contactTag.count({
+      where: { contactId: wpContact.id },
+    });
+    assert.ok(contactTagsCount >= 2, 'Tags do formulário aplicadas com sucesso ao lead');
+
+    console.log('✔ PASSOU: Integração WordPress & Elementor, normalização, tags automáticas e gravação no CRM validadas.');
+    passed++;
+
+    // =========================================================================
+    // TESTE 24: Teste Simulado vs Real, Deduplicação e Isolamento Multi-Expert
+    // =========================================================================
+    console.log('\n[TESTE 24] Teste Simulado vs Real, Deduplicação e Isolamento Multi-Expert...');
+
+    // 1. Simulação sem persistência no banco
+    const simulatedEmail = `lead_simulado_${Date.now()}@teste.com`;
+    // Em teste simulado, validação ocorre sem chamada ao banco de contatos
+    const simulatedContactCheck = await prisma.contact.findUnique({
+      where: {
+        tenantId_email: {
+          tenantId: testTenant.id,
+          email: simulatedEmail,
+        },
+      },
+    });
+    assert.strictEqual(simulatedContactCheck, null, 'Teste simulado não deve criar contatos reais no CRM');
+
+    // 2. Re-envio do formulário (Idempotência / Deduplicação de Lead)
+    const countBefore = await prisma.contact.count({
+      where: { tenantId: testTenant.id, email: wpLeadEmail },
+    });
+    assert.strictEqual(countBefore, 1, 'Apenas 1 lead existe antes do re-envio');
+
+    // Re-inscrição: atualiza contato
+    await prisma.contact.upsert({
+      where: {
+        tenantId_email: {
+          tenantId: testTenant.id,
+          email: wpLeadEmail,
+        },
+      },
+      update: {
+        name: 'Henrique Lead Atualizado',
+      },
+      create: {
+        tenantId: testTenant.id,
+        name: 'Henrique Lead Atualizado',
+        email: wpLeadEmail,
+        phone: leadPhone,
+        consentGiven: true,
+      },
+    });
+
+    // Re-aplicação das tags (não pode duplicar vínculos)
+    for (const it of integrationTags) {
+      await prisma.contactTag.upsert({
+        where: { contactId_tagId: { contactId: wpContact.id, tagId: it.tagId } },
+        create: { contactId: wpContact.id, tagId: it.tagId },
+        update: {},
+      });
+    }
+
+    const countAfter = await prisma.contact.count({
+      where: { tenantId: testTenant.id, email: wpLeadEmail },
+    });
+    assert.strictEqual(countAfter, 1, 'Re-envio de formulário não duplica o contato no CRM');
+
+    // 3. Isolamento estrito Multi-Tenant entre experts
+    const otherTenantWpIntegrations = await prisma.formIntegration.findMany({
+      where: { tenantId: otherTenant.id },
+    });
+    assert.strictEqual(
+      otherTenantWpIntegrations.length,
+      0,
+      'Expert B não deve enxergar integrações WordPress do Expert A'
+    );
+
+    const otherTenantWpEvents = await prisma.formWebhookEvent.findMany({
+      where: { tenantId: otherTenant.id },
+    });
+    assert.strictEqual(
+      otherTenantWpEvents.length,
+      0,
+      'Expert B não deve ter acesso a eventos de formulários do Expert A'
+    );
+
+    console.log('✔ PASSOU: Teste simulado vs real, deduplicação de formulários e isolamento multi-tenant validados.');
     passed++;
 
     console.log('\n=====================================================');

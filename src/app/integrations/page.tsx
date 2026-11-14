@@ -29,12 +29,14 @@ import {
   X,
   Layers,
   Tags,
+  Globe,
 } from 'lucide-react';
 import {
   CheckoutPlatformId,
   PLATFORM_PRESETS,
   StandardCheckoutEventType,
 } from '@/services/checkout/types';
+import { WordPressIntegrationTab } from '@/components/integrations/WordPressIntegrationTab';
 
 interface TagItem {
   id: string;
@@ -98,8 +100,9 @@ const AVAILABLE_EVENTS: { id: StandardCheckoutEventType; label: string; desc: st
 ];
 
 export default function IntegrationsPage() {
-  const [activeTab, setActiveTab] = useState<'checkout' | 'events' | 'simulate' | 'whatsapp'>('checkout');
+  const [activeTab, setActiveTab] = useState<'checkout' | 'wordpress' | 'events' | 'simulate' | 'whatsapp'>('checkout');
   const [tenant, setTenant] = useState<any>(null);
+  const [wpCount, setWpCount] = useState(0);
 
   // Integrações
   const [integrations, setIntegrations] = useState<IntegrationItem[]>([]);
@@ -188,8 +191,19 @@ export default function IntegrationsPage() {
   const [testingEvo, setTestingEvo] = useState(false);
   const [evoTestResult, setEvoTestResult] = useState<any>(null);
 
+  const fetchWpCount = async () => {
+    try {
+      const res = await fetch('/api/wordpress/integrations');
+      const data = await res.json();
+      if (res.ok && data.integrations) {
+        setWpCount(data.integrations.length);
+      }
+    } catch {}
+  };
+
   const fetchIntegrations = async () => {
     setLoadingIntegrations(true);
+    fetchWpCount();
     try {
       const res = await fetch('/api/checkout/integrations');
       const data = await res.json();
@@ -507,14 +521,23 @@ export default function IntegrationsPage() {
           </p>
         </div>
 
-        <div className="flex items-center gap-3">
+        <div className="flex items-center gap-2.5 flex-wrap">
+          <button
+            type="button"
+            onClick={() => setActiveTab('wordpress')}
+            className="flex items-center gap-2 px-3.5 py-2.5 rounded-xl border border-sky-300 bg-sky-50 hover:bg-sky-100 text-sky-800 font-bold text-xs transition-colors shadow-2xs cursor-pointer"
+          >
+            <Globe className="w-4 h-4 text-sky-600" />
+            <span>WordPress / Elementor</span>
+          </button>
+
           <button
             type="button"
             onClick={handleOpenCreateModal}
-            className="flex items-center gap-2 px-4 py-2.5 rounded-xl bg-indigo-600 hover:bg-indigo-700 text-white font-semibold text-xs transition-colors shadow-sm"
+            className="flex items-center gap-2 px-4 py-2.5 rounded-xl bg-indigo-600 hover:bg-indigo-700 text-white font-semibold text-xs transition-colors shadow-sm cursor-pointer"
           >
             <Plus className="w-4 h-4" />
-            <span>+ Nova Integração</span>
+            <span>+ Novo Checkout</span>
           </button>
         </div>
       </div>
@@ -587,16 +610,32 @@ export default function IntegrationsPage() {
         <button
           type="button"
           onClick={() => setActiveTab('checkout')}
-          className={`flex items-center gap-2 px-4 py-2 rounded-xl text-xs font-bold transition-all ${
+          className={`flex items-center gap-2 px-4 py-2 rounded-xl text-xs font-bold transition-all cursor-pointer ${
             activeTab === 'checkout'
               ? 'bg-indigo-600 text-white shadow-sm'
               : 'text-slate-600 hover:text-slate-900 hover:bg-slate-100'
           }`}
         >
           <Layers className="w-3.5 h-3.5" />
-          <span>Plataformas Conectadas</span>
+          <span>Plataformas de Checkout</span>
           <span className="ml-1 px-1.5 py-0.5 rounded-full text-[10px] bg-white/20">
             {integrations.length}
+          </span>
+        </button>
+
+        <button
+          type="button"
+          onClick={() => setActiveTab('wordpress')}
+          className={`flex items-center gap-2 px-4 py-2 rounded-xl text-xs font-bold transition-all cursor-pointer ${
+            activeTab === 'wordpress'
+              ? 'bg-sky-600 text-white shadow-sm'
+              : 'text-slate-600 hover:text-slate-900 hover:bg-slate-100'
+          }`}
+        >
+          <Globe className="w-3.5 h-3.5 text-sky-400" />
+          <span>WordPress & Elementor</span>
+          <span className={`ml-1 px-1.5 py-0.5 rounded-full text-[10px] ${activeTab === 'wordpress' ? 'bg-white/20' : 'bg-slate-200 text-slate-700 font-bold'}`}>
+            {wpCount}
           </span>
         </button>
 
@@ -907,6 +946,28 @@ export default function IntegrationsPage() {
             </div>
           )}
         </div>
+      )}
+
+      {/* ABA: WORDPRESS & ELEMENTOR PRO */}
+      {activeTab === 'wordpress' && (
+        <WordPressIntegrationTab
+          tenant={tenant}
+          availableTags={availableTags}
+          onRefreshTags={fetchTags}
+          onCreateTagInline={async (name: string) => {
+            const res = await fetch('/api/tags', {
+              method: 'POST',
+              headers: { 'Content-Type': 'application/json' },
+              body: JSON.stringify({ name }),
+            });
+            const data = await res.json();
+            if (data.tag) {
+              await fetchTags();
+              return data.tag;
+            }
+            return null;
+          }}
+        />
       )}
 
       {/* ABA 2: HISTÓRICO DE WEBHOOKS (LOGS) */}
