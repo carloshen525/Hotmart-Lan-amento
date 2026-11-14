@@ -159,10 +159,21 @@ export default function WhatsAppPage() {
       if (data.qrcode) {
         setActiveModalQrCode(data.qrcode);
         setActiveModalInstanceId(data.instanceId);
+      } else if (data.instanceId) {
+        setActiveModalInstanceId(data.instanceId);
+        // Tenta obter o QR code fresco especificamente
+        const qrRes = await fetch(`/api/whatsapp/qrcode?instanceId=${encodeURIComponent(data.instanceId)}`);
+        const qrData = await qrRes.json();
+        if (qrData.qrcode) {
+          setActiveModalQrCode(qrData.qrcode);
+        }
+      }
+      if (data.error) {
+        setActionMessage(`Aviso: ${data.error}`);
       }
       fetchInstances();
     } catch (err: any) {
-      alert(`Falha ao gerar QR Code: ${err.message}`);
+      setActionMessage(`Falha ao gerar QR Code: ${err.message}`);
     } finally {
       setModalLoading(false);
     }
@@ -183,31 +194,40 @@ export default function WhatsAppPage() {
 
   // Reconectar instância específica
   const handleReconnectInstance = async (instanceId: string) => {
-    setActionLoading(true);
-    setActionMessage(null);
+    setIsConnectModalOpen(true);
+    setModalLoading(true);
+    setActiveModalQrCode(null);
+    setActiveModalInstanceId(instanceId);
+    setModalTimeLeft(25);
+    const target = instances.find((i) => i.id === instanceId);
+    setNewNumberName(target?.name || 'Reconectar WhatsApp');
+
     try {
-      const res = await fetch('/api/whatsapp/reconnect', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ instanceId }),
-      });
+      // 1. Tenta obter o QR code fresco diretamente
+      const res = await fetch(`/api/whatsapp/qrcode?instanceId=${encodeURIComponent(instanceId)}`);
       const data = await res.json();
       if (data.qrcode) {
-        // Abre o modal para o usuário poder escanear
-        setActiveModalInstanceId(instanceId);
         setActiveModalQrCode(data.qrcode);
-        const target = instances.find((i) => i.id === instanceId);
-        setNewNumberName(target?.name || 'Reconectar WhatsApp');
-        setIsConnectModalOpen(true);
-        setModalTimeLeft(25);
-      } else if (data.connected) {
-        setActionMessage('Instância reconectada com sucesso!');
+      } else {
+        // Se a instância estiver fechada/desconectada, reinicia
+        const recRes = await fetch('/api/whatsapp/reconnect', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ instanceId }),
+        });
+        const recData = await recRes.json();
+        if (recData.qrcode) {
+          setActiveModalQrCode(recData.qrcode);
+        } else if (recData.connected) {
+          setIsConnectModalOpen(false);
+          setActionMessage('Instância reconectada com sucesso!');
+        }
       }
       fetchInstances();
     } catch (err: any) {
       setActionMessage(`Falha ao reconectar: ${err.message}`);
     } finally {
-      setActionLoading(false);
+      setModalLoading(false);
     }
   };
 

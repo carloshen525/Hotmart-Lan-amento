@@ -9,8 +9,13 @@ export class EvolutionApiService {
   private apiKey: string;
 
   constructor() {
-    this.apiUrl = (process.env.EVOLUTION_API_URL || '').replace(/\/$/, '');
-    this.apiKey = process.env.EVOLUTION_API_KEY || '';
+    this.apiUrl = (process.env.EVOLUTION_API_URL || '')
+      .trim()
+      .replace(/^["']|["']$/g, '')
+      .replace(/\/$/, '');
+    this.apiKey = (process.env.EVOLUTION_API_KEY || '')
+      .trim()
+      .replace(/^["']|["']$/g, '');
   }
 
   isConfigured(): boolean {
@@ -197,7 +202,7 @@ export class EvolutionApiService {
 
         const createData = await createRes.json().catch(() => ({}));
 
-        const qrcodeBase64 =
+        let qrcodeBase64 =
           createData?.qrcode?.base64 ||
           createData?.base64 ||
           null;
@@ -214,16 +219,27 @@ export class EvolutionApiService {
           },
         });
 
-        if (qrcodeBase64) {
-          return {
-            connected: false,
-            status: 'CONNECTING',
-            qrcode: qrcodeBase64,
-            instanceId: instance.id,
-            instanceName: instance.instanceName,
-            name: instance.name || friendlyName,
-          };
+        // Se /instance/create ainda não retornou o base64 de imediato, busca via getFreshQrCode!
+        if (!qrcodeBase64) {
+          await new Promise((r) => setTimeout(r, 600));
+          const fresh = await this.getFreshQrCode(instance.instanceName);
+          if (fresh.qrcode) {
+            qrcodeBase64 = fresh.qrcode;
+            await prisma.whatsappInstance.update({
+              where: { id: instance.id },
+              data: { qrcode: qrcodeBase64 },
+            });
+          }
         }
+
+        return {
+          connected: false,
+          status: 'CONNECTING',
+          qrcode: qrcodeBase64 || undefined,
+          instanceId: instance.id,
+          instanceName: instance.instanceName,
+          name: instance.name || friendlyName,
+        };
       } catch (err: any) {
         return {
           connected: false,
@@ -425,13 +441,6 @@ export class EvolutionApiService {
         };
       }
 
-      // Se não conectado e em estado CONNECTING, checa QR code
-      let freshQr = instance.qrcode;
-      if (instance.status === 'CONNECTING') {
-        const fresh = await this.getFreshQrCode(instance.instanceName);
-        if (fresh.qrcode) freshQr = fresh.qrcode;
-      }
-
       return {
         id: instance.id,
         name: instance.name || 'WhatsApp',
@@ -442,7 +451,7 @@ export class EvolutionApiService {
         profileName: instance.profileName,
         isDefault: instance.isDefault,
         lastConnectedAt: instance.lastConnectedAt,
-        qrcode: freshQr,
+        qrcode: instance.qrcode,
       };
     } catch {
       return {
