@@ -5,6 +5,15 @@ import { HotmartWebhookPayload } from '@/services/hotmart/types';
 export async function POST(request: Request) {
   try {
     const rawBody = await request.text();
+
+    if (!rawBody || !rawBody.trim() || rawBody === '{}') {
+      return NextResponse.json({
+        received: true,
+        status: 'online',
+        message: 'Endpoint de Webhook validado com sucesso (Hotmart 2.0)',
+      });
+    }
+
     let payload: HotmartWebhookPayload;
 
     try {
@@ -55,4 +64,20 @@ export async function GET() {
       'PURCHASE_EXPIRED',
     ],
   });
+}
+
+export async function OPTIONS() {
+  return new NextResponse(null, {
+    status: 200,
+    headers: {
+      Allow: 'GET, POST, OPTIONS, HEAD',
+      'Access-Control-Allow-Origin': '*',
+      'Access-Control-Allow-Methods': 'GET, POST, OPTIONS, HEAD',
+      'Access-Control-Allow-Headers': '*',
+    },
+  });
+}
+
+export async function HEAD() {
+  return new NextResponse(null, { status: 200 });
 }

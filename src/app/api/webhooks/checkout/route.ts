@@ -4,6 +4,15 @@ import { checkoutWebhookProcessor } from '@/services/checkout';
 export async function POST(request: Request) {
   try {
     const rawBody = await request.text();
+
+    if (!rawBody || !rawBody.trim() || rawBody === '{}') {
+      return NextResponse.json({
+        received: true,
+        status: 'online',
+        message: 'Endpoint de Webhook validado com sucesso (Hotmart/LaunchFlow)',
+      });
+    }
+
     let payload: any;
 
     try {
@@ -66,4 +75,20 @@ export async function GET() {
       'CUSTOM',
     ],
   });
+}
+
+export async function OPTIONS() {
+  return new NextResponse(null, {
+    status: 200,
+    headers: {
+      Allow: 'GET, POST, OPTIONS, HEAD',
+      'Access-Control-Allow-Origin': '*',
+      'Access-Control-Allow-Methods': 'GET, POST, OPTIONS, HEAD',
+      'Access-Control-Allow-Headers': '*',
+    },
+  });
+}
+
+export async function HEAD() {
+  return new NextResponse(null, { status: 200 });
 }

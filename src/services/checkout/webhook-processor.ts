@@ -177,6 +177,24 @@ export class CheckoutWebhookProcessor {
     const eventType = normalizedEvent.event;
 
     if (!buyerEmail) {
+      // Se for um ping de validação de URL enviado pela Hotmart ou outra plataforma
+      if (
+        payload?.event === 'TEST' ||
+        payload?.event === 'HOTMART_TEST' ||
+        payload?.test === true ||
+        payload?.hottok ||
+        payload?.event?.includes?.('TEST') ||
+        payload?.id === 'test'
+      ) {
+        return {
+          success: true,
+          duplicate: false,
+          eventType: 'unknown',
+          platform: platformToUse,
+          actionSummary: 'Ping de validação de URL verificado com sucesso pela Hotmart.',
+        };
+      }
+
       return {
         success: false,
         duplicate: false,

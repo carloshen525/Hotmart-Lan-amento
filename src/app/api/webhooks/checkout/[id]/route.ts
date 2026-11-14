@@ -7,6 +7,16 @@ export async function POST(
 ) {
   try {
     const rawBody = await request.text();
+
+    // Se for um ping vazio de validação da Hotmart ou uptime
+    if (!rawBody || !rawBody.trim() || rawBody === '{}') {
+      return NextResponse.json({
+        received: true,
+        status: 'online',
+        message: 'Endpoint de Webhook validado com sucesso (Hotmart/LaunchFlow)',
+      });
+    }
+
     let payload: any;
 
     try {
@@ -60,4 +70,20 @@ export async function GET(
     integrationId: params.id,
     timestamp: new Date().toISOString(),
   });
+}
+
+export async function OPTIONS() {
+  return new NextResponse(null, {
+    status: 200,
+    headers: {
+      Allow: 'GET, POST, OPTIONS, HEAD',
+      'Access-Control-Allow-Origin': '*',
+      'Access-Control-Allow-Methods': 'GET, POST, OPTIONS, HEAD',
+      'Access-Control-Allow-Headers': '*',
+    },
+  });
+}
+
+export async function HEAD() {
+  return new NextResponse(null, { status: 200 });
 }
