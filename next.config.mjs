@@ -4,6 +4,13 @@ const nextConfig = {
   experimental: {
     serverComponentsExternalPackages: ['@prisma/client', 'nodemailer', 'bcryptjs'],
   },
+  async redirects() {
+    return [
+      { source: '/campaigns', destination: '/automations', permanent: false },
+      { source: '/emails', destination: '/automations', permanent: false },
+      { source: '/calendar', destination: '/automations', permanent: false },
+    ];
+  },
 };
 
 export default nextConfig;
