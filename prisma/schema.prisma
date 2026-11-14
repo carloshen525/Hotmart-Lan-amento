@@ -49,6 +49,7 @@ model Tenant {
   emailSettings      EmailSettings?
   emailLogs          EmailLog[]
   emailQueue         EmailQueue[]
+  emailTemplates     EmailTemplate[]
   checkoutIntegrations  CheckoutIntegration[]
   checkoutWebhookEvents CheckoutWebhookEvent[]
   checkoutProducts      CheckoutProduct[]
@@ -396,6 +397,26 @@ model EmailQueue {
   @@map("email_queue")
   @@index([tenantId, status])
   @@index([status, scheduledAt])
+}
+
+// -------------------------------------------------------------
+// 10.1. MODELOS DE E-MAIL (EMAIL BUILDER & TEMPLATES)
+// -------------------------------------------------------------
+model EmailTemplate {
+  id            String    @id @default(cuid())
+  tenantId      String    @map("tenant_id")
+  name          String
+  subject       String?
+  contentJson   String    @map("content_json") // JSON dos blocos e estilos
+  generatedHtml String    @map("generated_html") // HTML responsivo final
+  category      String?   @default("custom") // welcome, purchase, recovery, promo, custom
+  createdAt     DateTime  @default(now()) @map("created_at")
+  updatedAt     DateTime  @updatedAt @map("updated_at")
+
+  tenant        Tenant    @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+
+  @@map("email_templates")
+  @@index([tenantId])
 }
 
 // -------------------------------------------------------------

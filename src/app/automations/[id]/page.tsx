@@ -70,6 +70,7 @@ import {
   WhatsAppNode,
   EmailNode,
 } from '@/components/automation/CustomNodes';
+import { EmailBuilderModal } from '@/components/email-builder/EmailBuilderModal';
 
 interface TagItem {
   id: string;
@@ -131,6 +132,9 @@ export default function AutomationCanvasPage() {
   const [wppCaption, setWppCaption] = useState('');
   const [wppUploading, setWppUploading] = useState(false);
   const [wppUploadError, setWppUploadError] = useState<string | null>(null);
+
+  // Construtor Visual de E-mails
+  const [isVisualEmailBuilderOpen, setIsVisualEmailBuilderOpen] = useState(false);
 
   // Modal Avançado de Timer
   const [isTimerModalOpen, setIsTimerModalOpen] = useState(false);
@@ -1776,6 +1780,44 @@ export default function AutomationCanvasPage() {
                 </div>
               )}
 
+              {/* Se for E-mail, exibe banner do Construtor Visual */}
+              {selectedNode.type === 'email' && (
+                <div className="p-4 bg-gradient-to-r from-orange-950/60 via-indigo-950/60 to-purple-950/60 border border-orange-500/30 rounded-2xl flex items-center justify-between gap-4 shadow-lg">
+                  <div className="flex items-center gap-3">
+                    <div className="w-10 h-10 rounded-xl bg-orange-600/30 border border-orange-500/50 flex items-center justify-center text-orange-400 shrink-0">
+                      <Sparkles className="w-5 h-5" />
+                    </div>
+                    <div>
+                      <h4 className="font-bold text-white text-xs flex items-center gap-2">
+                        Construtor Visual de E-mails
+                        {Boolean((selectedNode.data.config as any)?.contentJson) && (
+                          <span className="text-[10px] bg-emerald-950 text-emerald-300 border border-emerald-800/60 px-2 py-0.2 rounded-full font-semibold">
+                            ✨ Modelo Ativo
+                          </span>
+                        )}
+                      </h4>
+                      <p className="text-[11px] text-slate-300 mt-0.5">
+                        {Boolean((selectedNode.data.config as any)?.contentJson)
+                          ? 'Design visual responsivo ativo. Clique para personalizar os blocos, botões e imagens.'
+                          : 'Crie e-mails profissionais com blocos arrastáveis, imagens, botões e vídeos.'}
+                      </p>
+                    </div>
+                  </div>
+                  <button
+                    type="button"
+                    onClick={() => setIsVisualEmailBuilderOpen(true)}
+                    className="px-4 py-2 bg-gradient-to-r from-orange-600 to-indigo-600 hover:from-orange-500 hover:to-indigo-500 text-white rounded-xl font-bold text-xs shadow-lg shadow-indigo-600/30 shrink-0 flex items-center gap-1.5 transition-all"
+                  >
+                    <Sparkles className="w-3.5 h-3.5" />
+                    <span>
+                      {Boolean((selectedNode.data.config as any)?.contentJson)
+                        ? 'Editar Design Visual'
+                        : 'Abrir Construtor Visual'}
+                    </span>
+                  </button>
+                </div>
+              )}
+
               {/* Se for E-mail, pede o assunto */}
               {selectedNode.type === 'email' && (
                 <div>
@@ -1787,6 +1829,22 @@ export default function AutomationCanvasPage() {
                     placeholder="Ex: Seu link exclusivo de acesso"
                     className="w-full p-2.5 bg-[#12141a] border border-slate-700 rounded-xl text-xs text-white focus:outline-none focus:border-indigo-500"
                   />
+                  <div className="flex items-center gap-1.5 flex-wrap mt-1.5">
+                    <span className="text-[10px] text-slate-400">Variáveis para o assunto:</span>
+                    {['{{nome}}', '{{primeiro_nome}}'].map((v) => (
+                      <button
+                        key={v}
+                        type="button"
+                        onClick={() => {
+                          const el = document.getElementById('email_subject_input') as HTMLInputElement;
+                          if (el) el.value += ` ${v}`;
+                        }}
+                        className="px-2 py-0.5 rounded bg-slate-800 hover:bg-slate-700 text-orange-300 font-mono text-[10px] border border-slate-700"
+                      >
+                        {v}
+                      </button>
+                    ))}
+                  </div>
                 </div>
               )}
 
@@ -2185,6 +2243,46 @@ export default function AutomationCanvasPage() {
             </div>
           </div>
         </div>
+      )}
+
+      {/* ============================================================ */}
+      {/* CONSTRUTOR VISUAL PROFISSIONAL DE E-MAILS (JSON BUILDER) */}
+      {/* ============================================================ */}
+      {isVisualEmailBuilderOpen && selectedNode && (
+        <EmailBuilderModal
+          isOpen={isVisualEmailBuilderOpen}
+          onClose={() => setIsVisualEmailBuilderOpen(false)}
+          initialSubject={(selectedNode.data.config as any)?.subject || ''}
+          initialContentJson={(selectedNode.data.config as any)?.contentJson || ''}
+          onSave={({ subject, contentJson, generatedHtml, plainTextSummary }) => {
+            setSequenceNodes((nds) =>
+              nds.map((n) => {
+                if (n.id === selectedNode.id) {
+                  return {
+                    ...n,
+                    data: {
+                      ...n.data,
+                      config: {
+                        ...((n.data.config as object) || {}),
+                        subject,
+                        contentJson,
+                        generatedHtml,
+                        content: plainTextSummary,
+                        message: plainTextSummary,
+                      },
+                    },
+                  };
+                }
+                return n;
+              })
+            );
+            // Atualiza campos visuais caso o drawer simples esteja aberto
+            const subEl = document.getElementById('email_subject_input') as HTMLInputElement;
+            if (subEl) subEl.value = subject;
+            const bodyEl = document.getElementById('message_body_input') as HTMLTextAreaElement;
+            if (bodyEl) bodyEl.value = plainTextSummary;
+          }}
+        />
       )}
 
       {/* ============================================================ */}

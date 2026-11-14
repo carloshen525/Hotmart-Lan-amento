@@ -364,6 +364,7 @@ export const EmailNode = memo(({ data, selected }: any) => {
   const success = data.config?.successCount ?? 0;
   const failed = data.config?.failedCount ?? 0;
   const hasSubject = !!data.config?.subject;
+  const hasVisualDesign = Boolean(data.config?.contentJson || data.config?.generatedHtml);
 
   return (
     <div className="flex flex-col items-center group cursor-pointer select-none">
@@ -381,6 +382,16 @@ export const EmailNode = memo(({ data, selected }: any) => {
         />
 
         <Mail className="w-6 h-6 text-white stroke-[2]" />
+
+        {/* Badge indicador de Construtor Visual */}
+        {hasVisualDesign && (
+          <div
+            className="absolute -top-1.5 -left-1.5 text-[10px] bg-slate-900 border border-amber-500/60 rounded-full w-5 h-5 flex items-center justify-center shadow"
+            title="Design Visual Ativo"
+          >
+            ✨
+          </div>
+        )}
 
         {/* Badge vermelho de Atenção se não configurado */}
         {!hasSubject && (

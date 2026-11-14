@@ -49,6 +49,20 @@ export class EmailService {
           createdAt DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP
         );
       `);
+
+      await prisma.$executeRawUnsafe(`
+        CREATE TABLE IF NOT EXISTS email_templates (
+          id TEXT PRIMARY KEY,
+          tenant_id TEXT NOT NULL,
+          name TEXT NOT NULL,
+          subject TEXT,
+          content_json TEXT NOT NULL,
+          generated_html TEXT NOT NULL,
+          category TEXT DEFAULT 'custom',
+          created_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
+          updated_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP
+        );
+      `);
     } catch {
       // Ignora erro se já existirem ou se for outro dialeto
     }

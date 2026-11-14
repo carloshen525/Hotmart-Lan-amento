@@ -118,13 +118,26 @@ export class AutomationEngine {
         switch (subtype) {
           case 'SEND_EMAIL': {
             if (contact.email) {
+              const firstName = contact.name ? contact.name.trim().split(/\s+/)[0] : '';
+              const emailHtml =
+                config.generatedHtml ||
+                config.contentHtml ||
+                config.html ||
+                config.content ||
+                '<p>Olá {{nome}}, temos uma novidade especial para você!</p>';
+
               const res = await messageManager.sendEmail({
                 tenantId,
                 contactId: contact.id,
                 email: contact.email,
                 subject: config.subject || 'Novidades do Lançamento',
-                content: config.content || '<p>Olá {{nome}}, temos uma novidade especial para você!</p>',
-                variables: { nome: contact.name, email: contact.email },
+                content: emailHtml,
+                variables: {
+                  nome: contact.name || '',
+                  primeiro_nome: firstName || contact.name || '',
+                  email: contact.email || '',
+                  telefone: contact.phone || '',
+                },
               });
               stepDetails = { emailSent: res.success, messageId: res.messageId, provider: res.provider };
             }
@@ -673,13 +686,27 @@ export class AutomationEngine {
         },
       });
     } else if (node.type === 'email' && contact.email) {
+      const firstName = contact.name ? contact.name.trim().split(/\s+/)[0] : '';
+      const emailHtml =
+        cfg.generatedHtml ||
+        cfg.contentHtml ||
+        cfg.html ||
+        cfg.content ||
+        cfg.message ||
+        '<p>Olá!</p>';
+
       await messageManager.sendEmail({
         tenantId,
         contactId: contact.id,
         email: contact.email,
         subject: cfg.subject || 'Aviso do Lançamento',
-        content: cfg.content || cfg.message || '<p>Olá!</p>',
-        variables: { nome: contact.name, email: contact.email },
+        content: emailHtml,
+        variables: {
+          nome: contact.name || '',
+          primeiro_nome: firstName || contact.name || '',
+          email: contact.email || '',
+          telefone: contact.phone || '',
+        },
       });
     } else if (node.type === 'timer' || node.type === 'delay') {
       const waitMinutes = Number(cfg.value ?? cfg.minutes ?? (cfg.unit === 'hours' ? (cfg.value || 1) * 60 : 1));
