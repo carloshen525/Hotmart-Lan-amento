@@ -98,3 +98,20 @@ export async function POST(request: Request) {
     return NextResponse.json({ error: err.message }, { status: 500 });
   }
 }
+
+export async function DELETE() {
+  try {
+    const tenantId = await getActiveTenantId();
+    if (!tenantId) {
+      return NextResponse.json({ error: 'Tenant não autenticado' }, { status: 401 });
+    }
+
+    await EmailService.deleteSettings(tenantId);
+    return NextResponse.json({
+      success: true,
+      message: 'Conta de e-mail desconectada com sucesso!',
+    });
+  } catch (err: any) {
+    return NextResponse.json({ error: err.message }, { status: 500 });
+  }
+}

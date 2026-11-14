@@ -7,7 +7,7 @@ const nextConfig = {
   async redirects() {
     return [
       { source: '/campaigns', destination: '/automations', permanent: false },
-      { source: '/emails', destination: '/automations', permanent: false },
+      { source: '/emails', destination: '/email', permanent: false },
       { source: '/calendar', destination: '/automations', permanent: false },
     ];
   },

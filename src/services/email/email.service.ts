@@ -288,6 +288,27 @@ export class EmailService {
   }
 
   /**
+   * Remove / Desconecta as configurações de e-mail do tenant
+   */
+  static async deleteSettings(tenantId: string): Promise<boolean> {
+    if (!tenantId) return false;
+    try {
+      if ((prisma as any).emailSettings) {
+        await (prisma as any).emailSettings.deleteMany({ where: { tenantId } });
+        return true;
+      }
+    } catch {}
+
+    try {
+      await this.ensureTables();
+      await prisma.$executeRawUnsafe(`DELETE FROM email_settings WHERE tenantId = ?;`, tenantId);
+      return true;
+    } catch {
+      return false;
+    }
+  }
+
+  /**
    * Testa a conexão SMTP e envia um e-mail de teste
    */
   static async testConnection(
