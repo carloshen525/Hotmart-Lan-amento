@@ -27,6 +27,8 @@ import {
   Tags,
   Loader2,
   AlertTriangle,
+  Edit2,
+  Save,
 } from 'lucide-react';
 
 interface Contact {
@@ -50,6 +52,17 @@ export default function ContactsPage() {
   const [isModalOpen, setIsModalOpen] = useState(false);
   const [selectedContact, setSelectedContact] = useState<any | null>(null);
   const [drawerLoading, setDrawerLoading] = useState(false);
+
+  // Estado para Edição de Dados do Lead
+  const [isEditingContact, setIsEditingContact] = useState(false);
+  const [editName, setEditName] = useState('');
+  const [editEmail, setEditEmail] = useState('');
+  const [editPhone, setEditPhone] = useState('');
+  const [editUtmSource, setEditUtmSource] = useState('');
+  const [editSelectedTagIds, setEditSelectedTagIds] = useState<string[]>([]);
+  const [editNewTagInput, setEditNewTagInput] = useState('');
+  const [editSaving, setEditSaving] = useState(false);
+  const [editError, setEditError] = useState<string | null>(null);
 
   // Seleção Múltipla em Massa
   const [selectedIds, setSelectedIds] = useState<string[]>([]);
@@ -505,14 +518,121 @@ export default function ContactsPage() {
     } catch {}
   };
 
-  const openContactDetails = async (id: string) => {
+  const openContactDetails = async (id: string, startEditing = false) => {
     setDrawerLoading(true);
+    setEditError(null);
     try {
       const res = await fetch(`/api/contacts/${id}`);
       const data = await res.json();
       setSelectedContact(data.contact);
+      if (data.contact) {
+        setEditName(data.contact.name || '');
+        setEditEmail(data.contact.email || '');
+        setEditPhone(data.contact.phone || '');
+        setEditUtmSource(data.contact.utmSource || '');
+        setEditSelectedTagIds(
+          Array.isArray(data.contact.tags) ? data.contact.tags.map((t: any) => t.tag.id) : []
+        );
+        setIsEditingContact(startEditing);
+      }
     } catch {}
     setDrawerLoading(false);
+  };
+
+  const handleStartEditing = () => {
+    if (!selectedContact) return;
+    setEditName(selectedContact.name || '');
+    setEditEmail(selectedContact.email || '');
+    setEditPhone(selectedContact.phone || '');
+    setEditUtmSource(selectedContact.utmSource || '');
+    setEditSelectedTagIds(
+      Array.isArray(selectedContact.tags) ? selectedContact.tags.map((t: any) => t.tag.id) : []
+    );
+    setEditError(null);
+    setIsEditingContact(true);
+  };
+
+  const handleCancelEditing = () => {
+    setIsEditingContact(false);
+    setEditError(null);
+  };
+
+  const handleSaveEditContact = async (e?: React.FormEvent) => {
+    if (e) e.preventDefault();
+    if (!selectedContact) return;
+
+    if (!editName.trim()) {
+      setEditError('O nome do lead é obrigatório.');
+      return;
+    }
+    if (!editEmail.trim()) {
+      setEditError('O e-mail do lead é obrigatório.');
+      return;
+    }
+
+    setEditSaving(true);
+    setEditError(null);
+
+    try {
+      const res = await fetch(`/api/contacts/${selectedContact.id}`, {
+        method: 'PATCH',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          name: editName.trim(),
+          email: editEmail.trim(),
+          phone: editPhone.trim(),
+          utmSource: editUtmSource.trim(),
+          tagIds: editSelectedTagIds,
+        }),
+      });
+
+      const data = await res.json();
+      if (!res.ok || data.error) {
+        setEditError(data.error || 'Erro ao salvar alterações no lead.');
+        setEditSaving(false);
+        return;
+      }
+
+      setSelectedContact(data.contact);
+      setIsEditingContact(false);
+      setBulkNotice({
+        type: 'success',
+        message: `Dados de "${data.contact.name}" atualizados com sucesso!`,
+      });
+      fetchContacts();
+    } catch (err: any) {
+      setEditError(err.message || 'Falha ao salvar dados.');
+    } finally {
+      setEditSaving(false);
+    }
+  };
+
+  const handleCreateNewTagInEdit = async () => {
+    const trimmed = editNewTagInput.trim();
+    if (!trimmed) return;
+
+    const existing = tagsList.find((t) => t.name.toLowerCase() === trimmed.toLowerCase());
+    if (existing) {
+      if (!editSelectedTagIds.includes(existing.id)) {
+        setEditSelectedTagIds((prev) => [...prev, existing.id]);
+      }
+      setEditNewTagInput('');
+      return;
+    }
+
+    try {
+      const res = await fetch('/api/tags', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ name: trimmed, color: '#8b5cf6' }),
+      });
+      const data = await res.json();
+      if (data.tag) {
+        setTagsList((prev) => [...prev, data.tag]);
+        setEditSelectedTagIds((prev) => [...prev, data.tag.id]);
+        setEditNewTagInput('');
+      }
+    } catch {}
   };
 
   const handleToggleOptOut = async (id: string, currentStatus: string) => {
@@ -757,15 +877,29 @@ export default function ContactsPage() {
                         </span>
                       </td>
                       <td className="p-4 text-right">
-                        <button
-                          onClick={(e) => {
-                            e.stopPropagation();
-                            openContactDetails(c.id);
-                          }}
-                          className="text-indigo-600 hover:text-indigo-800 font-semibold text-xs"
-                        >
-                          Ver Perfil
-                        </button>
+                        <div className="flex items-center justify-end gap-2">
+                          <button
+                            type="button"
+                            onClick={(e) => {
+                              e.stopPropagation();
+                              openContactDetails(c.id, true);
+                            }}
+                            className="p-1.5 rounded-lg text-slate-400 hover:text-indigo-600 hover:bg-indigo-50 transition-colors"
+                            title="Editar dados deste lead"
+                          >
+                            <Edit2 className="w-3.5 h-3.5" />
+                          </button>
+                          <button
+                            type="button"
+                            onClick={(e) => {
+                              e.stopPropagation();
+                              openContactDetails(c.id, false);
+                            }}
+                            className="text-indigo-600 hover:text-indigo-800 font-semibold text-xs"
+                          >
+                            Ver Perfil
+                          </button>
+                        </div>
                       </td>
                     </tr>
                   );
@@ -1091,77 +1225,291 @@ export default function ContactsPage() {
         </div>
       )}
 
-      {/* Drawer Lateral com Perfil Completo do Lead */}
+      {/* Drawer Lateral com Perfil Completo do Lead e Edição */}
       {selectedContact && (
         <div className="fixed inset-0 bg-slate-900/40 z-50 flex justify-end">
-          <div className="w-full max-w-md bg-white h-full shadow-2xl p-6 overflow-y-auto flex flex-col justify-between">
-            <div>
-              <div className="flex items-center justify-between pb-4 border-b border-slate-200">
+          <div className="w-full max-w-md bg-white h-full shadow-2xl p-6 overflow-y-auto flex flex-col justify-between animate-in slide-in-from-right duration-200">
+            {isEditingContact ? (
+              /* ================= MODO DE EDIÇÃO ================= */
+              <form onSubmit={handleSaveEditContact} className="flex flex-col h-full justify-between">
                 <div>
-                  <h3 className="font-bold text-slate-900 text-lg">{selectedContact.name}</h3>
-                  <p className="text-xs text-slate-500">{selectedContact.email}</p>
-                </div>
-                <button
-                  onClick={() => setSelectedContact(null)}
-                  className="p-1 rounded-lg hover:bg-slate-100 text-slate-400 hover:text-slate-600"
-                >
-                  <X className="w-5 h-5" />
-                </button>
-              </div>
+                  <div className="flex items-center justify-between pb-4 border-b border-slate-200">
+                    <div className="flex items-center gap-2">
+                      <div className="w-8 h-8 rounded-lg bg-indigo-50 text-indigo-600 flex items-center justify-center font-bold">
+                        <Edit2 className="w-4 h-4" />
+                      </div>
+                      <div>
+                        <h3 className="font-bold text-slate-900 text-base">Editar Dados do Lead</h3>
+                        <p className="text-[11px] text-slate-500">Corrija nome, e-mail, telefone ou tags</p>
+                      </div>
+                    </div>
+                    <button
+                      type="button"
+                      onClick={handleCancelEditing}
+                      className="p-1 rounded-lg hover:bg-slate-100 text-slate-400 hover:text-slate-600"
+                    >
+                      <X className="w-5 h-5" />
+                    </button>
+                  </div>
 
-              {/* Informações de Contato */}
-              <div className="py-4 space-y-3 text-xs">
-                <div>
-                  <span className="text-slate-400 block text-[10px] uppercase font-semibold">Telefone WhatsApp</span>
-                  <span className="text-slate-800 font-medium">{selectedContact.phone || 'Não informado'}</span>
-                </div>
-                <div>
-                  <span className="text-slate-400 block text-[10px] uppercase font-semibold">Origem do Lead</span>
-                  <span className="text-slate-800 font-medium font-mono">{selectedContact.utmSource || 'Desconhecido'}</span>
-                </div>
-                <div>
-                  <span className="text-slate-400 block text-[10px] uppercase font-semibold">Consentimento LGPD</span>
-                  <span className="text-emerald-700 font-medium flex items-center gap-1 mt-0.5">
-                    <CheckCircle className="w-3.5 h-3.5" />
-                    Registrado e validado
-                  </span>
-                </div>
+                  {editError && (
+                    <div className="mt-4 p-3 bg-red-50 border border-red-200 rounded-xl text-red-700 text-xs flex items-center gap-2">
+                      <AlertCircle className="w-4 h-4 shrink-0 text-red-500" />
+                      <span>{editError}</span>
+                    </div>
+                  )}
 
-                {/* Tags */}
-                <div>
-                  <span className="text-slate-400 block text-[10px] uppercase font-semibold mb-1">Tags Atribuídas</span>
-                  <div className="flex flex-wrap gap-1.5">
-                    {selectedContact.tags?.map((t: any) => (
-                      <span
-                        key={t.tag.id}
-                        style={{ backgroundColor: `${t.tag.color}15`, color: t.tag.color }}
-                        className="px-2 py-0.5 rounded font-medium text-[11px] border border-current"
-                      >
-                        {t.tag.name}
+                  <div className="py-4 space-y-4 text-xs">
+                    {/* Nome Completo */}
+                    <div>
+                      <label className="block text-slate-700 font-semibold mb-1">
+                        Nome Completo <span className="text-red-500">*</span>
+                      </label>
+                      <input
+                        type="text"
+                        required
+                        value={editName}
+                        onChange={(e) => setEditName(e.target.value)}
+                        placeholder="Ex: Carlos Henrique"
+                        className="w-full p-2.5 border border-slate-200 rounded-xl focus:ring-2 focus:ring-indigo-500 outline-none text-slate-800 text-xs font-medium"
+                      />
+                    </div>
+
+                    {/* E-mail */}
+                    <div>
+                      <label className="block text-slate-700 font-semibold mb-1">
+                        E-mail <span className="text-red-500">*</span>
+                      </label>
+                      <input
+                        type="email"
+                        required
+                        value={editEmail}
+                        onChange={(e) => setEditEmail(e.target.value)}
+                        placeholder="carlos@exemplo.com"
+                        className="w-full p-2.5 border border-slate-200 rounded-xl focus:ring-2 focus:ring-indigo-500 outline-none text-slate-800 text-xs font-medium"
+                      />
+                    </div>
+
+                    {/* Telefone / WhatsApp */}
+                    <div>
+                      <label className="block text-slate-700 font-semibold mb-1">
+                        WhatsApp / Telefone
+                      </label>
+                      <input
+                        type="text"
+                        value={editPhone}
+                        onChange={(e) => setEditPhone(e.target.value)}
+                        placeholder="Ex: 5535998754516"
+                        className="w-full p-2.5 border border-slate-200 rounded-xl focus:ring-2 focus:ring-indigo-500 outline-none text-slate-800 text-xs font-medium font-mono"
+                      />
+                      <span className="text-[10px] text-slate-400 mt-1 block">
+                        Dica: Digite com DDD (Ex: 35998754516 ou +5535998754516)
                       </span>
-                    ))}
+                    </div>
+
+                    {/* Origem do Lead */}
+                    <div>
+                      <label className="block text-slate-700 font-semibold mb-1">
+                        Origem do Tráfego / UTM
+                      </label>
+                      <input
+                        type="text"
+                        value={editUtmSource}
+                        onChange={(e) => setEditUtmSource(e.target.value)}
+                        placeholder="Ex: instagram, organico, facebook, google"
+                        className="w-full p-2.5 border border-slate-200 rounded-xl focus:ring-2 focus:ring-indigo-500 outline-none text-slate-800 text-xs font-medium font-mono"
+                      />
+                    </div>
+
+                    {/* Tags Atribuídas */}
+                    <div>
+                      <label className="block text-slate-700 font-semibold mb-1.5">
+                        Tags Atribuídas
+                      </label>
+                      <div className="p-2.5 bg-slate-50 border border-slate-200 rounded-xl max-h-36 overflow-y-auto space-y-1">
+                        {tagsList.length === 0 ? (
+                          <p className="text-slate-400 text-center py-2 text-[11px]">Nenhuma tag criada no ambiente.</p>
+                        ) : (
+                          <div className="flex flex-wrap gap-1.5">
+                            {tagsList.map((t) => {
+                              const isSelected = editSelectedTagIds.includes(t.id);
+                              return (
+                                <button
+                                  key={t.id}
+                                  type="button"
+                                  onClick={() =>
+                                    setEditSelectedTagIds((prev) =>
+                                      prev.includes(t.id) ? prev.filter((id) => id !== t.id) : [...prev, t.id]
+                                    )
+                                  }
+                                  style={{
+                                    backgroundColor: isSelected ? `${t.color}25` : '#ffffff',
+                                    color: isSelected ? t.color : '#64748b',
+                                    borderColor: isSelected ? t.color : '#e2e8f0',
+                                  }}
+                                  className={`px-2.5 py-1 rounded-lg text-[11px] font-semibold border flex items-center gap-1 transition-all cursor-pointer ${
+                                    isSelected ? 'shadow-xs font-bold' : 'hover:border-slate-300'
+                                  }`}
+                                >
+                                  {isSelected && <Check className="w-3 h-3 stroke-[2.5]" />}
+                                  <span>{t.name}</span>
+                                </button>
+                              );
+                            })}
+                          </div>
+                        )}
+                      </div>
+
+                      {/* Criar e adicionar nova tag rapidamente */}
+                      <div className="mt-2 flex items-center gap-1.5">
+                        <input
+                          type="text"
+                          value={editNewTagInput}
+                          onChange={(e) => setEditNewTagInput(e.target.value)}
+                          onKeyDown={(e) => {
+                            if (e.key === 'Enter') {
+                              e.preventDefault();
+                              handleCreateNewTagInEdit();
+                            }
+                          }}
+                          placeholder="+ Criar e vincular nova tag..."
+                          className="flex-1 p-2 border border-slate-200 rounded-lg text-xs outline-none focus:border-indigo-500"
+                        />
+                        <button
+                          type="button"
+                          onClick={handleCreateNewTagInEdit}
+                          className="px-3 py-2 bg-indigo-50 hover:bg-indigo-100 text-indigo-700 font-semibold text-xs rounded-lg transition-colors cursor-pointer"
+                        >
+                          Adicionar
+                        </button>
+                      </div>
+                    </div>
                   </div>
                 </div>
-              </div>
-            </div>
 
-            {/* Ações Rápidas no Drawer */}
-            <div className="pt-4 border-t border-slate-200 space-y-2">
-              <button
-                onClick={() => handleToggleOptOut(selectedContact.id, selectedContact.status)}
-                className="w-full flex items-center justify-center gap-2 p-2 border border-slate-200 hover:bg-slate-50 text-slate-700 rounded-lg text-xs font-semibold"
-              >
-                <UserX className="w-4 h-4 text-amber-600" />
-                <span>{selectedContact.status === 'ACTIVE' ? 'Descadastrar (Opt-out)' : 'Reativar Cadastro'}</span>
-              </button>
-              <button
-                onClick={() => handleDeleteContact(selectedContact.id)}
-                className="w-full flex items-center justify-center gap-2 p-2 bg-red-50 hover:bg-red-100 text-red-700 rounded-lg text-xs font-semibold"
-              >
-                <Trash2 className="w-4 h-4" />
-                <span>Excluir Contato Definitivamente</span>
-              </button>
-            </div>
+                {/* Botões do Rodapé de Edição */}
+                <div className="pt-4 border-t border-slate-200 flex items-center gap-2">
+                  <button
+                    type="button"
+                    onClick={handleCancelEditing}
+                    disabled={editSaving}
+                    className="flex-1 py-2.5 border border-slate-200 text-slate-700 hover:bg-slate-50 font-semibold rounded-xl text-xs transition-colors cursor-pointer"
+                  >
+                    Cancelar
+                  </button>
+                  <button
+                    type="submit"
+                    disabled={editSaving}
+                    className="flex-1 py-2.5 bg-emerald-600 hover:bg-emerald-700 text-white font-semibold rounded-xl text-xs shadow-md shadow-emerald-600/20 flex items-center justify-center gap-1.5 transition-colors cursor-pointer"
+                  >
+                    {editSaving ? (
+                      <Loader2 className="w-3.5 h-3.5 animate-spin" />
+                    ) : (
+                      <Save className="w-3.5 h-3.5" />
+                    )}
+                    <span>{editSaving ? 'Salvando...' : 'Salvar Alterações'}</span>
+                  </button>
+                </div>
+              </form>
+            ) : (
+              /* ================= MODO DE VISUALIZAÇÃO ================= */
+              <>
+                <div>
+                  <div className="flex items-center justify-between pb-4 border-b border-slate-200">
+                    <div>
+                      <h3 className="font-bold text-slate-900 text-lg">{selectedContact.name}</h3>
+                      <p className="text-xs text-slate-500">{selectedContact.email}</p>
+                    </div>
+                    <div className="flex items-center gap-1.5">
+                      <button
+                        onClick={handleStartEditing}
+                        className="px-3 py-1.5 rounded-lg bg-indigo-50 hover:bg-indigo-100 text-indigo-700 font-semibold text-xs flex items-center gap-1.5 transition-colors cursor-pointer"
+                        title="Editar nome, e-mail, telefone ou tags deste lead"
+                      >
+                        <Edit2 className="w-3.5 h-3.5" />
+                        <span>Editar</span>
+                      </button>
+                      <button
+                        onClick={() => setSelectedContact(null)}
+                        className="p-1 rounded-lg hover:bg-slate-100 text-slate-400 hover:text-slate-600"
+                      >
+                        <X className="w-5 h-5" />
+                      </button>
+                    </div>
+                  </div>
+
+                  {/* Informações de Contato */}
+                  <div className="py-4 space-y-3.5 text-xs">
+                    <div className="p-3 bg-slate-50 border border-slate-100 rounded-xl">
+                      <span className="text-slate-400 block text-[10px] uppercase font-semibold">Telefone WhatsApp</span>
+                      <span className="text-slate-900 font-bold text-sm font-mono mt-0.5 block">
+                        {selectedContact.phone || <span className="text-slate-400 font-normal italic">Não informado</span>}
+                      </span>
+                    </div>
+
+                    <div className="p-3 bg-slate-50 border border-slate-100 rounded-xl">
+                      <span className="text-slate-400 block text-[10px] uppercase font-semibold">Origem do Lead</span>
+                      <span className="text-slate-800 font-medium font-mono mt-0.5 block">
+                        {selectedContact.utmSource || 'Desconhecido'}
+                      </span>
+                    </div>
+
+                    <div className="p-3 bg-slate-50 border border-slate-100 rounded-xl">
+                      <span className="text-slate-400 block text-[10px] uppercase font-semibold">Consentimento LGPD</span>
+                      <span className="text-emerald-700 font-semibold flex items-center gap-1 mt-0.5">
+                        <CheckCircle className="w-3.5 h-3.5" />
+                        Registrado e validado
+                      </span>
+                    </div>
+
+                    {/* Tags */}
+                    <div>
+                      <span className="text-slate-400 block text-[10px] uppercase font-semibold mb-1.5">Tags Atribuídas</span>
+                      <div className="flex flex-wrap gap-1.5">
+                        {selectedContact.tags && selectedContact.tags.length > 0 ? (
+                          selectedContact.tags.map((t: any) => (
+                            <span
+                              key={t.tag.id}
+                              style={{ backgroundColor: `${t.tag.color}15`, color: t.tag.color }}
+                              className="px-2.5 py-1 rounded-lg font-semibold text-[11px] border border-current"
+                            >
+                              {t.tag.name}
+                            </span>
+                          ))
+                        ) : (
+                          <span className="text-slate-400 italic text-[11px]">Nenhuma tag atribuída</span>
+                        )}
+                      </div>
+                    </div>
+                  </div>
+                </div>
+
+                {/* Ações Rápidas no Drawer */}
+                <div className="pt-4 border-t border-slate-200 space-y-2">
+                  <button
+                    onClick={handleStartEditing}
+                    className="w-full flex items-center justify-center gap-2 p-2.5 bg-indigo-600 hover:bg-indigo-700 text-white rounded-xl text-xs font-semibold shadow-sm shadow-indigo-600/20 transition-colors cursor-pointer"
+                  >
+                    <Edit2 className="w-4 h-4" />
+                    <span>Editar Dados do Lead</span>
+                  </button>
+                  <button
+                    onClick={() => handleToggleOptOut(selectedContact.id, selectedContact.status)}
+                    className="w-full flex items-center justify-center gap-2 p-2 border border-slate-200 hover:bg-slate-50 text-slate-700 rounded-xl text-xs font-semibold transition-colors cursor-pointer"
+                  >
+                    <UserX className="w-4 h-4 text-amber-600" />
+                    <span>{selectedContact.status === 'ACTIVE' ? 'Descadastrar (Opt-out)' : 'Reativar Cadastro'}</span>
+                  </button>
+                  <button
+                    onClick={() => handleDeleteContact(selectedContact.id)}
+                    className="w-full flex items-center justify-center gap-2 p-2 bg-red-50 hover:bg-red-100 text-red-700 rounded-xl text-xs font-semibold transition-colors cursor-pointer"
+                  >
+                    <Trash2 className="w-4 h-4" />
+                    <span>Excluir Contato Definitivamente</span>
+                  </button>
+                </div>
+              </>
+            )}
           </div>
         </div>
       )}
