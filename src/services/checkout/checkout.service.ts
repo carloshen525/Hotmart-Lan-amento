@@ -1,6 +1,7 @@
 import { prisma } from '@/lib/prisma';
 import { CheckoutPlatformId } from './types';
 import { checkoutWebhookProcessor } from './webhook-processor';
+import crypto from 'crypto';
 
 export class CheckoutService {
   /**
@@ -13,6 +14,11 @@ export class CheckoutService {
       include: {
         _count: {
           select: { webhookEvents: true, products: true },
+        },
+        integrationTags: {
+          include: {
+            tag: true,
+          },
         },
       },
       orderBy: { createdAt: 'desc' },
@@ -28,6 +34,11 @@ export class CheckoutService {
       where: { id, tenantId },
       include: {
         products: true,
+        integrationTags: {
+          include: {
+            tag: true,
+          },
+        },
         webhookEvents: {
           take: 20,
           orderBy: { createdAt: 'desc' },
@@ -37,7 +48,7 @@ export class CheckoutService {
   }
 
   /**
-   * Cria uma nova integração de checkout
+   * Cria uma nova integração de checkout com webhook e chave exclusivos
    */
   async createIntegration(data: {
     tenantId: string;
@@ -47,8 +58,28 @@ export class CheckoutService {
     allowedEvents?: string[];
     productName?: string;
     productId?: string;
+    tagIds?: string[];
+    baseUrl?: string;
+    customId?: string;
   }) {
     await checkoutWebhookProcessor.ensureTables();
+
+    // 1. Gera ou utiliza identificador exclusivo de 8 caracteres hexadecimais (ex: 8a2d91f6)
+    let uniqueId = data.customId?.trim() || crypto.randomBytes(4).toString('hex');
+    let exists = await prisma.checkoutIntegration.findUnique({ where: { id: uniqueId } });
+    while (exists && !data.customId) {
+      uniqueId = crypto.randomBytes(4).toString('hex');
+      exists = await prisma.checkoutIntegration.findUnique({ where: { id: uniqueId } });
+    }
+
+    // 2. Gera chave secreta exclusiva se o usuário não tiver preenchido uma personalizada
+    const secretKey =
+      data.secretKey?.trim() ||
+      `whsec_${crypto.randomBytes(12).toString('hex')}`;
+
+    // 3. Monta a URL exclusiva do Webhook
+    const base = data.baseUrl?.replace(/\/$/, '') || '';
+    const webhookUrl = `${base}/api/webhooks/checkout/${uniqueId}`;
 
     const allowedEventsJson = data.allowedEvents
       ? JSON.stringify(data.allowedEvents)
@@ -63,18 +94,35 @@ export class CheckoutService {
           'chargeback',
         ]);
 
-    return prisma.checkoutIntegration.create({
+    const integration = await prisma.checkoutIntegration.create({
       data: {
+        id: uniqueId,
         tenantId: data.tenantId,
         platform: data.platform,
         name: data.name.trim(),
-        secretKey: data.secretKey?.trim() || null,
+        secretKey,
+        webhookUrl,
         allowedEvents: allowedEventsJson,
         productName: data.productName?.trim() || null,
         productId: data.productId?.trim() || null,
         status: 'ACTIVE',
       },
     });
+
+    // 4. Salva tags associadas à integração
+    if (data.tagIds && Array.isArray(data.tagIds) && data.tagIds.length > 0) {
+      for (const tagId of data.tagIds) {
+        if (!tagId) continue;
+        await prisma.integrationTag.create({
+          data: {
+            integrationId: integration.id,
+            tagId,
+          },
+        }).catch(() => {});
+      }
+    }
+
+    return this.getIntegration(integration.id, data.tenantId);
   }
 
   /**
@@ -91,6 +139,8 @@ export class CheckoutService {
       allowedEvents?: string[];
       productName?: string | null;
       productId?: string | null;
+      tagIds?: string[];
+      webhookUrl?: string | null;
     }
   ) {
     await checkoutWebhookProcessor.ensureTables();
@@ -100,16 +150,40 @@ export class CheckoutService {
     if (data.platform !== undefined) updateData.platform = data.platform;
     if (data.status !== undefined) updateData.status = data.status;
     if (data.secretKey !== undefined) updateData.secretKey = data.secretKey?.trim() || null;
+    if (data.webhookUrl !== undefined) updateData.webhookUrl = data.webhookUrl?.trim() || null;
     if (data.allowedEvents !== undefined) {
       updateData.allowedEvents = JSON.stringify(data.allowedEvents);
     }
     if (data.productName !== undefined) updateData.productName = data.productName?.trim() || null;
     if (data.productId !== undefined) updateData.productId = data.productId?.trim() || null;
 
-    return prisma.checkoutIntegration.updateMany({
-      where: { id, tenantId },
-      data: updateData,
-    });
+    if (Object.keys(updateData).length > 0) {
+      await prisma.checkoutIntegration.updateMany({
+        where: { id, tenantId },
+        data: updateData,
+      });
+    }
+
+    // Atualiza tags vinculadas se fornecidas
+    if (data.tagIds !== undefined) {
+      await prisma.integrationTag.deleteMany({
+        where: { integrationId: id },
+      });
+
+      if (Array.isArray(data.tagIds) && data.tagIds.length > 0) {
+        for (const tagId of data.tagIds) {
+          if (!tagId) continue;
+          await prisma.integrationTag.create({
+            data: {
+              integrationId: id,
+              tagId,
+            },
+          }).catch(() => {});
+        }
+      }
+    }
+
+    return this.getIntegration(id, tenantId);
   }
 
   /**

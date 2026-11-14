@@ -28,12 +28,19 @@ import {
   ExternalLink,
   X,
   Layers,
+  Tags,
 } from 'lucide-react';
 import {
   CheckoutPlatformId,
   PLATFORM_PRESETS,
   StandardCheckoutEventType,
 } from '@/services/checkout/types';
+
+interface TagItem {
+  id: string;
+  name: string;
+  color: string;
+}
 
 interface IntegrationItem {
   id: string;
@@ -42,10 +49,20 @@ interface IntegrationItem {
   name: string;
   status: 'ACTIVE' | 'INACTIVE';
   secretKey?: string | null;
+  webhookUrl?: string | null;
   allowedEvents: string;
   productName?: string | null;
   productId?: string | null;
   createdAt: string;
+  integrationTags?: Array<{
+    id: string;
+    tagId: string;
+    tag: {
+      id: string;
+      name: string;
+      color: string;
+    };
+  }>;
   _count?: {
     webhookEvents: number;
     products: number;
@@ -104,6 +121,7 @@ export default function IntegrationsPage() {
   const [isModalOpen, setIsModalOpen] = useState(false);
   const [editingIntegrationId, setEditingIntegrationId] = useState<string | null>(null);
   const [modalForm, setModalForm] = useState<{
+    generatedUniqueId: string;
     platform: CheckoutPlatformId;
     name: string;
     productName: string;
@@ -111,7 +129,9 @@ export default function IntegrationsPage() {
     secretKey: string;
     allowedEvents: StandardCheckoutEventType[];
     status: 'ACTIVE' | 'INACTIVE';
+    selectedTagIds: string[];
   }>({
+    generatedUniqueId: '',
     platform: 'HOTMART',
     name: '',
     productName: '',
@@ -128,9 +148,15 @@ export default function IntegrationsPage() {
       'chargeback',
     ],
     status: 'ACTIVE',
+    selectedTagIds: [],
   });
   const [savingModal, setSavingModal] = useState(false);
   const [modalError, setModalError] = useState<string | null>(null);
+
+  // Tags para aplicação automática
+  const [availableTags, setAvailableTags] = useState<TagItem[]>([]);
+  const [newTagName, setNewTagName] = useState('');
+  const [creatingTag, setCreatingTag] = useState(false);
 
   // Copied states
   const [copiedId, setCopiedId] = useState<string | null>(null);
@@ -191,6 +217,43 @@ export default function IntegrationsPage() {
     }
   };
 
+  const fetchTags = async () => {
+    try {
+      const res = await fetch('/api/tags');
+      const data = await res.json();
+      if (data.tags) {
+        setAvailableTags(data.tags);
+      }
+    } catch {}
+  };
+
+  const handleCreateNewTagInline = async () => {
+    if (!newTagName.trim()) return;
+    setCreatingTag(true);
+    try {
+      const res = await fetch('/api/tags', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ name: newTagName.trim() }),
+      });
+      const data = await res.json();
+      if (data.tag) {
+        setAvailableTags((prev) => {
+          if (prev.some((t) => t.id === data.tag.id)) return prev;
+          return [...prev, data.tag];
+        });
+        setModalForm((prev) => ({
+          ...prev,
+          selectedTagIds: prev.selectedTagIds.includes(data.tag.id)
+            ? prev.selectedTagIds
+            : [...prev.selectedTagIds, data.tag.id],
+        }));
+        setNewTagName('');
+      }
+    } catch {}
+    setCreatingTag(false);
+  };
+
   useEffect(() => {
     fetch('/api/auth/me')
       .then((res) => res.json())
@@ -205,6 +268,7 @@ export default function IntegrationsPage() {
       .catch(() => {});
 
     fetchIntegrations();
+    fetchTags();
   }, []);
 
   useEffect(() => {
@@ -232,12 +296,15 @@ export default function IntegrationsPage() {
   const handleOpenCreateModal = () => {
     setEditingIntegrationId(null);
     setCreatedWebhookSuccess(null);
+    const genId = Math.random().toString(36).substring(2, 10);
+    const genSecret = 'whsec_' + Math.random().toString(36).substring(2, 14);
     setModalForm({
+      generatedUniqueId: genId,
       platform: 'HOTMART',
       name: '',
       productName: '',
       productId: '',
-      secretKey: '',
+      secretKey: genSecret,
       allowedEvents: [
         'purchase_approved',
         'pix_generated',
@@ -249,6 +316,7 @@ export default function IntegrationsPage() {
         'chargeback',
       ],
       status: 'ACTIVE',
+      selectedTagIds: [],
     });
     setModalError(null);
     setIsModalOpen(true);
@@ -265,6 +333,7 @@ export default function IntegrationsPage() {
     }
 
     setModalForm({
+      generatedUniqueId: item.id,
       platform: item.platform,
       name: item.name,
       productName: item.productName || '',
@@ -272,6 +341,7 @@ export default function IntegrationsPage() {
       secretKey: item.secretKey || '',
       allowedEvents: allowed,
       status: item.status,
+      selectedTagIds: (item.integrationTags || []).map((it) => it.tagId),
     });
     setModalError(null);
     setIsModalOpen(true);
@@ -300,13 +370,17 @@ export default function IntegrationsPage() {
       const res = await fetch(url, {
         method,
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify(modalForm),
+        body: JSON.stringify({
+          ...modalForm,
+          tagIds: modalForm.selectedTagIds,
+          customId: !editingIntegrationId ? modalForm.generatedUniqueId : undefined,
+        }),
       });
 
       const data = await res.json();
       if (res.ok) {
         fetchIntegrations();
-        const integrationId = editingIntegrationId || data.integration?.id;
+        const integrationId = editingIntegrationId || data.integration?.id || modalForm.generatedUniqueId;
         if (integrationId) {
           setCreatedWebhookSuccess({
             id: integrationId,
@@ -770,6 +844,26 @@ export default function IntegrationsPage() {
                           >
                             {copiedId === `secret_${item.id}` ? 'Copiado!' : 'Copiar'}
                           </button>
+                        </div>
+                      )}
+
+                      {/* Tags aplicadas automaticamente */}
+                      {item.integrationTags && item.integrationTags.length > 0 && (
+                        <div className="space-y-1.5 pt-1">
+                          <span className="text-[10px] font-bold uppercase tracking-wider text-slate-500 block">
+                            Tags automáticas ({item.integrationTags.length}):
+                          </span>
+                          <div className="flex flex-wrap gap-1.5">
+                            {item.integrationTags.map((it) => (
+                              <span
+                                key={it.id || it.tagId}
+                                className="inline-flex items-center px-2 py-0.5 rounded-md text-[11px] font-semibold text-white shadow-2xs"
+                                style={{ backgroundColor: it.tag?.color || '#6366f1' }}
+                              >
+                                #{it.tag?.name}
+                              </span>
+                            ))}
+                          </div>
                         </div>
                       )}
 
@@ -1397,15 +1491,15 @@ export default function IntegrationsPage() {
                     )}
                   </div>
 
-                  {/* DESTAQUE: URL DO WEBHOOK PARA COPIAR IMEDIATAMENTE */}
+                  {/* DESTAQUE: URL EXCLUSIVA DO WEBHOOK */}
                   <div className="p-4 rounded-2xl bg-indigo-50/80 border border-indigo-200 space-y-2">
                     <div className="flex items-center justify-between">
                       <label className="font-bold uppercase tracking-wider text-[11px] text-indigo-950 flex items-center gap-1.5">
                         <Sparkles className="w-3.5 h-3.5 text-indigo-600" />
-                        <span>URL para envio de dados (Webhook da Hotmart)</span>
+                        <span>URL do Webhook Exclusiva para esta Integração</span>
                       </label>
-                      <span className="text-[10px] font-bold text-indigo-700 bg-indigo-100 px-2 py-0.5 rounded-full">
-                        {editingIntegrationId ? 'URL da Integração' : 'Webhook Direto Disponível'}
+                      <span className="text-[10px] font-bold text-emerald-700 bg-emerald-100 px-2.5 py-0.5 rounded-full border border-emerald-200">
+                        100% Exclusiva e Isolada
                       </span>
                     </div>
 
@@ -1413,24 +1507,18 @@ export default function IntegrationsPage() {
                       <input
                         type="text"
                         readOnly
-                        value={
-                          editingIntegrationId
-                            ? getWebhookUrl(editingIntegrationId)
-                            : getDirectWebhookUrl()
-                        }
-                        className="flex-1 bg-transparent text-xs font-mono text-slate-800 focus:outline-none select-all"
+                        value={getWebhookUrl(editingIntegrationId || modalForm.generatedUniqueId)}
+                        className="flex-1 bg-transparent text-xs font-mono text-slate-800 focus:outline-none select-all font-semibold"
                       />
                       <button
                         type="button"
                         onClick={() =>
                           copyToClipboard(
-                            editingIntegrationId
-                              ? getWebhookUrl(editingIntegrationId)
-                              : getDirectWebhookUrl(),
+                            getWebhookUrl(editingIntegrationId || modalForm.generatedUniqueId),
                             'modal_url_preview'
                           )
                         }
-                        className={`flex items-center gap-1 px-3 py-1.5 rounded-lg text-xs font-bold transition-all shrink-0 ${
+                        className={`flex items-center gap-1 px-3 py-1.5 rounded-lg text-xs font-bold transition-all shrink-0 cursor-pointer ${
                           copiedId === 'modal_url_preview'
                             ? 'bg-emerald-600 text-white'
                             : 'bg-indigo-600 hover:bg-indigo-700 text-white shadow-xs'
@@ -1450,53 +1538,185 @@ export default function IntegrationsPage() {
                       </button>
                     </div>
                     <p className="text-[11px] text-indigo-900 leading-relaxed">
-                      👉 <strong>Pode copiar agora mesmo!</strong> Cole esta URL no campo <em>&quot;URL para envio de dados&quot;</em> na Hotmart. Ao clicar em <strong>&quot;Salvar Integração&quot;</strong> abaixo, sua configuração ficará salva e ativada.
+                      👉 <strong>Identificador único gerado:</strong> Cada integração possui seu próprio webhook exclusivo. Nunca reutilizamos URLs de outras plataformas ou cursos. Copie e cole no painel do seu checkout.
                     </p>
                   </div>
 
-                  {/* 2. Nome da Integração & Produto */}
-                  <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
-                    <div>
+                  {/* 2. Nome da Integração, Produto & Status */}
+                  <div className="grid grid-cols-1 sm:grid-cols-3 gap-3">
+                    <div className="sm:col-span-1">
                       <label className="block font-semibold text-slate-700 mb-1">
                         Nome da Integração *
                       </label>
                       <input
                         type="text"
                         required
-                        placeholder="Ex: Curso Marketing Digital 2026"
+                        placeholder="Ex: Curso Marketing 2026"
                         value={modalForm.name}
                         onChange={(e) => setModalForm({ ...modalForm, name: e.target.value })}
-                        className="w-full px-3 py-2 rounded-xl border border-slate-300 text-slate-900 focus:outline-none focus:ring-2 focus:ring-indigo-500 text-xs"
+                        className="w-full px-3 py-2 rounded-xl border border-slate-300 text-slate-900 focus:outline-none focus:ring-2 focus:ring-indigo-500 text-xs bg-white"
                       />
                     </div>
 
-                    <div>
+                    <div className="sm:col-span-1">
                       <label className="block font-semibold text-slate-700 mb-1">
                         Produto Vinculado (Opcional)
                       </label>
                       <input
                         type="text"
-                        placeholder="Ex: Mentoria Alta Performance"
+                        placeholder="Ex: Mentoria VIP"
                         value={modalForm.productName}
                         onChange={(e) => setModalForm({ ...modalForm, productName: e.target.value })}
-                        className="w-full px-3 py-2 rounded-xl border border-slate-300 text-slate-900 focus:outline-none focus:ring-2 focus:ring-indigo-500 text-xs"
+                        className="w-full px-3 py-2 rounded-xl border border-slate-300 text-slate-900 focus:outline-none focus:ring-2 focus:ring-indigo-500 text-xs bg-white"
                       />
+                    </div>
+
+                    <div className="sm:col-span-1">
+                      <label className="block font-semibold text-slate-700 mb-1">
+                        Status da Integração
+                      </label>
+                      <select
+                        value={modalForm.status}
+                        onChange={(e) => setModalForm({ ...modalForm, status: e.target.value as any })}
+                        className="w-full px-3 py-2 rounded-xl border border-slate-300 text-slate-900 focus:outline-none focus:ring-2 focus:ring-indigo-500 text-xs bg-white font-medium"
+                      >
+                        <option value="ACTIVE">🟢 Ativa (Processando)</option>
+                        <option value="INACTIVE">⏸ Inativa (Pausada)</option>
+                      </select>
                     </div>
                   </div>
 
-                  {/* 3. Chave Secreta / Token de Verificação */}
+                  {/* 3. Chave Secreta Exclusiva / Token da Plataforma */}
                   <div className="space-y-1">
-                    <label className="block font-semibold text-slate-700">
-                      {selectedPreset.tokenLabel}
-                    </label>
+                    <div className="flex items-center justify-between">
+                      <label className="block font-semibold text-slate-700">
+                        Chave Secreta / {selectedPreset.tokenLabel}
+                      </label>
+                      <span className="text-[10px] text-slate-400">Gerada automaticamente (editável)</span>
+                    </div>
                     <input
                       type="text"
-                      placeholder="Cole aqui o token de validação do webhook fornecido pela plataforma"
+                      placeholder="Token ou chave secreta exclusiva de validação"
                       value={modalForm.secretKey}
                       onChange={(e) => setModalForm({ ...modalForm, secretKey: e.target.value })}
-                      className="w-full px-3 py-2 rounded-xl border border-slate-300 text-slate-900 font-mono text-xs focus:outline-none focus:ring-2 focus:ring-indigo-500"
+                      className="w-full px-3 py-2 rounded-xl border border-slate-300 text-slate-900 font-mono text-xs focus:outline-none focus:ring-2 focus:ring-indigo-500 bg-white"
                     />
                     <p className="text-[11px] text-slate-400">{selectedPreset.tokenHint}</p>
+                  </div>
+
+                  {/* 4. SEÇÃO SOLICITADA: Tags aplicadas automaticamente */}
+                  <div className="space-y-3 p-4 bg-slate-50 rounded-2xl border border-slate-200">
+                    <div>
+                      <label className="font-bold uppercase tracking-wider text-[11px] text-slate-800 flex items-center gap-1.5">
+                        <Tags className="w-3.5 h-3.5 text-indigo-600" />
+                        <span>Tags aplicadas automaticamente</span>
+                      </label>
+                      <p className="text-[11px] text-slate-500 mt-0.5 leading-relaxed">
+                        Sempre que um lead for criado ou localizado através deste webhook, o sistema aplicará automaticamente todas as tags configuradas aqui (sem duplicidade).
+                      </p>
+                    </div>
+
+                    {/* Tags Atuais Selecionadas (Pills removíveis) */}
+                    <div className="flex flex-wrap gap-1.5 min-h-[36px] p-2 bg-white rounded-xl border border-slate-200">
+                      {modalForm.selectedTagIds.length === 0 ? (
+                        <span className="text-[11px] text-slate-400 italic">
+                          Nenhuma tag vinculada ainda. Selecione abaixo ou crie uma nova tag.
+                        </span>
+                      ) : (
+                        modalForm.selectedTagIds.map((tagId) => {
+                          const tag = availableTags.find((t) => t.id === tagId);
+                          return (
+                            <span
+                              key={tagId}
+                              className="inline-flex items-center gap-1 px-2.5 py-1 rounded-lg text-xs font-semibold text-white shadow-2xs"
+                              style={{ backgroundColor: tag?.color || '#6366f1' }}
+                            >
+                              #{tag?.name || 'Tag'}
+                              <button
+                                type="button"
+                                onClick={() =>
+                                  setModalForm({
+                                    ...modalForm,
+                                    selectedTagIds: modalForm.selectedTagIds.filter((id) => id !== tagId),
+                                  })
+                                }
+                                className="p-0.5 hover:bg-black/20 rounded-full transition-colors ml-0.5 cursor-pointer"
+                                title="Remover tag da integração"
+                              >
+                                <X className="w-3 h-3" />
+                              </button>
+                            </span>
+                          );
+                        })
+                      )}
+                    </div>
+
+                    {/* Criar nova tag diretamente nessa tela */}
+                    <div className="flex items-center gap-2 pt-1">
+                      <input
+                        type="text"
+                        placeholder="Digitar nova tag (ex: Aluno Hotmart, Curso Marketing)..."
+                        value={newTagName}
+                        onChange={(e) => setNewTagName(e.target.value)}
+                        onKeyDown={(e) => {
+                          if (e.key === 'Enter') {
+                            e.preventDefault();
+                            handleCreateNewTagInline();
+                          }
+                        }}
+                        className="flex-1 px-3 py-1.5 bg-white border border-slate-300 rounded-lg text-xs focus:ring-2 focus:ring-indigo-500/20 focus:border-indigo-500 outline-none"
+                      />
+                      <button
+                        type="button"
+                        disabled={creatingTag || !newTagName.trim()}
+                        onClick={handleCreateNewTagInline}
+                        className="px-3.5 py-1.5 bg-indigo-600 hover:bg-indigo-700 text-white rounded-lg text-xs font-semibold transition-all disabled:opacity-50 shrink-0 flex items-center gap-1 cursor-pointer shadow-xs"
+                      >
+                        <Plus className="w-3.5 h-3.5" />
+                        <span>{creatingTag ? 'Criando...' : '+ Criar Nova Tag'}</span>
+                      </button>
+                    </div>
+
+                    {/* Selecionar tags existentes disponíveis */}
+                    {availableTags.length > 0 && (
+                      <div className="space-y-1.5 pt-1">
+                        <span className="text-[10px] font-bold uppercase tracking-wider text-slate-500 block">
+                          Tags existentes (clique para vincular/desvincular):
+                        </span>
+                        <div className="flex flex-wrap gap-1.5 max-h-28 overflow-y-auto p-2 bg-white/70 rounded-lg border border-slate-100">
+                          {availableTags.map((t) => {
+                            const isSelected = modalForm.selectedTagIds.includes(t.id);
+                            return (
+                              <button
+                                key={t.id}
+                                type="button"
+                                onClick={() => {
+                                  if (isSelected) {
+                                    setModalForm({
+                                      ...modalForm,
+                                      selectedTagIds: modalForm.selectedTagIds.filter((id) => id !== t.id),
+                                    });
+                                  } else {
+                                    setModalForm({
+                                      ...modalForm,
+                                      selectedTagIds: [...modalForm.selectedTagIds, t.id],
+                                    });
+                                  }
+                                }}
+                                className={`px-2.5 py-1 rounded-lg text-xs font-semibold transition-all flex items-center gap-1 cursor-pointer ${
+                                  isSelected
+                                    ? 'bg-slate-900 text-white shadow-xs'
+                                    : 'bg-slate-100 text-slate-700 hover:bg-slate-200'
+                                }`}
+                              >
+                                <span>#{t.name}</span>
+                                {isSelected && <Check className="w-3 h-3 text-emerald-400" />}
+                              </button>
+                            );
+                          })}
+                        </div>
+                      </div>
+                    )}
                   </div>
 
                   {/* 4. Eventos Aceitos (Checkboxes) */}

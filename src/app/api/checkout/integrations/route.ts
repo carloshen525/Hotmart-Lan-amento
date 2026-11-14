@@ -31,7 +31,7 @@ export async function POST(request: Request) {
     }
 
     const body = await request.json();
-    const { platform, name, secretKey, allowedEvents, productName, productId } = body;
+    const { platform, name, secretKey, allowedEvents, productName, productId, tagIds, customId } = body;
 
     if (!platform || !name?.trim()) {
       return NextResponse.json(
@@ -39,6 +39,10 @@ export async function POST(request: Request) {
         { status: 400 }
       );
     }
+
+    const host = request.headers.get('host') || '';
+    const proto = request.headers.get('x-forwarded-proto') || 'http';
+    const origin = request.headers.get('origin') || (host ? `${proto}://${host}` : '');
 
     const integration = await checkoutService.createIntegration({
       tenantId,
@@ -48,6 +52,9 @@ export async function POST(request: Request) {
       allowedEvents,
       productName,
       productId,
+      tagIds,
+      baseUrl: origin,
+      customId,
     });
 
     return NextResponse.json({

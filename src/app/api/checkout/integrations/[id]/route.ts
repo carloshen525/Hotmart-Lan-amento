@@ -34,9 +34,9 @@ export async function PUT(
     }
 
     const body = await request.json();
-    await checkoutService.updateIntegration(params.id, tenantId, body);
+    const updated = await checkoutService.updateIntegration(params.id, tenantId, body);
 
-    return NextResponse.json({ success: true });
+    return NextResponse.json({ success: true, integration: updated });
   } catch (err: any) {
     return NextResponse.json({ error: err.message }, { status: 500 });
   }

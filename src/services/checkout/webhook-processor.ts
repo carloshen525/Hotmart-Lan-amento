@@ -70,6 +70,22 @@ export class CheckoutWebhookProcessor {
         );
       `);
 
+      await prisma.$executeRawUnsafe(`
+        CREATE TABLE IF NOT EXISTS "integration_tags" (
+          "id" TEXT PRIMARY KEY NOT NULL,
+          "integration_id" TEXT NOT NULL,
+          "tag_id" TEXT NOT NULL,
+          "created_at" DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
+          FOREIGN KEY ("integration_id") REFERENCES "integrations" ("id") ON DELETE CASCADE ON UPDATE CASCADE,
+          FOREIGN KEY ("tag_id") REFERENCES "Tag" ("id") ON DELETE CASCADE ON UPDATE CASCADE,
+          UNIQUE("integration_id", "tag_id")
+        );
+      `);
+
+      try {
+        await prisma.$executeRawUnsafe(`ALTER TABLE "integrations" ADD COLUMN "webhook_url" TEXT;`);
+      } catch {}
+
       CheckoutWebhookProcessor.tablesChecked = true;
     } catch {
       // Ignora se já existirem
@@ -97,7 +113,12 @@ export class CheckoutWebhookProcessor {
     if (integrationId) {
       integration = await prisma.checkoutIntegration.findUnique({
         where: { id: integrationId },
-        include: { tenant: true },
+        include: {
+          tenant: true,
+          integrationTags: {
+            include: { tag: true },
+          },
+        },
       });
 
       if (!integration) {
@@ -108,6 +129,17 @@ export class CheckoutWebhookProcessor {
           platform: 'CUSTOM',
           actionSummary: 'Integração de checkout não encontrada para o ID fornecido',
           error: 'Integração inexistente ou desativada',
+        };
+      }
+
+      if (integration.status === 'INACTIVE') {
+        return {
+          success: false,
+          duplicate: false,
+          eventType: 'unknown',
+          platform: integration.platform as CheckoutPlatformId,
+          actionSummary: `A integração "${integration.name}" está inativa/pausada. Webhook descartado.`,
+          error: 'Integração inativa',
         };
       }
 
@@ -381,7 +413,16 @@ export class CheckoutWebhookProcessor {
       }
     };
 
-    // 10. Executa regras conforme o evento padronizado (Multi-plataforma)
+    // 10. Aplicação automática das tags configuradas nesta integração exclusiva
+    if (integration?.integrationTags && integration.integrationTags.length > 0) {
+      for (const it of integration.integrationTags) {
+        if (it.tag?.name) {
+          await addTag(it.tag.name);
+        }
+      }
+    }
+
+    // 11. Executa regras conforme o evento padronizado (Multi-plataforma)
     switch (eventType) {
       case 'purchase_approved': {
         // Remove tags transitórias de cobrança

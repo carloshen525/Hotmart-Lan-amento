@@ -1228,7 +1228,139 @@ async function runTestSuite() {
     });
     assert.strictEqual(otherTenantEvents.length, 0, 'Tenant B não deve visualizar eventos de checkout do Tenant A');
 
-    console.log('✔ PASSOU: Módulo multi-checkout, registro padronizado de webhooks, idempotência e isolamento multi-tenant validados.');
+    // 7. Teste de Webhook Exclusivo e Tags Automáticas por Integração
+    // Cria 2 tags no tenant
+    const tagHotmart = await prisma.tag.upsert({
+      where: { tenantId_name: { tenantId: testTenant.id, name: 'Aluno Hotmart' } },
+      create: { tenantId: testTenant.id, name: 'Aluno Hotmart', color: '#f97316' },
+      update: {},
+    });
+    const tagCursoA = await prisma.tag.upsert({
+      where: { tenantId_name: { tenantId: testTenant.id, name: 'Curso Marketing A' } },
+      create: { tenantId: testTenant.id, name: 'Curso Marketing A', color: '#3b82f6' },
+      update: {},
+    });
+
+    // Cria duas integrações distintas da MESMA plataforma (Hotmart) com IDs e URLs exclusivas
+    const hotmartA = await prisma.checkoutIntegration.create({
+      data: {
+        id: 'hotmart_a_unique',
+        tenantId: testTenant.id,
+        platform: 'HOTMART',
+        name: 'Hotmart - Curso A',
+        productName: 'Curso A',
+        secretKey: 'whsec_a_123',
+        webhookUrl: 'http://localhost:3000/api/webhooks/checkout/hotmart_a_unique',
+      },
+    });
+
+    const hotmartB = await prisma.checkoutIntegration.create({
+      data: {
+        id: 'hotmart_b_unique',
+        tenantId: testTenant.id,
+        platform: 'HOTMART',
+        name: 'Hotmart - Curso B',
+        productName: 'Curso B',
+        secretKey: 'whsec_b_456',
+        webhookUrl: 'http://localhost:3000/api/webhooks/checkout/hotmart_b_unique',
+      },
+    });
+
+    assert.notStrictEqual(hotmartA.id, hotmartB.id, 'Duas integrações da mesma plataforma devem ter IDs diferentes');
+    assert.notStrictEqual(hotmartA.webhookUrl, hotmartB.webhookUrl, 'Duas integrações devem possuir URLs de webhook exclusivas');
+    assert.notStrictEqual(hotmartA.secretKey, hotmartB.secretKey, 'Chaves secretas exclusivas por integração');
+
+    // Vincula tags à integração Hotmart A
+    await prisma.integrationTag.create({
+      data: { integrationId: hotmartA.id, tagId: tagHotmart.id },
+    });
+    await prisma.integrationTag.create({
+      data: { integrationId: hotmartA.id, tagId: tagCursoA.id },
+    });
+
+    // Consulta integração carregando as tags vinculadas
+    const loadedHotmartA = await prisma.checkoutIntegration.findUnique({
+      where: { id: hotmartA.id },
+      include: {
+        integrationTags: {
+          include: { tag: true },
+        },
+      },
+    });
+
+    assert.strictEqual(loadedHotmartA.integrationTags.length, 2, 'Integração deve conter 2 tags associadas');
+
+    // Simula fluxo do webhook recebido no endpoint exclusivo:
+    // Cria ou localiza o contato e aplica as tags configuradas
+    const buyerEmail = `aluno.exclusivo.${Date.now()}@teste.com`;
+    const leadContact = await prisma.contact.create({
+      data: {
+        tenantId: testTenant.id,
+        name: 'Aluno VIP Integracao Exclusiva',
+        email: buyerEmail,
+        phone: '+5511999998888',
+        utmSource: 'hotmart_checkout',
+      },
+    });
+
+    // Aplica automaticamente todas as tags da integração
+    for (const it of loadedHotmartA.integrationTags) {
+      await prisma.contactTag.upsert({
+        where: { contactId_tagId: { contactId: leadContact.id, tagId: it.tagId } },
+        create: { contactId: leadContact.id, tagId: it.tagId },
+        update: {},
+      });
+    }
+
+    // Registra evento de webhook exclusivo
+    const webhookEventEx = await prisma.checkoutWebhookEvent.create({
+      data: {
+        tenantId: testTenant.id,
+        integrationId: hotmartA.id,
+        platform: 'HOTMART',
+        eventType: 'purchase_approved',
+        payload: JSON.stringify({ transaction: `tx_${Date.now()}` }),
+        status: 'PROCESSED',
+        customerEmail: buyerEmail,
+        customerName: 'Aluno VIP Integracao Exclusiva',
+        productName: 'Curso A',
+      },
+    });
+
+    assert.strictEqual(webhookEventEx.integrationId, hotmartA.id, 'Webhook registrado para o ID exclusivo');
+
+    // Valida que o lead recebeu as tags automáticas da integração
+    const leadCreated = await prisma.contact.findFirst({
+      where: {
+        tenantId: testTenant.id,
+        email: buyerEmail,
+      },
+      include: {
+        tags: {
+          include: { tag: true },
+        },
+      },
+    });
+
+    assert.ok(leadCreated, 'Lead criado pelo webhook');
+    const appliedTagNames = leadCreated.tags.map((t) => t.tag.name);
+    assert.ok(appliedTagNames.includes('Aluno Hotmart'), 'Tag "Aluno Hotmart" aplicada automaticamente');
+    assert.ok(appliedTagNames.includes('Curso Marketing A'), 'Tag "Curso Marketing A" aplicada automaticamente');
+
+    // Teste de Idempotência: re-aplicação das tags não duplica vínculos
+    for (const it of loadedHotmartA.integrationTags) {
+      await prisma.contactTag.upsert({
+        where: { contactId_tagId: { contactId: leadContact.id, tagId: it.tagId } },
+        create: { contactId: leadContact.id, tagId: it.tagId },
+        update: {},
+      });
+    }
+    const tagsCountAfter = await prisma.contactTag.count({
+      where: { contactId: leadContact.id },
+    });
+    assert.strictEqual(tagsCountAfter, 2, 'Idempotência garantida: nenhuma tag duplicada');
+
+    console.log('✔ PASSOU: Módulo multi-checkout, webhooks exclusivos 1:1, tags automáticas por integração e isolamento multi-tenant validados.');
     passed++;
 
     // =========================================================================

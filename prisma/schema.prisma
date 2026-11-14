@@ -102,15 +102,16 @@ model Contact {
 }
 
 model Tag {
-  id          String       @id @default(cuid())
-  tenantId    String
-  name        String
-  color       String       @default("#6366f1")
-  description String?
-  createdAt   DateTime     @default(now())
+  id              String           @id @default(cuid())
+  tenantId        String
+  name            String
+  color           String           @default("#6366f1")
+  description     String?
+  createdAt       DateTime         @default(now())
 
-  tenant      Tenant       @relation(fields: [tenantId], references: [id], onDelete: Cascade)
-  contacts    ContactTag[]
+  tenant          Tenant           @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+  contacts        ContactTag[]
+  integrationTags IntegrationTag[]
 
   @@unique([tenantId, name])
 }
@@ -423,24 +424,41 @@ model EmailTemplate {
 // 11. PLATAFORMAS DE CHECKOUT E INTEGRAÇÕES MULTI-PLATAFORMA
 // -------------------------------------------------------------
 model CheckoutIntegration {
-  id            String                 @id @default(cuid())
-  tenantId      String                 @map("tenant_id")
-  platform      String                 // HOTMART, KIWIFY, CAKTO, MONETIZZE, PERFECTPAY, EDUZZ, BRAIP, CUSTOM
-  name          String
-  status        String                 @default("ACTIVE") // ACTIVE, INACTIVE
-  secretKey     String?                @map("secret_key")
-  allowedEvents String                 @default("[\"purchase_approved\",\"purchase_waiting_payment\",\"billet_printed\",\"pix_generated\",\"cart_abandoned\",\"canceled\",\"refunded\",\"chargeback\"]") @map("allowed_events")
-  productName   String?                @map("product_name")
-  productId     String?                @map("product_id")
-  createdAt     DateTime               @default(now()) @map("created_at")
-  updatedAt     DateTime               @updatedAt @map("updated_at")
+  id              String                 @id @default(cuid())
+  tenantId        String                 @map("tenant_id")
+  platform        String                 // HOTMART, KIWIFY, CAKTO, MONETIZZE, PERFECTPAY, EDUZZ, BRAIP, CUSTOM
+  name            String
+  status          String                 @default("ACTIVE") // ACTIVE, INACTIVE
+  secretKey       String?                @map("secret_key")
+  webhookUrl      String?                @map("webhook_url")
+  allowedEvents   String                 @default("[\"purchase_approved\",\"purchase_waiting_payment\",\"billet_printed\",\"pix_generated\",\"cart_abandoned\",\"canceled\",\"refunded\",\"chargeback\"]") @map("allowed_events")
+  productName     String?                @map("product_name")
+  productId       String?                @map("product_id")
+  createdAt       DateTime               @default(now()) @map("created_at")
+  updatedAt       DateTime               @updatedAt @map("updated_at")
 
-  tenant        Tenant                 @relation(fields: [tenantId], references: [id], onDelete: Cascade)
-  webhookEvents CheckoutWebhookEvent[]
-  products      CheckoutProduct[]
+  tenant          Tenant                 @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+  webhookEvents   CheckoutWebhookEvent[]
+  products        CheckoutProduct[]
+  integrationTags IntegrationTag[]
 
   @@map("integrations")
   @@index([tenantId, platform])
+}
+
+model IntegrationTag {
+  id            String              @id @default(cuid())
+  integrationId String              @map("integration_id")
+  tagId         String              @map("tag_id")
+  createdAt     DateTime            @default(now()) @map("created_at")
+
+  integration   CheckoutIntegration @relation(fields: [integrationId], references: [id], onDelete: Cascade)
+  tag           Tag                 @relation(fields: [tagId], references: [id], onDelete: Cascade)
+
+  @@unique([integrationId, tagId])
+  @@map("integration_tags")
+  @@index([integrationId])
+  @@index([tagId])
 }
 
 model CheckoutWebhookEvent {
