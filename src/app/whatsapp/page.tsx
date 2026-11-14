@@ -773,10 +773,16 @@ export default function WhatsAppPage() {
                 </>
               ) : (
                 <div className="py-8 text-center space-y-3">
-                  <p className="text-slate-500">Aguardando geração do código QR...</p>
+                  <p className="text-slate-500 font-medium">Aguardando geração do código QR...</p>
                   <button
-                    onClick={handleOpenConnectModal}
-                    className="px-4 py-2 bg-emerald-600 text-white font-semibold rounded-lg text-xs"
+                    onClick={() => {
+                      if (activeModalInstanceId) {
+                        handleReconnectInstance(activeModalInstanceId);
+                      } else {
+                        handleOpenConnectModal();
+                      }
+                    }}
+                    className="px-4 py-2 bg-emerald-600 hover:bg-emerald-700 text-white font-semibold rounded-lg text-xs transition-colors cursor-pointer"
                   >
                     Tentar Novamente
                   </button>

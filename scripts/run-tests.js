@@ -376,8 +376,13 @@ async function runTestSuite() {
     // TESTE 13: Suporte a Múltiplos Números de WhatsApp e Compartilhamento Global entre Experts
     // -------------------------------------------------------------
     console.log('\n[TESTE 13] Suporte a Múltiplos Números e Compartilhamento Global...');
-    const instName = `inst_test_${Date.now()}`;
+    // Salva instâncias reais antes do teste
+    const savedRealInstances = await prisma.whatsappInstance.findMany({
+      where: { NOT: { instanceName: { startsWith: 'inst_test_' } } },
+    });
     await prisma.whatsappInstance.deleteMany({});
+
+    const instName = `inst_test_${Date.now()}`;
 
     // 1. Cria primeiro número
     const userInstance1 = await prisma.whatsappInstance.create({
@@ -423,6 +428,32 @@ async function runTestSuite() {
     assert.strictEqual(foundInst?.name, 'Atendimento & Suporte');
     console.log('✔ PASSOU: Múltiplos números de WhatsApp cadastrados e válidos entre todos os experts.');
     passed++;
+
+    // Restaura instâncias reais para preservar conexões de WhatsApp ativas
+    await prisma.whatsappInstance.deleteMany({
+      where: { instanceName: { startsWith: 'inst_test' } },
+    });
+    if (savedRealInstances.length > 0) {
+      for (const inst of savedRealInstances) {
+        await prisma.whatsappInstance.create({
+          data: {
+            id: inst.id,
+            tenantId: inst.tenantId,
+            name: inst.name,
+            instanceName: inst.instanceName,
+            instanceToken: inst.instanceToken,
+            status: inst.status,
+            phone: inst.phone,
+            profileName: inst.profileName,
+            isDefault: inst.isDefault,
+            qrcode: inst.qrcode,
+            lastConnectedAt: inst.lastConnectedAt,
+            createdAt: inst.createdAt,
+            updatedAt: inst.updatedAt,
+          },
+        });
+      }
+    }
 
     // -------------------------------------------------------------
     // TESTE 14: Ejeção e Transição de Sequência por Tags de Saída

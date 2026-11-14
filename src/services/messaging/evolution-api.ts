@@ -72,6 +72,34 @@ export class EvolutionApiService {
         { headers: { apikey: this.apiKey } }
       );
       const stateData = await stateRes.json().catch(() => ({}));
+
+      // Se a instância NÃO existe na Evolution API, cria automaticamente agora mesmo!
+      const isMissing =
+        stateRes.status === 404 ||
+        stateData?.status === 404 ||
+        JSON.stringify(stateData).includes('does not exist');
+
+      if (isMissing) {
+        const createRes = await fetch(`${this.apiUrl}/instance/create`, {
+          method: 'POST',
+          headers: {
+            'Content-Type': 'application/json',
+            apikey: this.apiKey,
+          },
+          body: JSON.stringify({
+            instanceName,
+            token: crypto.randomUUID(),
+            qrcode: true,
+            integration: 'WHATSAPP-BAILEYS',
+          }),
+        });
+        const createData = await createRes.json().catch(() => ({}));
+        const qr = createData?.qrcode?.base64 || createData?.base64 || null;
+        if (qr) {
+          return { state: 'connecting', qrcode: qr };
+        }
+      }
+
       const state = stateData?.instance?.state || stateData?.state || 'close';
 
       if (state === 'open') {
@@ -84,6 +112,39 @@ export class EvolutionApiService {
         { headers: { apikey: this.apiKey } }
       );
       let connectData = await connectRes.json().catch(() => ({}));
+
+      // Se connect indicar que a instância não existe, provisiona na hora
+      if (
+        connectRes.status === 404 ||
+        connectData?.status === 404 ||
+        JSON.stringify(connectData).includes('does not exist')
+      ) {
+        const createRes = await fetch(`${this.apiUrl}/instance/create`, {
+          method: 'POST',
+          headers: {
+            'Content-Type': 'application/json',
+            apikey: this.apiKey,
+          },
+          body: JSON.stringify({
+            instanceName,
+            token: crypto.randomUUID(),
+            qrcode: true,
+            integration: 'WHATSAPP-BAILEYS',
+          }),
+        });
+        const createData = await createRes.json().catch(() => ({}));
+        const qr = createData?.qrcode?.base64 || createData?.base64 || null;
+        if (qr) {
+          return { state: 'connecting', qrcode: qr };
+        }
+
+        // Tenta connect novamente após criação
+        connectRes = await fetch(
+          `${this.apiUrl}/instance/connect/${encodeURIComponent(instanceName)}`,
+          { headers: { apikey: this.apiKey } }
+        );
+        connectData = await connectRes.json().catch(() => ({}));
+      }
 
       // Se a contagem de tentativas for alta (> 8), reseta o socket para um QR Code zerado
       if (connectData?.count && connectData.count > 8) {
@@ -309,6 +370,27 @@ export class EvolutionApiService {
         instanceName: instance.instanceName,
         name: instance.name || undefined,
       };
+    }
+
+    // Se ainda não obteve QR code e não está open, tenta mais uma vez com delay curto
+    if (!fresh.qrcode && fresh.state !== 'open') {
+      await new Promise((r) => setTimeout(r, 700));
+      const retryFresh = await this.getFreshQrCode(instance.instanceName);
+      if (retryFresh.qrcode) {
+        fresh.qrcode = retryFresh.qrcode;
+        await prisma.whatsappInstance.update({
+          where: { id: instance.id },
+          data: { status: 'CONNECTING', qrcode: fresh.qrcode },
+        });
+        return {
+          connected: false,
+          status: 'CONNECTING',
+          qrcode: fresh.qrcode,
+          instanceId: instance.id,
+          instanceName: instance.instanceName,
+          name: instance.name || undefined,
+        };
+      }
     }
 
     return {
