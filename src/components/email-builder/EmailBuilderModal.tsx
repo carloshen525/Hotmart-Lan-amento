@@ -1111,20 +1111,37 @@ export function EmailBuilderModal({
 
                     {/* PROPRIEDADES: REDES SOCIAIS */}
                     {selectedBlock.type === 'social' && (
-                      <div className="space-y-2">
-                        {['instagram', 'youtube', 'whatsapp', 'facebook', 'linkedin'].map((net) => (
-                          <div key={net}>
-                            <label className="block text-[11px] text-slate-400 capitalize mb-0.5">{net}</label>
+                      <div className="space-y-3">
+                        <p className="text-[11px] text-slate-400">
+                          Preencha as URLs das redes que deseja exibir com os logos reais e oficiais:
+                        </p>
+                        {[
+                          { key: 'instagram', label: 'Instagram', iconUrl: 'https://cdn-icons-png.flaticon.com/512/3955/3955024.png' },
+                          { key: 'whatsapp', label: 'WhatsApp', iconUrl: 'https://cdn-icons-png.flaticon.com/512/3670/3670051.png' },
+                          { key: 'youtube', label: 'YouTube', iconUrl: 'https://cdn-icons-png.flaticon.com/512/3670/3670147.png' },
+                          { key: 'facebook', label: 'Facebook', iconUrl: 'https://cdn-icons-png.flaticon.com/512/5968/5968764.png' },
+                          { key: 'linkedin', label: 'LinkedIn', iconUrl: 'https://cdn-icons-png.flaticon.com/512/3536/3536505.png' },
+                          { key: 'tiktok', label: 'TikTok', iconUrl: 'https://cdn-icons-png.flaticon.com/512/3046/3046121.png' },
+                          { key: 'telegram', label: 'Telegram', iconUrl: 'https://cdn-icons-png.flaticon.com/512/2111/2111646.png' },
+                          { key: 'twitter', label: 'X (Twitter)', iconUrl: 'https://cdn-icons-png.flaticon.com/512/5969/5969020.png' },
+                          { key: 'website', label: 'Website / Blog', iconUrl: 'https://cdn-icons-png.flaticon.com/512/1006/1006771.png' },
+                        ].map((net) => (
+                          <div key={net.key}>
+                            <div className="flex items-center gap-1.5 mb-1">
+                              {/* eslint-disable-next-line @next/next/no-img-element */}
+                              <img src={net.iconUrl} alt={net.label} className="w-4 h-4 rounded-sm object-contain" />
+                              <label className="text-[11px] font-semibold text-slate-300">{net.label}</label>
+                            </div>
                             <input
                               type="text"
-                              value={(selectedBlock.links as any)?.[net] || ''}
+                              value={(selectedBlock.links as any)?.[net.key] || ''}
                               onChange={(e) =>
                                 updateSelectedBlock({
-                                  links: { ...selectedBlock.links, [net]: e.target.value },
+                                  links: { ...selectedBlock.links, [net.key]: e.target.value },
                                 })
                               }
-                              placeholder={`https://${net}.com/...`}
-                              className="w-full p-1.5 bg-[#101217] border border-slate-700 rounded-lg text-xs text-white"
+                              placeholder={`https://${net.key}.com/...`}
+                              className="w-full p-2 bg-[#101217] border border-slate-700 rounded-lg text-xs text-white placeholder-slate-600 focus:outline-none focus:border-indigo-500"
                             />
                           </div>
                         ))}

@@ -24,6 +24,60 @@ export function replaceVariables(text: string, variables?: Record<string, string
 }
 
 /**
+ * Mapeamento de logos oficiais em alta resolução para cada rede social
+ */
+export const OFFICIAL_SOCIAL_ICONS: Record<
+  string,
+  { label: string; iconUrl: string; bgColor: string }
+> = {
+  instagram: {
+    label: 'Instagram',
+    iconUrl: 'https://cdn-icons-png.flaticon.com/512/3955/3955024.png',
+    bgColor: '#E4405F',
+  },
+  whatsapp: {
+    label: 'WhatsApp',
+    iconUrl: 'https://cdn-icons-png.flaticon.com/512/3670/3670051.png',
+    bgColor: '#25D366',
+  },
+  youtube: {
+    label: 'YouTube',
+    iconUrl: 'https://cdn-icons-png.flaticon.com/512/3670/3670147.png',
+    bgColor: '#FF0000',
+  },
+  facebook: {
+    label: 'Facebook',
+    iconUrl: 'https://cdn-icons-png.flaticon.com/512/5968/5968764.png',
+    bgColor: '#1877F2',
+  },
+  linkedin: {
+    label: 'LinkedIn',
+    iconUrl: 'https://cdn-icons-png.flaticon.com/512/3536/3536505.png',
+    bgColor: '#0A66C2',
+  },
+  tiktok: {
+    label: 'TikTok',
+    iconUrl: 'https://cdn-icons-png.flaticon.com/512/3046/3046121.png',
+    bgColor: '#000000',
+  },
+  telegram: {
+    label: 'Telegram',
+    iconUrl: 'https://cdn-icons-png.flaticon.com/512/2111/2111646.png',
+    bgColor: '#0088cc',
+  },
+  twitter: {
+    label: 'X (Twitter)',
+    iconUrl: 'https://cdn-icons-png.flaticon.com/512/5969/5969020.png',
+    bgColor: '#000000',
+  },
+  website: {
+    label: 'Website',
+    iconUrl: 'https://cdn-icons-png.flaticon.com/512/1006/1006771.png',
+    bgColor: '#4f46e5',
+  },
+};
+
+/**
  * Renderiza um bloco individual em HTML compatível com clientes de e-mail
  */
 export function renderBlockToHtml(
@@ -228,17 +282,10 @@ export function renderBlockToHtml(
     case 'social': {
       const align = block.align || 'center';
       const links = block.links || {};
+      const iconSize = block.iconSize || 32;
 
-      const icons: { key: keyof typeof links; label: string; icon: string; bg: string }[] = [
-        { key: 'instagram', label: 'Instagram', bg: '#E4405F', icon: '📸' },
-        { key: 'youtube', label: 'YouTube', bg: '#FF0000', icon: '▶️' },
-        { key: 'whatsapp', label: 'WhatsApp', bg: '#25D366', icon: '💬' },
-        { key: 'facebook', label: 'Facebook', bg: '#1877F2', icon: '👤' },
-        { key: 'linkedin', label: 'LinkedIn', bg: '#0A66C2', icon: '💼' },
-      ];
-
-      const activeIcons = icons.filter((i) => Boolean(links[i.key]));
-      if (activeIcons.length === 0) return '';
+      const activeKeys = Object.keys(links).filter((k) => Boolean((links as any)[k]));
+      if (activeKeys.length === 0) return '';
 
       return `
         <table role="presentation" border="0" cellpadding="0" cellspacing="0" width="100%">
@@ -246,16 +293,21 @@ export function renderBlockToHtml(
             <td align="${align}" style="padding: 16px 24px;">
               <table role="presentation" border="0" cellpadding="0" cellspacing="0" style="display: inline-block;">
                 <tr>
-                  ${activeIcons
-                    .map(
-                      (item) => `
-                    <td style="padding: 0 6px;">
-                      <a href="${links[item.key]}" target="_blank" style="text-decoration: none; display: inline-block; width: 36px; height: 36px; line-height: 36px; text-align: center; border-radius: 50%; background-color: ${item.bg}; color: #ffffff; font-size: 14px; font-weight: bold;">
-                        ${item.icon}
+                  ${activeKeys
+                    .map((key) => {
+                      const item = OFFICIAL_SOCIAL_ICONS[key] || {
+                        label: key,
+                        iconUrl: 'https://cdn-icons-png.flaticon.com/512/1006/1006771.png',
+                        bgColor: '#333333',
+                      };
+                      return `
+                    <td style="padding: 0 8px;">
+                      <a href="${(links as any)[key]}" target="_blank" style="text-decoration: none; display: inline-block;">
+                        <img src="${item.iconUrl}" alt="${item.label}" width="${iconSize}" height="${iconSize}" style="display: block; width: ${iconSize}px; height: ${iconSize}px; border: 0; outline: none; border-radius: 8px;" />
                       </a>
                     </td>
-                  `
-                    )
+                  `;
+                    })
                     .join('')}
                 </tr>
               </table>

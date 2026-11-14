@@ -97,6 +97,9 @@ export interface SocialLinks {
   youtube?: string;
   whatsapp?: string;
   linkedin?: string;
+  tiktok?: string;
+  telegram?: string;
+  twitter?: string;
   website?: string;
 }
 
