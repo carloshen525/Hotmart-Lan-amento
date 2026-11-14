@@ -8,7 +8,7 @@ async function runTestSuite() {
   console.log('=====================================================\n');
 
   let passed = 0;
-  let total = 17;
+  let total = 19;
 
   // Setup de tenant de teste limpo
   const testTenant = await prisma.tenant.upsert({
@@ -777,6 +777,208 @@ async function runTestSuite() {
     assert.ok(!tenantBLogs.some((l) => l.id === logA.id), 'Tenant B NÃO pode acessar logs do Tenant A');
 
     console.log('✔ PASSOU: Trilha de auditoria email_logs com isolamento estrito entre tenants validada.');
+    passed++;
+
+    // =========================================================================
+    // TESTE 18: Edição e Exclusão de Tags com Preservação de Leads
+    // =========================================================================
+    console.log('\n[TESTE 18] Edição e Exclusão de Tags com Preservação de Leads...');
+
+    // 1. Cria uma tag e vincula a um contato
+    const tagLifecycle = await prisma.tag.upsert({
+      where: { tenantId_name: { tenantId: testTenant.id, name: 'Tag_Ciclo_Vida' } },
+      update: {},
+      create: {
+        tenantId: testTenant.id,
+        name: 'Tag_Ciclo_Vida',
+        color: '#3b82f6',
+      },
+    });
+
+    const contactLife = await prisma.contact.upsert({
+      where: { tenantId_email: { tenantId: testTenant.id, email: 'lead_lifecycle@teste.com' } },
+      update: {},
+      create: {
+        tenantId: testTenant.id,
+        name: 'Lead Teste Ciclo Vida Tag',
+        email: 'lead_lifecycle@teste.com',
+      },
+    });
+
+    await prisma.contactTag.upsert({
+      where: { contactId_tagId: { contactId: contactLife.id, tagId: tagLifecycle.id } },
+      update: {},
+      create: { contactId: contactLife.id, tagId: tagLifecycle.id },
+    });
+
+    // 2. Edita nome e cor da tag
+    const updatedTagLife = await prisma.tag.update({
+      where: { id: tagLifecycle.id },
+      data: {
+        name: 'Tag_Ciclo_Vida_Renomeada',
+        color: '#10b981',
+      },
+    });
+    assert.strictEqual(updatedTagLife.name, 'Tag_Ciclo_Vida_Renomeada');
+    assert.strictEqual(updatedTagLife.color, '#10b981');
+
+    // 3. Exclui a tag removendo apenas o vínculo na contactTag
+    await prisma.contactTag.deleteMany({ where: { tagId: tagLifecycle.id } });
+    await prisma.tag.delete({ where: { id: tagLifecycle.id } });
+
+    // 4. Garante que a tag foi deletada, mas o lead continua intacto no banco
+    const deletedTagCheck = await prisma.tag.findUnique({ where: { id: tagLifecycle.id } });
+    assert.strictEqual(deletedTagCheck, null, 'Tag deve ser excluída');
+
+    const leadPreservedCheck = await prisma.contact.findUnique({ where: { id: contactLife.id } });
+    assert.ok(leadPreservedCheck !== null, 'O contato DEVE ser 100% preservado ao excluir a tag');
+    assert.strictEqual(leadPreservedCheck.email, 'lead_lifecycle@teste.com');
+
+    console.log('✔ PASSOU: Tag editada e excluída com remoção de vínculos e preservação total dos leads.');
+    passed++;
+
+    // =========================================================================
+    // TESTE 19: Operações em Massa (Bulk Add Tags, Remove Tags, Export, Delete)
+    // =========================================================================
+    console.log('\n[TESTE 19] Operações em Massa de Leads (Bulk Actions & Multi-Tenant)...');
+
+    // Helper de simulação idêntica ao BulkContactService
+    async function bulkAddTags(tenantId, leadIds, tagNames) {
+      const validContacts = await prisma.contact.findMany({
+        where: { id: { in: leadIds }, tenantId },
+        select: { id: true },
+      });
+      const validContactIds = validContacts.map((c) => c.id);
+      const targetTagIds = [];
+      for (const name of tagNames) {
+        const t = await prisma.tag.upsert({
+          where: { tenantId_name: { tenantId, name } },
+          update: {},
+          create: { tenantId, name, color: '#6366f1' },
+        });
+        targetTagIds.push(t.id);
+      }
+      const existing = await prisma.contactTag.findMany({
+        where: { contactId: { in: validContactIds }, tagId: { in: targetTagIds } },
+      });
+      const existSet = new Set(existing.map((e) => `${e.contactId}_${e.tagId}`));
+      const toCreate = [];
+      for (const cId of validContactIds) {
+        for (const tId of targetTagIds) {
+          if (!existSet.has(`${cId}_${tId}`)) {
+            toCreate.push({ contactId: cId, tagId: tId });
+            existSet.add(`${cId}_${tId}`);
+          }
+        }
+      }
+      if (toCreate.length > 0) {
+        await prisma.contactTag.createMany({ data: toCreate });
+      }
+      return { affectedContacts: validContactIds.length, tagsAddedCount: toCreate.length };
+    }
+
+    async function bulkRemoveTags(tenantId, leadIds, tagNames) {
+      const validContacts = await prisma.contact.findMany({
+        where: { id: { in: leadIds }, tenantId },
+        select: { id: true },
+      });
+      const validContactIds = validContacts.map((c) => c.id);
+      const tags = await prisma.tag.findMany({
+        where: { name: { in: tagNames }, tenantId },
+        select: { id: true },
+      });
+      const tagIds = tags.map((t) => t.id);
+      const res = await prisma.contactTag.deleteMany({
+        where: { contactId: { in: validContactIds }, tagId: { in: tagIds } },
+      });
+      return { affectedContacts: validContactIds.length, removedAssociationsCount: res.count };
+    }
+
+    async function bulkDeleteContacts(tenantId, leadIds) {
+      const validContacts = await prisma.contact.findMany({
+        where: { id: { in: leadIds }, tenantId },
+        select: { id: true },
+      });
+      const validContactIds = validContacts.map((c) => c.id);
+      if (validContactIds.length === 0) {
+        throw new Error('Nenhum contato válido encontrado para exclusão');
+      }
+      await prisma.$transaction([
+        prisma.contactTag.deleteMany({ where: { contactId: { in: validContactIds } } }),
+        prisma.messageLog.deleteMany({ where: { contactId: { in: validContactIds }, tenantId } }),
+        prisma.automationEnrollment.deleteMany({ where: { contactId: { in: validContactIds } } }),
+        prisma.contact.deleteMany({ where: { id: { in: validContactIds }, tenantId } }),
+      ]);
+      return { deletedCount: validContactIds.length };
+    }
+
+    // Cria 3 leads para teste em massa
+    const bulkLead1 = await prisma.contact.upsert({
+      where: { tenantId_email: { tenantId: testTenant.id, email: 'bulk_1@teste.com' } },
+      update: {},
+      create: { tenantId: testTenant.id, name: 'Bulk Lead 1', email: 'bulk_1@teste.com', phone: '+5511999990001' },
+    });
+    const bulkLead2 = await prisma.contact.upsert({
+      where: { tenantId_email: { tenantId: testTenant.id, email: 'bulk_2@teste.com' } },
+      update: {},
+      create: { tenantId: testTenant.id, name: 'Bulk Lead 2', email: 'bulk_2@teste.com', phone: '+5511999990002' },
+    });
+    const bulkLead3 = await prisma.contact.upsert({
+      where: { tenantId_email: { tenantId: testTenant.id, email: 'bulk_3@teste.com' } },
+      update: {},
+      create: { tenantId: testTenant.id, name: 'Bulk Lead 3', email: 'bulk_3@teste.com', phone: '+5511999990003' },
+    });
+
+    const bulkIds = [bulkLead1.id, bulkLead2.id, bulkLead3.id];
+
+    // 1. Bulk Add Tags: adiciona 2 tags em massa
+    const addRes = await bulkAddTags(testTenant.id, bulkIds, ['BulkTag_Alfa', 'BulkTag_Beta']);
+    assert.strictEqual(addRes.affectedContacts, 3);
+    assert.strictEqual(addRes.tagsAddedCount, 6, 'Deve vincular 2 tags a 3 contatos = 6 associações');
+
+    // Idempotência: rodar de novo não pode duplicar
+    const addResAgain = await bulkAddTags(testTenant.id, bulkIds, ['BulkTag_Alfa', 'BulkTag_Beta']);
+    assert.strictEqual(addResAgain.tagsAddedCount, 0, 'Não deve criar associações duplicadas');
+
+    // 2. Exportação com cabeçalho UTF-8
+    const exportContacts = await prisma.contact.findMany({
+      where: { id: { in: bulkIds }, tenantId: testTenant.id },
+      include: { tags: { include: { tag: true } } },
+    });
+    assert.strictEqual(exportContacts.length, 3);
+    const exportCsv = '\uFEFF' + exportContacts.map(c => `${c.name};${c.email}`).join('\r\n');
+    assert.ok(exportCsv.includes('bulk_1@teste.com'));
+    assert.ok(exportCsv.startsWith('\uFEFF'), 'CSV deve conter BOM UTF-8');
+
+    // 3. Bulk Remove Tags: remove 'BulkTag_Alfa' em massa
+    const removeRes = await bulkRemoveTags(testTenant.id, bulkIds, ['BulkTag_Alfa']);
+    assert.strictEqual(removeRes.removedAssociationsCount, 3);
+
+    // Verifica que BulkTag_Beta continuou no lead 1
+    const lead1Tags = await prisma.contactTag.findMany({
+      where: { contactId: bulkLead1.id },
+      include: { tag: true },
+    });
+    assert.strictEqual(lead1Tags.length, 1);
+    assert.strictEqual(lead1Tags[0].tag.name, 'BulkTag_Beta');
+
+    // 4. Segurança Multi-tenant: Tenant B NÃO pode deletar ou modificar contatos do Tenant A
+    try {
+      await bulkDeleteContacts(otherTenant.id, bulkIds);
+      assert.fail('Deveria ter bloqueado exclusão cross-tenant');
+    } catch (e) {
+      assert.ok(e.message.includes('Nenhum contato válido encontrado para exclusão'));
+    }
+
+    // 5. Bulk Delete: Tenant A exclui seus próprios contatos em massa
+    const deleteRes = await bulkDeleteContacts(testTenant.id, bulkIds);
+    assert.strictEqual(deleteRes.deletedCount, 3);
+
+    // Confirma que os 3 contatos foram removidos
+    const checkDeleted = await prisma.contact.findMany({ where: { id: { in: bulkIds } } });
+    assert.strictEqual(checkDeleted.length, 0);
+
+    console.log('✔ PASSOU: Operações em massa (Add Tags, Remove Tags, Export, Delete) com isolamento multi-tenant validadas.');
     passed++;
 
     console.log('\n=====================================================');

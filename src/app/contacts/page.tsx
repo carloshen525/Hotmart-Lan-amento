@@ -21,6 +21,12 @@ import {
   Check,
   RefreshCw,
   Info,
+  CheckSquare,
+  Square,
+  MinusSquare,
+  Tags,
+  Loader2,
+  AlertTriangle,
 } from 'lucide-react';
 
 interface Contact {
@@ -44,6 +50,19 @@ export default function ContactsPage() {
   const [isModalOpen, setIsModalOpen] = useState(false);
   const [selectedContact, setSelectedContact] = useState<any | null>(null);
   const [drawerLoading, setDrawerLoading] = useState(false);
+
+  // Seleção Múltipla em Massa
+  const [selectedIds, setSelectedIds] = useState<string[]>([]);
+  const [isBulkAddTagModalOpen, setIsBulkAddTagModalOpen] = useState(false);
+  const [isBulkRemoveTagModalOpen, setIsBulkRemoveTagModalOpen] = useState(false);
+  const [isBulkDeleteModalOpen, setIsBulkDeleteModalOpen] = useState(false);
+  const [bulkSelectedTags, setBulkSelectedTags] = useState<string[]>([]);
+  const [bulkCustomTagName, setBulkCustomTagName] = useState('');
+  const [bulkLoading, setBulkLoading] = useState(false);
+  const [bulkNotice, setBulkNotice] = useState<{
+    type: 'success' | 'error';
+    message: string;
+  } | null>(null);
 
   // Form novo contato
   const [newName, setNewName] = useState('');
@@ -109,12 +128,226 @@ export default function ContactsPage() {
     return () => clearTimeout(timer);
   }, [search, selectedTag]);
 
+  // Controles de seleção múltipla
+  const isAllSelected = contacts.length > 0 && contacts.every((c) => selectedIds.includes(c.id));
+  const isPartiallySelected =
+    contacts.some((c) => selectedIds.includes(c.id)) && !isAllSelected;
+
+  const toggleSelectAll = () => {
+    if (isAllSelected) {
+      setSelectedIds([]);
+    } else {
+      setSelectedIds(contacts.map((c) => c.id));
+    }
+  };
+
+  const toggleSelectContact = (id: string, e: React.MouseEvent) => {
+    e.stopPropagation();
+    setSelectedIds((prev) =>
+      prev.includes(id) ? prev.filter((i) => i !== id) : [...prev, id]
+    );
+  };
+
+  // Ação em massa: Adicionar Tags
+  const handleBulkAddTags = async (e: React.FormEvent) => {
+    e.preventDefault();
+    if (bulkSelectedTags.length === 0 && !bulkCustomTagName.trim()) {
+      alert('Selecione ao menos uma tag ou digite o nome de uma nova tag.');
+      return;
+    }
+
+    setBulkLoading(true);
+    setBulkNotice(null);
+
+    const tagNames: string[] = [];
+    if (bulkCustomTagName.trim()) {
+      bulkCustomTagName
+        .split(',')
+        .map((t) => t.trim())
+        .filter(Boolean)
+        .forEach((t) => tagNames.push(t));
+    }
+
+    try {
+      const res = await fetch('/api/leads/bulk/add-tags', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          leadIds: selectedIds,
+          tagIds: bulkSelectedTags,
+          tagNames,
+        }),
+      });
+
+      const data = await res.json();
+      if (res.ok && data.success) {
+        setIsBulkAddTagModalOpen(false);
+        setBulkSelectedTags([]);
+        setBulkCustomTagName('');
+        setSelectedIds([]);
+        setBulkNotice({
+          type: 'success',
+          message: data.message || 'Tags adicionadas aos leads com sucesso!',
+        });
+        fetchContacts();
+        fetchTags();
+      } else {
+        setBulkNotice({
+          type: 'error',
+          message: data.error || 'Erro ao adicionar tags em massa.',
+        });
+      }
+    } catch (err: any) {
+      setBulkNotice({
+        type: 'error',
+        message: err.message || 'Falha na comunicação com o servidor.',
+      });
+    } finally {
+      setBulkLoading(false);
+    }
+  };
+
+  // Ação em massa: Remover Tags
+  const handleBulkRemoveTags = async (e: React.FormEvent) => {
+    e.preventDefault();
+    if (bulkSelectedTags.length === 0) {
+      alert('Selecione ao menos uma tag para remover.');
+      return;
+    }
+
+    setBulkLoading(true);
+    setBulkNotice(null);
+
+    try {
+      const res = await fetch('/api/leads/bulk/remove-tags', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          leadIds: selectedIds,
+          tagIds: bulkSelectedTags,
+        }),
+      });
+
+      const data = await res.json();
+      if (res.ok && data.success) {
+        setIsBulkRemoveTagModalOpen(false);
+        setBulkSelectedTags([]);
+        setSelectedIds([]);
+        setBulkNotice({
+          type: 'success',
+          message: data.message || 'Tags removidas dos leads selecionados!',
+        });
+        fetchContacts();
+        fetchTags();
+      } else {
+        setBulkNotice({
+          type: 'error',
+          message: data.error || 'Erro ao remover tags em massa.',
+        });
+      }
+    } catch (err: any) {
+      setBulkNotice({
+        type: 'error',
+        message: err.message || 'Falha na comunicação com o servidor.',
+      });
+    } finally {
+      setBulkLoading(false);
+    }
+  };
+
+  // Ação em massa: Excluir Contatos
+  const handleBulkDelete = async () => {
+    setBulkLoading(true);
+    setBulkNotice(null);
+
+    try {
+      const res = await fetch('/api/leads/bulk/delete', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          leadIds: selectedIds,
+        }),
+      });
+
+      const data = await res.json();
+      if (res.ok && data.success) {
+        setIsBulkDeleteModalOpen(false);
+        setSelectedIds([]);
+        setBulkNotice({
+          type: 'success',
+          message: data.message || 'Leads excluídos com sucesso.',
+        });
+        fetchContacts();
+        fetchTags();
+      } else {
+        setBulkNotice({
+          type: 'error',
+          message: data.error || 'Erro ao excluir contatos.',
+        });
+      }
+    } catch (err: any) {
+      setBulkNotice({
+        type: 'error',
+        message: err.message || 'Falha na comunicação com o servidor.',
+      });
+    } finally {
+      setBulkLoading(false);
+    }
+  };
+
+  // Ação em massa: Exportar CSV UTF-8
+  const handleBulkExport = async () => {
+    setBulkLoading(true);
+    setBulkNotice(null);
+
+    try {
+      const res = await fetch('/api/leads/bulk/export', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          leadIds: selectedIds.length > 0 ? selectedIds : undefined,
+          search: search || undefined,
+          tag: selectedTag || undefined,
+        }),
+      });
+
+      if (res.ok) {
+        const blob = await res.blob();
+        const url = window.URL.createObjectURL(blob);
+        const a = document.createElement('a');
+        a.href = url;
+        a.download = `leads_export_${new Date().toISOString().split('T')[0]}.csv`;
+        document.body.appendChild(a);
+        a.click();
+        a.remove();
+        window.URL.revokeObjectURL(url);
+
+        setBulkNotice({
+          type: 'success',
+          message: `${selectedIds.length > 0 ? selectedIds.length : contacts.length} lead(s) exportado(s) com sucesso em CSV UTF-8!`,
+        });
+      } else {
+        const data = await res.json().catch(() => ({}));
+        setBulkNotice({
+          type: 'error',
+          message: data.error || 'Erro ao exportar contatos.',
+        });
+      }
+    } catch (err: any) {
+      setBulkNotice({
+        type: 'error',
+        message: err.message || 'Falha na exportação.',
+      });
+    } finally {
+      setBulkLoading(false);
+    }
+  };
+
   const handleFileChange = (e: React.ChangeEvent<HTMLInputElement>) => {
     const file = e.target.files?.[0];
     if (file) {
       setImportFile(file);
       setImportResult(null);
-      // Ler prévia
       const reader = new FileReader();
       reader.onload = (event) => {
         const text = (event.target?.result as string) || '';
@@ -235,7 +468,7 @@ export default function ContactsPage() {
   };
 
   return (
-    <div className="space-y-6 max-w-7xl mx-auto">
+    <div className="space-y-6 max-w-7xl mx-auto pb-24">
       {/* Topo */}
       <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-4">
         <div>
@@ -258,13 +491,14 @@ export default function ContactsPage() {
             <Upload className="w-3.5 h-3.5" />
             <span>Importar CSV</span>
           </button>
-          <a
-            href="/api/contacts?format=csv"
+          <button
+            onClick={handleBulkExport}
+            disabled={bulkLoading}
             className="flex items-center gap-2 px-3.5 py-2 border border-slate-200 bg-white hover:bg-slate-50 text-slate-700 font-medium text-xs rounded-lg transition-colors shadow-sm"
           >
             <Download className="w-3.5 h-3.5" />
             <span>Exportar CSV</span>
-          </a>
+          </button>
           <button
             onClick={() => setIsModalOpen(true)}
             className="flex items-center gap-2 px-4 py-2 bg-indigo-600 hover:bg-indigo-700 text-white font-medium text-xs rounded-lg shadow-sm shadow-indigo-500/20 transition-all"
@@ -274,6 +508,32 @@ export default function ContactsPage() {
           </button>
         </div>
       </div>
+
+      {/* Alerta de Feedback em Massa */}
+      {bulkNotice && (
+        <div
+          className={`p-4 rounded-xl border flex items-center justify-between text-xs animate-in fade-in duration-200 ${
+            bulkNotice.type === 'success'
+              ? 'bg-emerald-50 text-emerald-800 border-emerald-200'
+              : 'bg-red-50 text-red-800 border-red-200'
+          }`}
+        >
+          <div className="flex items-center gap-2">
+            {bulkNotice.type === 'success' ? (
+              <CheckCircle className="w-4 h-4 text-emerald-600 shrink-0" />
+            ) : (
+              <AlertCircle className="w-4 h-4 text-red-600 shrink-0" />
+            )}
+            <span className="font-semibold">{bulkNotice.message}</span>
+          </div>
+          <button
+            onClick={() => setBulkNotice(null)}
+            className="text-slate-400 hover:text-slate-600 font-bold"
+          >
+            <X className="w-4 h-4" />
+          </button>
+        </div>
+      )}
 
       {/* Barra de Filtros e Busca */}
       <div className="bg-white p-4 rounded-xl border border-slate-200 shadow-sm flex flex-col sm:flex-row items-center gap-4">
@@ -320,6 +580,22 @@ export default function ContactsPage() {
           <table className="w-full text-left text-xs">
             <thead className="bg-slate-50 border-b border-slate-200 text-slate-600 uppercase tracking-wider font-semibold">
               <tr>
+                <th className="p-4 w-10 text-center">
+                  <button
+                    type="button"
+                    onClick={toggleSelectAll}
+                    title={isAllSelected ? 'Desmarcar todos' : 'Selecionar todos'}
+                    className="text-slate-500 hover:text-indigo-600 focus:outline-none"
+                  >
+                    {isAllSelected ? (
+                      <CheckSquare className="w-4 h-4 text-indigo-600" />
+                    ) : isPartiallySelected ? (
+                      <MinusSquare className="w-4 h-4 text-indigo-600" />
+                    ) : (
+                      <Square className="w-4 h-4 text-slate-400" />
+                    )}
+                  </button>
+                </th>
                 <th className="p-4">Nome & Contato</th>
                 <th className="p-4">WhatsApp</th>
                 <th className="p-4">Tags</th>
@@ -331,85 +607,422 @@ export default function ContactsPage() {
             <tbody className="divide-y divide-slate-100">
               {loading ? (
                 <tr>
-                  <td colSpan={6} className="p-8 text-center text-slate-400">
-                    Carregando contatos...
+                  <td colSpan={7} className="p-8 text-center text-slate-400">
+                    <Loader2 className="w-6 h-6 animate-spin mx-auto mb-2 text-indigo-600" />
+                    <span>Carregando contatos...</span>
                   </td>
                 </tr>
               ) : contacts.length === 0 ? (
                 <tr>
-                  <td colSpan={6} className="p-8 text-center text-slate-400">
+                  <td colSpan={7} className="p-8 text-center text-slate-400">
                     Nenhum contato encontrado com os filtros selecionados.
                   </td>
                 </tr>
               ) : (
-                contacts.map((c) => (
-                  <tr
-                    key={c.id}
-                    onClick={() => openContactDetails(c.id)}
-                    className="hover:bg-slate-50/70 cursor-pointer transition-colors"
-                  >
-                    <td className="p-4">
-                      <div className="font-semibold text-slate-800">{c.name}</div>
-                      <div className="text-slate-400 text-[11px] flex items-center gap-1 mt-0.5">
-                        <Mail className="w-3 h-3" />
-                        <span>{c.email}</span>
-                      </div>
-                    </td>
-                    <td className="p-4 text-slate-600">
-                      {c.phone ? (
-                        <span className="flex items-center gap-1">
-                          <Phone className="w-3 h-3 text-emerald-600" />
-                          <span>{c.phone}</span>
-                        </span>
-                      ) : (
-                        <span className="text-slate-300">-</span>
-                      )}
-                    </td>
-                    <td className="p-4">
-                      <div className="flex flex-wrap gap-1">
-                        {c.tags.map((t) => (
-                          <span
-                            key={t.tag.id}
-                            style={{ backgroundColor: `${t.tag.color}15`, color: t.tag.color }}
-                            className="px-2 py-0.5 rounded font-medium text-[10px] border border-current"
-                          >
-                            {t.tag.name}
+                contacts.map((c) => {
+                  const isChecked = selectedIds.includes(c.id);
+                  return (
+                    <tr
+                      key={c.id}
+                      onClick={() => openContactDetails(c.id)}
+                      className={`cursor-pointer transition-colors ${
+                        isChecked ? 'bg-indigo-50/50 hover:bg-indigo-50/80' : 'hover:bg-slate-50/70'
+                      }`}
+                    >
+                      <td
+                        className="p-4 text-center"
+                        onClick={(e) => toggleSelectContact(c.id, e)}
+                      >
+                        <button
+                          type="button"
+                          className="focus:outline-none"
+                          onClick={(e) => toggleSelectContact(c.id, e)}
+                        >
+                          {isChecked ? (
+                            <CheckSquare className="w-4 h-4 text-indigo-600" />
+                          ) : (
+                            <Square className="w-4 h-4 text-slate-300 hover:text-slate-500" />
+                          )}
+                        </button>
+                      </td>
+                      <td className="p-4">
+                        <div className="font-semibold text-slate-800">{c.name}</div>
+                        <div className="text-slate-400 text-[11px] flex items-center gap-1 mt-0.5">
+                          <Mail className="w-3 h-3" />
+                          <span>{c.email}</span>
+                        </div>
+                      </td>
+                      <td className="p-4 text-slate-600">
+                        {c.phone ? (
+                          <span className="flex items-center gap-1">
+                            <Phone className="w-3 h-3 text-emerald-600" />
+                            <span>{c.phone}</span>
                           </span>
-                        ))}
-                      </div>
-                    </td>
-                    <td className="p-4 text-slate-500 font-mono text-[11px]">
-                      {c.utmSource || 'direto'}
-                    </td>
-                    <td className="p-4">
-                      <span
-                        className={`px-2 py-0.5 rounded-full font-semibold text-[10px] ${
-                          c.status === 'ACTIVE'
-                            ? 'bg-emerald-50 text-emerald-700 border border-emerald-200'
-                            : 'bg-red-50 text-red-700 border border-red-200'
-                        }`}
-                      >
-                        {c.status === 'ACTIVE' ? 'Ativo' : 'Descadastrado'}
-                      </span>
-                    </td>
-                    <td className="p-4 text-right">
-                      <button
-                        onClick={(e) => {
-                          e.stopPropagation();
-                          openContactDetails(c.id);
-                        }}
-                        className="text-indigo-600 hover:text-indigo-800 font-semibold text-xs"
-                      >
-                        Ver Perfil
-                      </button>
-                    </td>
-                  </tr>
-                ))
+                        ) : (
+                          <span className="text-slate-300">-</span>
+                        )}
+                      </td>
+                      <td className="p-4">
+                        <div className="flex flex-wrap gap-1">
+                          {c.tags.map((t) => (
+                            <span
+                              key={t.tag.id}
+                              style={{ backgroundColor: `${t.tag.color}15`, color: t.tag.color }}
+                              className="px-2 py-0.5 rounded font-medium text-[10px] border border-current"
+                            >
+                              {t.tag.name}
+                            </span>
+                          ))}
+                        </div>
+                      </td>
+                      <td className="p-4 text-slate-500 font-mono text-[11px]">
+                        {c.utmSource || 'direto'}
+                      </td>
+                      <td className="p-4">
+                        <span
+                          className={`px-2 py-0.5 rounded-full font-semibold text-[10px] ${
+                            c.status === 'ACTIVE'
+                              ? 'bg-emerald-50 text-emerald-700 border border-emerald-200'
+                              : 'bg-red-50 text-red-700 border border-red-200'
+                          }`}
+                        >
+                          {c.status === 'ACTIVE' ? 'Ativo' : 'Descadastrado'}
+                        </span>
+                      </td>
+                      <td className="p-4 text-right">
+                        <button
+                          onClick={(e) => {
+                            e.stopPropagation();
+                            openContactDetails(c.id);
+                          }}
+                          className="text-indigo-600 hover:text-indigo-800 font-semibold text-xs"
+                        >
+                          Ver Perfil
+                        </button>
+                      </td>
+                    </tr>
+                  );
+                })
               )}
             </tbody>
           </table>
         </div>
       </div>
+
+      {/* BARRA FLUTUANTE DE AÇÕES EM MASSA */}
+      {selectedIds.length > 0 && (
+        <div className="fixed bottom-6 left-1/2 -translate-x-1/2 z-40 bg-slate-900 text-white px-5 py-3.5 rounded-2xl shadow-2xl border border-slate-700/80 flex items-center gap-3 sm:gap-4 animate-in slide-in-from-bottom-6 duration-200 backdrop-blur-md">
+          <div className="flex items-center gap-2 pr-3 border-r border-slate-700 text-xs font-semibold whitespace-nowrap">
+            <CheckSquare className="w-4 h-4 text-indigo-400" />
+            <span>{selectedIds.length} selecionado(s)</span>
+          </div>
+
+          <div className="flex items-center gap-2 flex-wrap">
+            <button
+              onClick={() => {
+                setBulkSelectedTags([]);
+                setBulkCustomTagName('');
+                setIsBulkAddTagModalOpen(true);
+              }}
+              className="flex items-center gap-1.5 px-3 py-1.5 rounded-xl bg-indigo-600 hover:bg-indigo-500 text-white font-medium text-xs transition-colors shadow-sm"
+            >
+              <Tag className="w-3.5 h-3.5" />
+              <span>Adicionar Tag</span>
+            </button>
+
+            <button
+              onClick={() => {
+                setBulkSelectedTags([]);
+                setIsBulkRemoveTagModalOpen(true);
+              }}
+              className="flex items-center gap-1.5 px-3 py-1.5 rounded-xl bg-slate-800 hover:bg-slate-700 text-slate-200 font-medium text-xs border border-slate-700 transition-colors"
+            >
+              <Tags className="w-3.5 h-3.5" />
+              <span>Remover Tag</span>
+            </button>
+
+            <button
+              onClick={handleBulkExport}
+              disabled={bulkLoading}
+              className="flex items-center gap-1.5 px-3 py-1.5 rounded-xl bg-slate-800 hover:bg-slate-700 text-slate-200 font-medium text-xs border border-slate-700 transition-colors"
+            >
+              <Download className="w-3.5 h-3.5" />
+              <span>Exportar</span>
+            </button>
+
+            <button
+              onClick={() => setIsBulkDeleteModalOpen(true)}
+              className="flex items-center gap-1.5 px-3 py-1.5 rounded-xl bg-red-600/90 hover:bg-red-600 text-white font-medium text-xs transition-colors shadow-sm"
+            >
+              <Trash2 className="w-3.5 h-3.5" />
+              <span>Excluir</span>
+            </button>
+
+            <button
+              onClick={() => setSelectedIds([])}
+              title="Limpar seleção"
+              className="p-1.5 rounded-lg text-slate-400 hover:text-white hover:bg-slate-800 transition-colors ml-1"
+            >
+              <X className="w-4 h-4" />
+            </button>
+          </div>
+        </div>
+      )}
+
+      {/* MODAL: ADICIONAR TAGS EM MASSA */}
+      {isBulkAddTagModalOpen && (
+        <div className="fixed inset-0 bg-slate-900/50 z-50 flex items-center justify-center p-4 backdrop-blur-sm animate-in fade-in duration-200">
+          <div className="bg-white rounded-2xl shadow-2xl border border-slate-200 max-w-md w-full p-6 animate-in zoom-in-95 duration-150">
+            <div className="flex items-center justify-between pb-3 border-b border-slate-100">
+              <div className="flex items-center gap-2">
+                <Tag className="w-4 h-4 text-indigo-600" />
+                <h3 className="font-bold text-slate-900 text-sm">
+                  Adicionar Tags ({selectedIds.length} Leads)
+                </h3>
+              </div>
+              <button
+                onClick={() => setIsBulkAddTagModalOpen(false)}
+                className="text-slate-400 hover:text-slate-600"
+              >
+                <X className="w-4 h-4" />
+              </button>
+            </div>
+
+            <form onSubmit={handleBulkAddTags} className="space-y-4 mt-4 text-xs">
+              <div>
+                <label className="block text-slate-700 font-semibold mb-2">
+                  Selecione as Tags Existentes
+                </label>
+                <div className="max-h-48 overflow-y-auto space-y-1.5 p-2 bg-slate-50 border border-slate-200 rounded-xl">
+                  {tagsList.length === 0 ? (
+                    <p className="text-slate-400 text-center py-4 text-[11px]">
+                      Nenhuma tag cadastrada ainda. Digite uma nova abaixo.
+                    </p>
+                  ) : (
+                    tagsList.map((t) => {
+                      const isSelected = bulkSelectedTags.includes(t.id);
+                      return (
+                        <label
+                          key={t.id}
+                          className={`flex items-center justify-between p-2 rounded-lg cursor-pointer transition-colors ${
+                            isSelected
+                              ? 'bg-indigo-50 border border-indigo-200'
+                              : 'hover:bg-slate-100 border border-transparent'
+                          }`}
+                        >
+                          <div className="flex items-center gap-2">
+                            <input
+                              type="checkbox"
+                              checked={isSelected}
+                              onChange={() =>
+                                setBulkSelectedTags((prev) =>
+                                  prev.includes(t.id)
+                                    ? prev.filter((id) => id !== t.id)
+                                    : [...prev, t.id]
+                                )
+                              }
+                              className="rounded text-indigo-600 focus:ring-indigo-500"
+                            />
+                            <span className="font-medium text-slate-800">{t.name}</span>
+                          </div>
+                          <span
+                            style={{ backgroundColor: `${t.color}20`, color: t.color }}
+                            className="px-2 py-0.5 rounded text-[10px] font-bold border border-current"
+                          >
+                            #{t.name}
+                          </span>
+                        </label>
+                      );
+                    })
+                  )}
+                </div>
+              </div>
+
+              <div>
+                <label className="block text-slate-700 font-semibold mb-1">
+                  Ou crie nova(s) tag(s) agora (separadas por vírgula)
+                </label>
+                <input
+                  type="text"
+                  value={bulkCustomTagName}
+                  onChange={(e) => setBulkCustomTagName(e.target.value)}
+                  placeholder="Ex: Aluno Turma Nova, Vip 2026"
+                  className="w-full p-2.5 border border-slate-200 rounded-xl focus:ring-2 focus:ring-indigo-500 outline-none text-slate-800 text-xs"
+                />
+              </div>
+
+              <div className="bg-slate-50 p-3 rounded-xl border border-slate-200 text-[11px] text-slate-600 flex items-center gap-2">
+                <Info className="w-4 h-4 text-indigo-500 shrink-0" />
+                <span>
+                  O sistema aplicará as tags apenas onde ainda não existirem, evitando qualquer
+                  duplicidade.
+                </span>
+              </div>
+
+              <div className="pt-3 flex items-center justify-end gap-2 border-t border-slate-100">
+                <button
+                  type="button"
+                  onClick={() => setIsBulkAddTagModalOpen(false)}
+                  className="px-4 py-2 border border-slate-200 text-slate-600 rounded-xl hover:bg-slate-50 font-medium"
+                >
+                  Cancelar
+                </button>
+                <button
+                  type="submit"
+                  disabled={bulkLoading}
+                  className="px-4 py-2 bg-indigo-600 hover:bg-indigo-700 disabled:opacity-50 text-white rounded-xl font-semibold shadow-sm flex items-center gap-1.5"
+                >
+                  {bulkLoading && <Loader2 className="w-3.5 h-3.5 animate-spin" />}
+                  <span>Aplicar aos {selectedIds.length} Leads</span>
+                </button>
+              </div>
+            </form>
+          </div>
+        </div>
+      )}
+
+      {/* MODAL: REMOVER TAGS EM MASSA */}
+      {isBulkRemoveTagModalOpen && (
+        <div className="fixed inset-0 bg-slate-900/50 z-50 flex items-center justify-center p-4 backdrop-blur-sm animate-in fade-in duration-200">
+          <div className="bg-white rounded-2xl shadow-2xl border border-slate-200 max-w-md w-full p-6 animate-in zoom-in-95 duration-150">
+            <div className="flex items-center justify-between pb-3 border-b border-slate-100">
+              <div className="flex items-center gap-2">
+                <Tags className="w-4 h-4 text-amber-600" />
+                <h3 className="font-bold text-slate-900 text-sm">
+                  Remover Tags ({selectedIds.length} Leads)
+                </h3>
+              </div>
+              <button
+                onClick={() => setIsBulkRemoveTagModalOpen(false)}
+                className="text-slate-400 hover:text-slate-600"
+              >
+                <X className="w-4 h-4" />
+              </button>
+            </div>
+
+            <form onSubmit={handleBulkRemoveTags} className="space-y-4 mt-4 text-xs">
+              <div>
+                <label className="block text-slate-700 font-semibold mb-2">
+                  Selecione qual(is) tag(s) deseja desvincular dos leads selecionados:
+                </label>
+                <div className="max-h-56 overflow-y-auto space-y-1.5 p-2 bg-slate-50 border border-slate-200 rounded-xl">
+                  {tagsList.length === 0 ? (
+                    <p className="text-slate-400 text-center py-4 text-[11px]">
+                      Nenhuma tag cadastrada.
+                    </p>
+                  ) : (
+                    tagsList.map((t) => {
+                      const isSelected = bulkSelectedTags.includes(t.id);
+                      return (
+                        <label
+                          key={t.id}
+                          className={`flex items-center justify-between p-2 rounded-lg cursor-pointer transition-colors ${
+                            isSelected
+                              ? 'bg-amber-50 border border-amber-300'
+                              : 'hover:bg-slate-100 border border-transparent'
+                          }`}
+                        >
+                          <div className="flex items-center gap-2">
+                            <input
+                              type="checkbox"
+                              checked={isSelected}
+                              onChange={() =>
+                                setBulkSelectedTags((prev) =>
+                                  prev.includes(t.id)
+                                    ? prev.filter((id) => id !== t.id)
+                                    : [...prev, t.id]
+                                )
+                              }
+                              className="rounded text-amber-600 focus:ring-amber-500"
+                            />
+                            <span className="font-medium text-slate-800">{t.name}</span>
+                          </div>
+                          <span
+                            style={{ backgroundColor: `${t.color}20`, color: t.color }}
+                            className="px-2 py-0.5 rounded text-[10px] font-bold border border-current"
+                          >
+                            #{t.name}
+                          </span>
+                        </label>
+                      );
+                    })
+                  )}
+                </div>
+              </div>
+
+              <div className="bg-amber-50 border border-amber-200 rounded-xl p-3 text-[11px] text-amber-900">
+                🛡️ <strong>Segurança:</strong> Esta operação remove apenas a associação entre o
+                lead e a tag. <strong>A tag e os contatos continuam existindo no sistema.</strong>
+              </div>
+
+              <div className="pt-3 flex items-center justify-end gap-2 border-t border-slate-100">
+                <button
+                  type="button"
+                  onClick={() => setIsBulkRemoveTagModalOpen(false)}
+                  className="px-4 py-2 border border-slate-200 text-slate-600 rounded-xl hover:bg-slate-50 font-medium"
+                >
+                  Cancelar
+                </button>
+                <button
+                  type="submit"
+                  disabled={bulkLoading || bulkSelectedTags.length === 0}
+                  className="px-4 py-2 bg-amber-600 hover:bg-amber-700 disabled:opacity-50 text-white rounded-xl font-semibold shadow-sm flex items-center gap-1.5"
+                >
+                  {bulkLoading && <Loader2 className="w-3.5 h-3.5 animate-spin" />}
+                  <span>Remover Tag(s)</span>
+                </button>
+              </div>
+            </form>
+          </div>
+        </div>
+      )}
+
+      {/* MODAL: EXCLUSÃO EM MASSA DE LEADS */}
+      {isBulkDeleteModalOpen && (
+        <div className="fixed inset-0 bg-slate-900/50 z-50 flex items-center justify-center p-4 backdrop-blur-sm animate-in fade-in duration-200">
+          <div className="bg-white rounded-2xl shadow-2xl border border-slate-200 max-w-md w-full p-6 animate-in zoom-in-95 duration-150">
+            <div className="flex items-center gap-3 mb-4">
+              <div className="w-10 h-10 rounded-xl bg-red-100 border border-red-200 flex items-center justify-center text-red-600 shrink-0">
+                <AlertTriangle className="w-5 h-5" />
+              </div>
+              <div>
+                <h3 className="font-bold text-slate-900 text-sm">Excluir Contatos em Massa</h3>
+                <p className="text-xs text-slate-500">Confirmação de exclusão permanente</p>
+              </div>
+            </div>
+
+            <div className="bg-red-50 border border-red-200 rounded-xl p-3.5 text-xs text-red-900 space-y-2 mb-4">
+              <p>
+                Você tem certeza que deseja excluir permanentemente os{' '}
+                <strong className="font-bold text-red-700">{selectedIds.length} contatos selecionados</strong>?
+              </p>
+              <p className="text-[11px] text-red-700 leading-relaxed">
+                Esta ação apagará os contatos, suas tags associadas e histórico de mensagens. Esta
+                operação não poderá ser desfeita.
+              </p>
+            </div>
+
+            <div className="flex items-center justify-end gap-2 pt-2 border-t border-slate-100">
+              <button
+                type="button"
+                onClick={() => setIsBulkDeleteModalOpen(false)}
+                className="px-4 py-2 border border-slate-200 text-slate-600 rounded-xl hover:bg-slate-50 font-medium text-xs"
+              >
+                Cancelar
+              </button>
+              <button
+                type="button"
+                onClick={handleBulkDelete}
+                disabled={bulkLoading}
+                className="px-4 py-2 bg-red-600 hover:bg-red-700 disabled:opacity-50 text-white rounded-xl font-semibold text-xs shadow-sm shadow-red-500/20 flex items-center gap-1.5"
+              >
+                {bulkLoading && <Loader2 className="w-3.5 h-3.5 animate-spin" />}
+                <span>Sim, Excluir {selectedIds.length} Contatos</span>
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
 
       {/* Drawer Lateral com Perfil Completo do Lead */}
       {selectedContact && (
@@ -449,64 +1062,37 @@ export default function ContactsPage() {
 
                 {/* Tags */}
                 <div>
-                  <span className="text-slate-400 block text-[10px] uppercase font-semibold mb-1">Tags Ativas</span>
-                  <div className="flex flex-wrap gap-1">
+                  <span className="text-slate-400 block text-[10px] uppercase font-semibold mb-1">Tags Atribuídas</span>
+                  <div className="flex flex-wrap gap-1.5">
                     {selectedContact.tags?.map((t: any) => (
                       <span
                         key={t.tag.id}
                         style={{ backgroundColor: `${t.tag.color}15`, color: t.tag.color }}
-                        className="px-2 py-0.5 rounded font-medium text-[10px] border border-current"
+                        className="px-2 py-0.5 rounded font-medium text-[11px] border border-current"
                       >
                         {t.tag.name}
                       </span>
                     ))}
                   </div>
                 </div>
-
-                {/* Linha do Tempo de Mensagens */}
-                <div className="pt-4 border-t border-slate-100">
-                  <span className="text-slate-400 block text-[10px] uppercase font-semibold mb-2">
-                    Histórico de Disparos ({selectedContact.messageLogs?.length || 0})
-                  </span>
-                  <div className="space-y-2 max-h-48 overflow-y-auto">
-                    {selectedContact.messageLogs?.length > 0 ? (
-                      selectedContact.messageLogs.map((m: any) => (
-                        <div key={m.id} className="p-2.5 rounded-lg bg-slate-50 border border-slate-100 text-[11px]">
-                          <div className="flex items-center justify-between">
-                            <span className="font-semibold text-slate-800">
-                              {m.channel === 'WHATSAPP' ? 'WhatsApp' : 'E-mail'}: {m.subject || m.templateName || 'Mensagem'}
-                            </span>
-                            <span className="text-[10px] text-emerald-600 font-semibold">{m.status}</span>
-                          </div>
-                          <div className="text-slate-400 text-[10px] mt-1">
-                            {new Date(m.sentAt).toLocaleString('pt-BR')}
-                          </div>
-                        </div>
-                      ))
-                    ) : (
-                      <div className="text-slate-400 text-center py-2">Nenhuma mensagem disparada ainda.</div>
-                    )}
-                  </div>
-                </div>
               </div>
             </div>
 
-            {/* Ações de Gestão de Lead */}
-            <div className="pt-4 border-t border-slate-200 flex items-center justify-between gap-3">
+            {/* Ações Rápidas no Drawer */}
+            <div className="pt-4 border-t border-slate-200 space-y-2">
               <button
                 onClick={() => handleToggleOptOut(selectedContact.id, selectedContact.status)}
-                className="flex items-center gap-1.5 px-3 py-2 text-xs font-semibold rounded-lg border border-slate-200 text-slate-700 hover:bg-slate-50"
+                className="w-full flex items-center justify-center gap-2 p-2 border border-slate-200 hover:bg-slate-50 text-slate-700 rounded-lg text-xs font-semibold"
               >
-                <UserX className="w-3.5 h-3.5 text-amber-600" />
-                <span>{selectedContact.status === 'ACTIVE' ? 'Descadastrar (Opt-out)' : 'Reativar Lead'}</span>
+                <UserX className="w-4 h-4 text-amber-600" />
+                <span>{selectedContact.status === 'ACTIVE' ? 'Descadastrar (Opt-out)' : 'Reativar Cadastro'}</span>
               </button>
-
               <button
                 onClick={() => handleDeleteContact(selectedContact.id)}
-                className="flex items-center gap-1.5 px-3 py-2 text-xs font-semibold rounded-lg bg-red-50 text-red-600 hover:bg-red-100"
+                className="w-full flex items-center justify-center gap-2 p-2 bg-red-50 hover:bg-red-100 text-red-700 rounded-lg text-xs font-semibold"
               >
-                <Trash2 className="w-3.5 h-3.5" />
-                <span>Excluir</span>
+                <Trash2 className="w-4 h-4" />
+                <span>Excluir Contato Definitivamente</span>
               </button>
             </div>
           </div>
@@ -518,7 +1104,7 @@ export default function ContactsPage() {
         <div className="fixed inset-0 bg-slate-900/40 z-50 flex items-center justify-center p-4">
           <div className="bg-white rounded-xl shadow-xl border border-slate-200 max-w-md w-full p-6">
             <div className="flex items-center justify-between pb-3 border-b border-slate-100">
-              <h3 className="font-bold text-slate-900 text-base">Cadastrar Novo Contato</h3>
+              <h3 className="font-bold text-slate-900 text-base">Novo Contato</h3>
               <button onClick={() => setIsModalOpen(false)} className="text-slate-400 hover:text-slate-600">
                 <X className="w-4 h-4" />
               </button>
@@ -532,7 +1118,7 @@ export default function ContactsPage() {
                   required
                   value={newName}
                   onChange={(e) => setNewName(e.target.value)}
-                  placeholder="Ex: Ana Clara Rodrigues"
+                  placeholder="Ex: Denis Dominique"
                   className="w-full p-2 border border-slate-200 rounded-lg focus:ring-2 focus:ring-indigo-500"
                 />
               </div>
@@ -544,18 +1130,18 @@ export default function ContactsPage() {
                   required
                   value={newEmail}
                   onChange={(e) => setNewEmail(e.target.value)}
-                  placeholder="ana.clara@email.com"
+                  placeholder="cliente@email.com"
                   className="w-full p-2 border border-slate-200 rounded-lg focus:ring-2 focus:ring-indigo-500"
                 />
               </div>
 
               <div>
-                <label className="block text-slate-700 font-semibold mb-1">WhatsApp (com DDI)</label>
+                <label className="block text-slate-700 font-semibold mb-1">WhatsApp / Telefone</label>
                 <input
                   type="text"
                   value={newPhone}
                   onChange={(e) => setNewPhone(e.target.value)}
-                  placeholder="+5511999998888"
+                  placeholder="+55 11 99999-9999"
                   className="w-full p-2 border border-slate-200 rounded-lg focus:ring-2 focus:ring-indigo-500"
                 />
               </div>
@@ -566,20 +1152,24 @@ export default function ContactsPage() {
                   type="text"
                   value={newTags}
                   onChange={(e) => setNewTags(e.target.value)}
-                  placeholder="Inscrito, VIP"
+                  placeholder="Inscrito, Turma 5, CPL 1"
                   className="w-full p-2 border border-slate-200 rounded-lg focus:ring-2 focus:ring-indigo-500"
                 />
               </div>
 
               <div>
-                <label className="block text-slate-700 font-semibold mb-1">Origem (UTM Source)</label>
-                <input
-                  type="text"
+                <label className="block text-slate-700 font-semibold mb-1">Origem UTM</label>
+                <select
                   value={newUtmSource}
                   onChange={(e) => setNewUtmSource(e.target.value)}
-                  placeholder="instagram_ads"
-                  className="w-full p-2 border border-slate-200 rounded-lg focus:ring-2 focus:ring-indigo-500"
-                />
+                  className="w-full p-2 border border-slate-200 rounded-lg bg-white"
+                >
+                  <option value="instagram">Instagram Ads</option>
+                  <option value="facebook">Facebook Ads</option>
+                  <option value="google">Google Search</option>
+                  <option value="youtube">YouTube</option>
+                  <option value="organico">Orgânico / Direto</option>
+                </select>
               </div>
 
               <div className="flex items-center gap-2 pt-2">
@@ -590,7 +1180,7 @@ export default function ContactsPage() {
                   onChange={(e) => setTriggerAuto(e.target.checked)}
                   className="rounded text-indigo-600 focus:ring-indigo-500"
                 />
-                <label htmlFor="triggerAuto" className="text-slate-600">
+                <label htmlFor="triggerAuto" className="text-slate-600 text-xs cursor-pointer">
                   Disparar automação de boas-vindas imediatamente
                 </label>
               </div>
@@ -607,7 +1197,7 @@ export default function ContactsPage() {
                   type="submit"
                   className="px-4 py-2 bg-indigo-600 hover:bg-indigo-700 text-white rounded-lg font-semibold shadow-sm"
                 >
-                  Salvar Lead
+                  Salvar Contato
                 </button>
               </div>
             </form>
@@ -615,156 +1205,63 @@ export default function ContactsPage() {
         </div>
       )}
 
-      {/* Modal Importação CSV Hotmart */}
+      {/* Modal Importação CSV */}
       {isImportModalOpen && (
-        <div className="fixed inset-0 bg-slate-900/50 backdrop-blur-sm z-50 flex items-center justify-center p-4">
-          <div className="bg-white rounded-2xl shadow-2xl border border-slate-200 max-w-xl w-full p-6 max-h-[90vh] overflow-y-auto">
+        <div className="fixed inset-0 bg-slate-900/50 z-50 flex items-center justify-center p-4 backdrop-blur-sm animate-in fade-in duration-200">
+          <div className="bg-white rounded-2xl shadow-2xl border border-slate-200 max-w-xl w-full p-6 animate-in zoom-in-95 duration-150">
             <div className="flex items-center justify-between pb-3 border-b border-slate-100">
               <div className="flex items-center gap-2">
-                <div className="w-8 h-8 rounded-lg bg-indigo-50 border border-indigo-100 flex items-center justify-center text-indigo-600">
-                  <FileSpreadsheet className="w-4 h-4" />
-                </div>
-                <div>
-                  <h3 className="font-bold text-slate-900 text-base">Importar Leads via CSV</h3>
-                  <p className="text-[11px] text-slate-500">Compatível com exportação de vendas da Hotmart ou planilhas padrão</p>
-                </div>
+                <FileSpreadsheet className="w-5 h-5 text-indigo-600" />
+                <h3 className="font-bold text-slate-900 text-base">Importação Inteligente de Planilha</h3>
               </div>
               <button
                 onClick={() => setIsImportModalOpen(false)}
-                className="text-slate-400 hover:text-slate-600 p-1 rounded-lg hover:bg-slate-100"
+                className="text-slate-400 hover:text-slate-600"
               >
-                <X className="w-4 h-4" />
+                <X className="w-5 h-5" />
               </button>
             </div>
 
             {!importResult ? (
               <div className="space-y-4 mt-4 text-xs">
-                {/* Upload Box */}
-                <div>
+                {/* Upload Zone */}
+                <div
+                  onClick={() => fileInputRef.current?.click()}
+                  className="border-2 border-dashed border-slate-300 hover:border-indigo-400 bg-slate-50/60 hover:bg-indigo-50/30 p-6 rounded-xl text-center cursor-pointer transition-all"
+                >
                   <input
-                    ref={fileInputRef}
                     type="file"
-                    accept=".csv,text/csv"
+                    ref={fileInputRef}
+                    accept=".csv"
                     onChange={handleFileChange}
                     className="hidden"
                   />
-                  <div
-                    onClick={() => fileInputRef.current?.click()}
-                    className={`border-2 border-dashed rounded-xl p-5 text-center cursor-pointer transition-all ${
-                      importFile
-                        ? 'border-indigo-400 bg-indigo-50/30'
-                        : 'border-slate-200 hover:border-indigo-300 hover:bg-slate-50'
-                    }`}
-                  >
-                    <Upload className="w-7 h-7 mx-auto text-indigo-500 mb-2" />
-                    {importFile ? (
-                      <div>
-                        <p className="font-semibold text-slate-800 text-xs">{importFile.name}</p>
-                        <p className="text-[11px] text-slate-500 mt-0.5">
-                          {(importFile.size / 1024).toFixed(1)} KB • Clique para escolher outro arquivo
-                        </p>
-                      </div>
-                    ) : (
-                      <div>
-                        <p className="font-semibold text-slate-700 text-xs">
-                          Clique para selecionar ou arraste o arquivo CSV
-                        </p>
-                        <p className="text-[11px] text-slate-400 mt-1">
-                          Exportação da Hotmart (com ponto e vírgula) ou padrão UTF-8
-                        </p>
-                      </div>
-                    )}
-                  </div>
+                  <Upload className="w-8 h-8 text-indigo-500 mx-auto mb-2" />
+                  <p className="font-semibold text-slate-800 text-sm">
+                    {importFile ? importFile.name : 'Selecione ou arraste a planilha CSV da Hotmart'}
+                  </p>
+                  <p className="text-slate-500 text-[11px] mt-1">
+                    Aceita arquivos exportados diretamente da Hotmart (.csv com separador vírgula ou ponto-e-vírgula).
+                  </p>
                 </div>
 
-                {/* Prévia dos dados lidos */}
+                {/* Prévia do CSV */}
                 {importCsvPreview.length > 0 && (
-                  <div className="bg-slate-50 border border-slate-200 rounded-lg p-3">
-                    <div className="flex items-center justify-between mb-2">
-                      <span className="font-semibold text-slate-700 text-[11px] flex items-center gap-1.5">
-                        <CheckCircle className="w-3.5 h-3.5 text-emerald-600" />
-                        Prévia dos dados identificados:
-                      </span>
-                      <span className="text-[10px] text-slate-400">Primeiras {importCsvPreview.length - 1} linhas</span>
-                    </div>
-                    <div className="overflow-x-auto text-[10px] text-slate-600 font-mono">
-                      <table className="w-full">
-                        <thead>
-                          <tr className="border-b border-slate-200 text-slate-800 font-semibold">
-                            {importCsvPreview[0]?.slice(0, 5).map((col, idx) => (
-                              <th key={idx} className="p-1 text-left truncate max-w-[120px]">
-                                {col}
-                              </th>
-                            ))}
-                          </tr>
-                        </thead>
-                        <tbody>
-                          {importCsvPreview.slice(1).map((row, rIdx) => (
-                            <tr key={rIdx} className="border-b border-slate-100">
-                              {row.slice(0, 5).map((cell, cIdx) => (
-                                <td key={cIdx} className="p-1 truncate max-w-[120px]">
-                                  {cell || '-'}
-                                </td>
-                              ))}
-                            </tr>
-                          ))}
-                        </tbody>
-                      </table>
+                  <div className="bg-slate-50 p-3 rounded-lg border border-slate-200 text-[11px]">
+                    <span className="font-bold text-slate-700 block mb-1">Prévia das primeiras linhas:</span>
+                    <div className="space-y-1 font-mono text-[10px] text-slate-600 overflow-x-auto max-h-24">
+                      {importCsvPreview.map((row, i) => (
+                        <div key={i} className="whitespace-nowrap">
+                          {row.slice(0, 5).join(' | ')}
+                        </div>
+                      ))}
                     </div>
                   </div>
                 )}
 
-                {/* Opções de Inteligência de Importação */}
-                <div className="bg-slate-50/70 p-3.5 rounded-xl border border-slate-200 space-y-3">
-                  <span className="text-[11px] font-bold text-slate-800 uppercase tracking-wider block">
-                    Regras de Automação e Tags
-                  </span>
-
-                  {/* Modo de Identificação por Tag (Denis Dominique) */}
-                  <div className="p-2.5 bg-white rounded-lg border border-slate-200 space-y-2">
-                    <span className="text-[11px] font-bold text-slate-700 block">
-                      Formato de Identificação por Tags:
-                    </span>
-                    <div className="space-y-1.5">
-                      <label className="flex items-start gap-2 cursor-pointer">
-                        <input
-                          type="radio"
-                          name="tagMode"
-                          value="UNIFIED"
-                          checked={importTagMode === 'UNIFIED'}
-                          onChange={() => setImportTagMode('UNIFIED')}
-                          className="mt-0.5 text-indigo-600 focus:ring-indigo-500"
-                        />
-                        <div>
-                          <span className="text-xs font-semibold text-slate-800 block">
-                            Tag Unificada por Produto <span className="text-[10px] font-bold text-emerald-600 bg-emerald-50 px-1.5 py-0.2 rounded border border-emerald-200">Recomendado</span>
-                          </span>
-                          <span className="text-slate-500 text-[11px] block">
-                            Cria &quot;Cliente: [Produto] - Compra Aprovada&quot;. Evita disparos duplicados ou cruzados entre múltiplos produtos na esteira.
-                          </span>
-                        </div>
-                      </label>
-
-                      <label className="flex items-start gap-2 cursor-pointer">
-                        <input
-                          type="radio"
-                          name="tagMode"
-                          value="SEPARATE"
-                          checked={importTagMode === 'SEPARATE'}
-                          onChange={() => setImportTagMode('SEPARATE')}
-                          className="mt-0.5 text-indigo-600 focus:ring-indigo-500"
-                        />
-                        <div>
-                          <span className="text-xs font-semibold text-slate-800 block">
-                            Tags Separadas (#Produto e #Situação)
-                          </span>
-                          <span className="text-slate-500 text-[11px] block">
-                            Cria tags soltas para o produto e o status. Use para acionar gatilhos com regra E/OU (Multi-tags) no funil.
-                          </span>
-                        </div>
-                      </label>
-                    </div>
-                  </div>
+                {/* Opções de Importação */}
+                <div className="bg-slate-50 p-4 rounded-xl border border-slate-200 space-y-3">
+                  <span className="font-bold text-slate-800 block text-xs">Estratégia de Tags Automáticas</span>
 
                   <label className="flex items-start gap-2.5 cursor-pointer">
                     <input
@@ -774,11 +1271,9 @@ export default function ContactsPage() {
                       className="mt-0.5 rounded text-indigo-600 focus:ring-indigo-500"
                     />
                     <div>
-                      <span className="font-semibold text-slate-800 block">
-                        Criar tag com o Nome do Produto Hotmart
-                      </span>
+                      <span className="font-semibold text-slate-800 block">Identificar Produto de Referência</span>
                       <span className="text-slate-500 text-[11px]">
-                        Identifica a coluna &quot;Nome do Produto&quot; e aplica como tag no lead.
+                        Adiciona a tag com o nome do produto (ex: #Imersão Busca e Apreensão de Veículos).
                       </span>
                     </div>
                   </label>
@@ -791,14 +1286,48 @@ export default function ContactsPage() {
                       className="mt-0.5 rounded text-indigo-600 focus:ring-indigo-500"
                     />
                     <div>
-                      <span className="font-semibold text-slate-800 block">
-                        Criar tag pelo Status da Compra
-                      </span>
+                      <span className="font-semibold text-slate-800 block">Identificar Situação da Compra</span>
                       <span className="text-slate-500 text-[11px]">
-                        Aplica tags como &quot;Cliente&quot; para compras aprovadas ou &quot;Aguardando Pagamento&quot;.
+                        Adiciona tag de status do pedido (ex: #Compra Aprovada, #Boleto Gerado).
                       </span>
                     </div>
                   </label>
+
+                  {/* Escolha entre Tag Unificada ou Separada */}
+                  <div className="pt-2 border-t border-slate-200">
+                    <span className="block text-slate-700 font-semibold mb-1 text-[11px]">Formato da Tag</span>
+                    <div className="grid grid-cols-2 gap-2">
+                      <button
+                        type="button"
+                        onClick={() => setImportTagMode('UNIFIED')}
+                        className={`p-2.5 rounded-lg border text-left transition-all ${
+                          importTagMode === 'UNIFIED'
+                            ? 'bg-indigo-50 border-indigo-500 text-indigo-900 font-bold'
+                            : 'bg-white border-slate-200 text-slate-600'
+                        }`}
+                      >
+                        <span className="block text-xs">Unificada</span>
+                        <span className="block text-[10px] font-normal text-slate-500 mt-0.5">
+                          Ex: "Cliente Imersão Busca Compra Aprovada"
+                        </span>
+                      </button>
+
+                      <button
+                        type="button"
+                        onClick={() => setImportTagMode('SEPARATE')}
+                        className={`p-2.5 rounded-lg border text-left transition-all ${
+                          importTagMode === 'SEPARATE'
+                            ? 'bg-indigo-50 border-indigo-500 text-indigo-900 font-bold'
+                            : 'bg-white border-slate-200 text-slate-600'
+                        }`}
+                      >
+                        <span className="block text-xs">Separada</span>
+                        <span className="block text-[10px] font-normal text-slate-500 mt-0.5">
+                          Ex: #Imersão Busca + #Compra Aprovada
+                        </span>
+                      </button>
+                    </div>
+                  </div>
 
                   <label className="flex items-start gap-2.5 cursor-pointer">
                     <input
