@@ -292,8 +292,13 @@ export const WhatsAppNode = memo(({ data, selected }: any) => {
   const waiting = data.config?.waitingCount ?? 0;
   const success = data.config?.successCount ?? 0;
   const failed = data.config?.failedCount ?? 0;
-  const messageType = data.config?.messageType || (data.config?.mediaUrl ? 'image' : 'text');
-  const hasContent = !!data.config?.message || !!data.config?.text || !!data.config?.mediaUrl || !!data.config?.mediaBase64;
+  const blocks = data.config?.blocks;
+  const hasBlocks = Array.isArray(blocks) && blocks.length > 0;
+  const firstMediaBlock = hasBlocks ? blocks.find((b: any) => b.type !== 'text') : null;
+  const messageType = firstMediaBlock ? firstMediaBlock.type : (data.config?.messageType || (data.config?.mediaUrl ? 'image' : 'text'));
+  const hasContent = hasBlocks
+    ? blocks.some((b: any) => Boolean((b.text && b.text.trim()) || b.mediaUrl || b.mediaBase64 || (b.caption && b.caption.trim())))
+    : Boolean(data.config?.message || data.config?.text || data.config?.mediaUrl || data.config?.mediaBase64);
 
   return (
     <div className="flex flex-col items-center group cursor-pointer select-none">

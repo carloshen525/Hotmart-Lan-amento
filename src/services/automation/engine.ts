@@ -168,26 +168,62 @@ export class AutomationEngine {
           case 'SEND_WHATSAPP': {
             if (contact.phone) {
               const firstName = contact.name ? contact.name.trim().split(/\s+/)[0] : '';
-              const res = await messageManager.sendWhatsApp({
-                tenantId,
-                contactId: contact.id,
-                phone: contact.phone,
-                templateName: config.templateName,
-                text: config.text || config.message || `Olá ${contact.name}!`,
-                messageType: config.messageType || (config.mediaUrl ? 'image' : 'text'),
-                mediaUrl: config.mediaUrl,
-                mediaBase64: config.mediaBase64,
-                mediaMimeType: config.mediaMimeType,
-                mediaFileName: config.mediaFileName,
-                caption: config.caption || config.message || config.text,
-                variables: {
-                  nome: contact.name || '',
-                  primeiro_nome: firstName || contact.name || '',
-                  email: contact.email || '',
-                  telefone: contact.phone || '',
-                },
-              });
-              stepDetails = { whatsappSent: res.success, messageId: res.messageId, provider: res.provider };
+              const blocks = (config.blocks as any[]) || [];
+              if (Array.isArray(blocks) && blocks.length > 0) {
+                let lastRes: any = null;
+                for (let i = 0; i < blocks.length; i++) {
+                  const b = blocks[i];
+                  if (i > 0) {
+                    await new Promise((r) => setTimeout(r, 600));
+                  }
+                  const isMedia = b.type !== 'text';
+                  lastRes = await messageManager.sendWhatsApp({
+                    tenantId,
+                    contactId: contact.id,
+                    phone: contact.phone,
+                    text: isMedia ? (b.caption || '') : (b.text || ''),
+                    messageType: (['image', 'video', 'audio'].includes(b.type) ? b.type : (isMedia ? 'image' : 'text')) as any,
+                    mediaUrl: isMedia ? b.mediaUrl : undefined,
+                    mediaBase64: isMedia ? b.mediaBase64 : undefined,
+                    mediaMimeType: isMedia ? b.mediaMimeType : undefined,
+                    mediaFileName: isMedia ? b.mediaFileName : undefined,
+                    caption: isMedia ? b.caption : undefined,
+                    variables: {
+                      nome: contact.name || '',
+                      primeiro_nome: firstName || contact.name || '',
+                      email: contact.email || '',
+                      telefone: contact.phone || '',
+                    },
+                  });
+                }
+                stepDetails = {
+                  whatsappSent: lastRes?.success ?? true,
+                  blocksSent: blocks.length,
+                  messageId: lastRes?.messageId,
+                  provider: lastRes?.provider,
+                };
+              } else {
+                const res = await messageManager.sendWhatsApp({
+                  tenantId,
+                  contactId: contact.id,
+                  phone: contact.phone,
+                  templateName: config.templateName,
+                  text: config.text || config.message || `Olá ${contact.name}!`,
+                  messageType: config.messageType || (config.mediaUrl ? 'image' : 'text'),
+                  mediaUrl: config.mediaUrl,
+                  mediaBase64: config.mediaBase64,
+                  mediaMimeType: config.mediaMimeType,
+                  mediaFileName: config.mediaFileName,
+                  caption: config.caption || config.message || config.text,
+                  variables: {
+                    nome: contact.name || '',
+                    primeiro_nome: firstName || contact.name || '',
+                    email: contact.email || '',
+                    telefone: contact.phone || '',
+                  },
+                });
+                stepDetails = { whatsappSent: res.success, messageId: res.messageId, provider: res.provider };
+              }
             }
             break;
           }
@@ -728,25 +764,60 @@ export class AutomationEngine {
       if (node.type === 'whatsapp') {
         if (contact.phone) {
           const firstName = contact.name ? contact.name.trim().split(/\s+/)[0] : '';
-          await messageManager.sendWhatsApp({
-            tenantId,
-            contactId: contact.id,
-            phone: contact.phone,
-            text: cfg.message || cfg.text || `Olá ${contact.name}!`,
-            messageType: cfg.messageType || (cfg.mediaUrl ? 'image' : 'text'),
-            mediaUrl: cfg.mediaUrl,
-            mediaBase64: cfg.mediaBase64,
-            mediaMimeType: cfg.mediaMimeType,
-            mediaFileName: cfg.mediaFileName,
-            caption: cfg.caption || cfg.message || cfg.text,
-            variables: {
-              nome: contact.name || '',
-              primeiro_nome: firstName || contact.name || '',
-              email: contact.email || '',
-              telefone: contact.phone || '',
-            },
-          });
-          stepDetails = { phone: contact.phone, messageType: cfg.messageType || 'text' };
+          const blocks = (cfg.blocks as any[]) || [];
+          if (Array.isArray(blocks) && blocks.length > 0) {
+            let lastRes: any = null;
+            for (let i = 0; i < blocks.length; i++) {
+              const b = blocks[i];
+              if (i > 0) {
+                await new Promise((r) => setTimeout(r, 600));
+              }
+              const isMedia = b.type !== 'text';
+              lastRes = await messageManager.sendWhatsApp({
+                tenantId,
+                contactId: contact.id,
+                phone: contact.phone,
+                text: isMedia ? (b.caption || '') : (b.text || ''),
+                messageType: (['image', 'video', 'audio'].includes(b.type) ? b.type : (isMedia ? 'image' : 'text')) as any,
+                mediaUrl: isMedia ? b.mediaUrl : undefined,
+                mediaBase64: isMedia ? b.mediaBase64 : undefined,
+                mediaMimeType: isMedia ? b.mediaMimeType : undefined,
+                mediaFileName: isMedia ? b.mediaFileName : undefined,
+                caption: isMedia ? b.caption : undefined,
+                variables: {
+                  nome: contact.name || '',
+                  primeiro_nome: firstName || contact.name || '',
+                  email: contact.email || '',
+                  telefone: contact.phone || '',
+                },
+              });
+            }
+            stepDetails = {
+              phone: contact.phone,
+              blocksCount: blocks.length,
+              status: lastRes?.status || 'SENT',
+            };
+          } else {
+            await messageManager.sendWhatsApp({
+              tenantId,
+              contactId: contact.id,
+              phone: contact.phone,
+              text: cfg.message || cfg.text || `Olá ${contact.name}!`,
+              messageType: cfg.messageType || (cfg.mediaUrl ? 'image' : 'text'),
+              mediaUrl: cfg.mediaUrl,
+              mediaBase64: cfg.mediaBase64,
+              mediaMimeType: cfg.mediaMimeType,
+              mediaFileName: cfg.mediaFileName,
+              caption: cfg.caption || cfg.message || cfg.text,
+              variables: {
+                nome: contact.name || '',
+                primeiro_nome: firstName || contact.name || '',
+                email: contact.email || '',
+                telefone: contact.phone || '',
+              },
+            });
+            stepDetails = { phone: contact.phone, messageType: cfg.messageType || 'text' };
+          }
         } else {
           stepStatus = 'FAILED';
           stepDetails = { error: 'Contato sem telefone cadastrado' };

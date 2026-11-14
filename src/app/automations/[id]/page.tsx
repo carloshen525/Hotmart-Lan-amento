@@ -60,6 +60,9 @@ import {
   Upload,
   Music,
   FileUp,
+  Paperclip,
+  FileText,
+  Eye,
 } from 'lucide-react';
 
 import {
@@ -78,6 +81,18 @@ interface TagItem {
   name: string;
   color: string;
   _count?: { contacts: number };
+}
+
+export interface MessageBlock {
+  id: string;
+  type: 'text' | 'image' | 'video' | 'audio' | 'file';
+  text?: string;
+  mediaUrl?: string;
+  mediaBase64?: string;
+  mediaFileName?: string;
+  mediaMimeType?: string;
+  mediaSize?: number | null;
+  caption?: string;
 }
 
 export default function AutomationCanvasPage() {
@@ -148,6 +163,11 @@ export default function AutomationCanvasPage() {
   const [wppCaption, setWppCaption] = useState('');
   const [wppUploading, setWppUploading] = useState(false);
   const [wppUploadError, setWppUploadError] = useState<string | null>(null);
+
+  // Múltiplos Blocos de Mensagem do WhatsApp (Texto e Arquivos empilhados sem perda de dados)
+  const [wppBlocks, setWppBlocks] = useState<MessageBlock[]>([]);
+  const [uploadingBlockId, setUploadingBlockId] = useState<string | null>(null);
+  const [showAddBlockMenu, setShowAddBlockMenu] = useState(false);
 
   // Construtor Visual de E-mails
   const [isVisualEmailBuilderOpen, setIsVisualEmailBuilderOpen] = useState(false);
@@ -1132,32 +1152,133 @@ export default function AutomationCanvasPage() {
 
     const cfg = (target.data?.config as any) || {};
     if (target.type === 'whatsapp') {
-      const detectedType = cfg.messageType || (cfg.mediaUrl ? (cfg.mediaMimeType?.startsWith('video/') ? 'video' : cfg.mediaMimeType?.startsWith('audio/') ? 'audio' : 'image') : 'text');
-      setWppMessageType(detectedType);
-      setWppMediaUrl(cfg.mediaUrl || '');
-      setWppMediaBase64(cfg.mediaBase64 || '');
-      setWppMediaFileName(cfg.mediaFileName || '');
-      setWppMediaMimeType(cfg.mediaMimeType || '');
-      setWppMediaSize(cfg.mediaSize || null);
-      setWppCaption(cfg.caption || '');
+      if (Array.isArray(cfg.blocks) && cfg.blocks.length > 0) {
+        setWppBlocks(cfg.blocks);
+      } else {
+        const initialBlocks: MessageBlock[] = [];
+        const legacyText = cfg.message || cfg.text || '';
+        const hasMedia = Boolean(cfg.mediaUrl || cfg.mediaBase64);
+
+        if (hasMedia) {
+          const detectedType = cfg.messageType || (cfg.mediaMimeType?.startsWith('video/') ? 'video' : cfg.mediaMimeType?.startsWith('audio/') ? 'audio' : 'image');
+          initialBlocks.push({
+            id: typeof crypto !== 'undefined' && crypto.randomUUID ? crypto.randomUUID() : Math.random().toString(36).substring(2, 9),
+            type: detectedType as any,
+            mediaUrl: cfg.mediaUrl,
+            mediaBase64: cfg.mediaBase64,
+            mediaFileName: cfg.mediaFileName,
+            mediaMimeType: cfg.mediaMimeType,
+            mediaSize: cfg.mediaSize,
+            caption: cfg.caption || '',
+          });
+          if (legacyText && legacyText !== cfg.caption) {
+            initialBlocks.unshift({
+              id: typeof crypto !== 'undefined' && crypto.randomUUID ? crypto.randomUUID() : Math.random().toString(36).substring(2, 9),
+              type: 'text',
+              text: legacyText,
+            });
+          }
+        } else {
+          initialBlocks.push({
+            id: typeof crypto !== 'undefined' && crypto.randomUUID ? crypto.randomUUID() : Math.random().toString(36).substring(2, 9),
+            type: 'text',
+            text: legacyText,
+          });
+        }
+        setWppBlocks(initialBlocks);
+      }
       setWppUploadError(null);
+      setShowAddBlockMenu(false);
     }
     setIsMessageDrawerOpen(true);
   };
 
-  // Upload de arquivos locais (Áudio, Vídeo, Imagem)
-  const handleFileUpload = async (e: React.ChangeEvent<HTMLInputElement>) => {
+  // Funções de manipulação de blocos de mensagem (Texto & Arquivos)
+  const handleAddTextBlock = () => {
+    setWppBlocks((prev) => [
+      ...prev,
+      {
+        id: typeof crypto !== 'undefined' && crypto.randomUUID ? crypto.randomUUID() : Math.random().toString(36).substring(2, 9),
+        type: 'text',
+        text: '',
+      },
+    ]);
+    setShowAddBlockMenu(false);
+  };
+
+  const handleAddMediaBlock = (mediaType: 'image' | 'video' | 'audio' | 'file' = 'image') => {
+    setWppBlocks((prev) => [
+      ...prev,
+      {
+        id: typeof crypto !== 'undefined' && crypto.randomUUID ? crypto.randomUUID() : Math.random().toString(36).substring(2, 9),
+        type: mediaType,
+        caption: '',
+      },
+    ]);
+    setShowAddBlockMenu(false);
+  };
+
+  const handleRemoveBlock = (blockId: string) => {
+    setWppBlocks((prev) => {
+      const filtered = prev.filter((b) => b.id !== blockId);
+      return filtered.length > 0
+        ? filtered
+        : [
+            {
+              id: typeof crypto !== 'undefined' && crypto.randomUUID ? crypto.randomUUID() : Math.random().toString(36).substring(2, 9),
+              type: 'text',
+              text: '',
+            },
+          ];
+    });
+  };
+
+  const handleUpdateBlockText = (blockId: string, text: string) => {
+    setWppBlocks((prev) =>
+      prev.map((b) => (b.id === blockId ? { ...b, text } : b))
+    );
+  };
+
+  const handleUpdateBlockCaption = (blockId: string, caption: string) => {
+    setWppBlocks((prev) =>
+      prev.map((b) => (b.id === blockId ? { ...b, caption } : b))
+    );
+  };
+
+  const handleInsertVariableInBlock = (blockId: string, field: 'text' | 'caption', variable: string) => {
+    setWppBlocks((prev) =>
+      prev.map((b) => {
+        if (b.id !== blockId) return b;
+        const currentVal = (b as any)[field] || '';
+        return {
+          ...b,
+          [field]: currentVal ? `${currentVal} ${variable}` : variable,
+        };
+      })
+    );
+  };
+
+  const handleUpdateBlockType = (blockId: string, newType: 'image' | 'video' | 'audio' | 'file') => {
+    setWppBlocks((prev) =>
+      prev.map((b) => (b.id === blockId ? { ...b, type: newType } : b))
+    );
+  };
+
+  const handleBlockFileUpload = async (blockId: string, e: React.ChangeEvent<HTMLInputElement>) => {
     const file = e.target.files?.[0];
     if (!file) return;
 
-    setWppUploading(true);
+    setUploadingBlockId(blockId);
     setWppUploadError(null);
 
     // Pré-visualização instantânea local via Data URL
     const reader = new FileReader();
     reader.onload = () => {
       if (typeof reader.result === 'string') {
-        setWppMediaBase64(reader.result);
+        const previewUrl = reader.result;
+        setWppBlocks((prev) =>
+          prev.map((b) => (b.id === blockId ? { ...b, mediaBase64: previewUrl } : b))
+        );
       }
     };
     reader.readAsDataURL(file);
@@ -1176,48 +1297,94 @@ export default function AutomationCanvasPage() {
         throw new Error(data.error || 'Falha ao enviar arquivo');
       }
 
-      setWppMediaUrl(data.url);
-      setWppMediaBase64(data.dataUrl || data.url);
-      setWppMediaFileName(data.fileName);
-      setWppMediaMimeType(data.mimeType);
-      setWppMediaSize(data.fileSize);
+      let autoType: 'image' | 'video' | 'audio' | 'file' = 'file';
+      if (data.mimeType?.startsWith('image/')) autoType = 'image';
+      else if (data.mimeType?.startsWith('video/')) autoType = 'video';
+      else if (data.mimeType?.startsWith('audio/')) autoType = 'audio';
+
+      setWppBlocks((prev) =>
+        prev.map((b) =>
+          b.id === blockId
+            ? {
+                ...b,
+                type: autoType,
+                mediaUrl: data.url,
+                mediaBase64: data.dataUrl || data.url,
+                mediaFileName: data.fileName,
+                mediaMimeType: data.mimeType,
+                mediaSize: data.fileSize,
+              }
+            : b
+        )
+      );
     } catch (err: any) {
       console.error('Upload error:', err);
       setWppUploadError(err.message || 'Erro ao carregar arquivo');
     } finally {
-      setWppUploading(false);
+      setUploadingBlockId(null);
     }
   };
 
+  const handleClearBlockMedia = (blockId: string) => {
+    setWppBlocks((prev) =>
+      prev.map((b) =>
+        b.id === blockId
+          ? {
+              ...b,
+              mediaUrl: undefined,
+              mediaBase64: undefined,
+              mediaFileName: undefined,
+              mediaMimeType: undefined,
+              mediaSize: null,
+            }
+          : b
+      )
+    );
+  };
+
   // Salvar mensagem de WhatsApp ou E-mail
-  const handleSaveMessage = (messageText: string, emailSubject?: string) => {
+  const handleSaveMessage = (legacyMessageText?: string, emailSubject?: string) => {
     if (!selectedNode) return;
 
     setSequenceNodes((nds) =>
       nds.map((n) => {
         if (n.id === selectedNode.id) {
           const isWpp = n.type === 'whatsapp';
-          const isMedia = isWpp && wppMessageType !== 'text';
-          return {
-            ...n,
-            data: {
-              ...n.data,
-              config: {
-                ...((n.data.config as object) || {}),
-                messageType: isWpp ? wppMessageType : undefined,
-                mediaUrl: isMedia ? wppMediaUrl : undefined,
-                mediaBase64: isMedia ? wppMediaBase64 : undefined,
-                mediaMimeType: isMedia ? wppMediaMimeType : undefined,
-                mediaFileName: isMedia ? wppMediaFileName : undefined,
-                mediaSize: isMedia ? wppMediaSize : undefined,
-                caption: isMedia ? wppCaption : undefined,
-                message: isWpp ? (isMedia ? (wppCaption || `[${wppMessageType.toUpperCase()}] ${wppMediaFileName}`) : messageText) : undefined,
-                text: isWpp ? (isMedia ? (wppCaption || `[${wppMessageType.toUpperCase()}] ${wppMediaFileName}`) : messageText) : undefined,
-                subject: !isWpp ? emailSubject : undefined,
-                content: !isWpp ? messageText : undefined,
+          if (isWpp) {
+            const firstMedia = wppBlocks.find((b) => b.type !== 'text');
+            const firstText = wppBlocks.find((b) => b.type === 'text');
+            return {
+              ...n,
+              data: {
+                ...n.data,
+                config: {
+                  ...((n.data.config as object) || {}),
+                  blocks: wppBlocks,
+                  messageType: firstMedia ? firstMedia.type : 'text',
+                  mediaUrl: firstMedia?.mediaUrl,
+                  mediaBase64: firstMedia?.mediaBase64,
+                  mediaMimeType: firstMedia?.mediaMimeType,
+                  mediaFileName: firstMedia?.mediaFileName,
+                  mediaSize: firstMedia?.mediaSize,
+                  caption: firstMedia?.caption,
+                  message: firstText?.text || firstMedia?.caption || '[Mensagem WhatsApp]',
+                  text: firstText?.text || firstMedia?.caption || '[Mensagem WhatsApp]',
+                },
               },
-            },
-          };
+            };
+          } else {
+            return {
+              ...n,
+              data: {
+                ...n.data,
+                config: {
+                  ...((n.data.config as object) || {}),
+                  subject: emailSubject,
+                  content: legacyMessageText,
+                },
+              },
+            };
+          }
         }
         return n;
       })
@@ -1957,60 +2124,6 @@ export default function AutomationCanvasPage() {
             </div>
 
             <div className="mt-4 space-y-4">
-              {/* Se for WhatsApp, exibe seletor de tipo de mensagem */}
-              {selectedNode.type === 'whatsapp' && (
-                <div className="grid grid-cols-4 gap-1.5 p-1 bg-[#101217] rounded-xl border border-slate-800">
-                  <button
-                    type="button"
-                    onClick={() => setWppMessageType('text')}
-                    className={`py-2 px-2 rounded-lg flex items-center justify-center gap-1.5 font-semibold text-xs transition-all ${
-                      wppMessageType === 'text'
-                        ? 'bg-emerald-600/20 text-emerald-300 border border-emerald-500/40 shadow-sm'
-                        : 'text-slate-400 hover:text-white hover:bg-slate-800/50'
-                    }`}
-                  >
-                    <MessageSquare className="w-3.5 h-3.5" />
-                    <span>Texto</span>
-                  </button>
-                  <button
-                    type="button"
-                    onClick={() => setWppMessageType('image')}
-                    className={`py-2 px-2 rounded-lg flex items-center justify-center gap-1.5 font-semibold text-xs transition-all ${
-                      wppMessageType === 'image'
-                        ? 'bg-emerald-600/20 text-emerald-300 border border-emerald-500/40 shadow-sm'
-                        : 'text-slate-400 hover:text-white hover:bg-slate-800/50'
-                    }`}
-                  >
-                    <ImageIcon className="w-3.5 h-3.5" />
-                    <span>Imagem</span>
-                  </button>
-                  <button
-                    type="button"
-                    onClick={() => setWppMessageType('video')}
-                    className={`py-2 px-2 rounded-lg flex items-center justify-center gap-1.5 font-semibold text-xs transition-all ${
-                      wppMessageType === 'video'
-                        ? 'bg-emerald-600/20 text-emerald-300 border border-emerald-500/40 shadow-sm'
-                        : 'text-slate-400 hover:text-white hover:bg-slate-800/50'
-                    }`}
-                  >
-                    <VideoIcon className="w-3.5 h-3.5" />
-                    <span>Vídeo</span>
-                  </button>
-                  <button
-                    type="button"
-                    onClick={() => setWppMessageType('audio')}
-                    className={`py-2 px-2 rounded-lg flex items-center justify-center gap-1.5 font-semibold text-xs transition-all ${
-                      wppMessageType === 'audio'
-                        ? 'bg-emerald-600/20 text-emerald-300 border border-emerald-500/40 shadow-sm'
-                        : 'text-slate-400 hover:text-white hover:bg-slate-800/50'
-                    }`}
-                  >
-                    <Mic className="w-3.5 h-3.5" />
-                    <span>Áudio</span>
-                  </button>
-                </div>
-              )}
-
               {/* Alerta de erro de upload se houver */}
               {wppUploadError && (
                 <div className="p-3 bg-red-950/50 border border-red-800/60 rounded-xl text-red-300 text-xs flex items-center gap-2">
@@ -2019,426 +2132,414 @@ export default function AutomationCanvasPage() {
                 </div>
               )}
 
-              {/* Se for E-mail, exibe banner do Construtor Visual */}
-              {selectedNode.type === 'email' && (
-                <div className="p-4 bg-gradient-to-r from-orange-950/60 via-indigo-950/60 to-purple-950/60 border border-orange-500/30 rounded-2xl flex items-center justify-between gap-4 shadow-lg">
-                  <div className="flex items-center gap-3">
-                    <div className="w-10 h-10 rounded-xl bg-orange-600/30 border border-orange-500/50 flex items-center justify-center text-orange-400 shrink-0">
-                      <Sparkles className="w-5 h-5" />
+              {/* SE FOR WHATSAPP: NOVO BUILDER DE BLOCOS MÚLTIPLOS (TEXTO + ARQUIVOS) */}
+              {selectedNode.type === 'whatsapp' && (
+                <div className="space-y-3">
+                  <div className="flex items-center justify-between">
+                    <label className="text-slate-200 font-bold text-sm flex items-center gap-2">
+                      Mensagem
+                      <span className="text-[11px] font-normal text-slate-400">
+                        ({wppBlocks.length} bloco{wppBlocks.length === 1 ? '' : 's'})
+                      </span>
+                    </label>
+                    <div className="flex items-center gap-1.5 text-slate-400 text-[11px]" title="Os blocos serão enviados em sequência no WhatsApp">
+                      <Eye className="w-3.5 h-3.5 text-emerald-400" />
+                      <span>Sequência de blocos</span>
                     </div>
-                    <div>
-                      <h4 className="font-bold text-white text-xs flex items-center gap-2">
-                        Construtor Visual de E-mails
-                        {Boolean((selectedNode.data.config as any)?.contentJson) && (
-                          <span className="text-[10px] bg-emerald-950 text-emerald-300 border border-emerald-800/60 px-2 py-0.2 rounded-full font-semibold">
-                            ✨ Modelo Ativo
-                          </span>
+                  </div>
+
+                  {/* Container de Blocos */}
+                  <div className="border border-slate-800 bg-[#12141a]/60 rounded-2xl p-3.5 space-y-3">
+                    {wppBlocks.map((block, index) => (
+                      <div key={block.id}>
+                        {/* BLOCO TIPO TEXTO */}
+                        {block.type === 'text' ? (
+                          <div className="relative bg-[#181c25] border border-slate-800 rounded-xl p-3 space-y-2 group shadow-sm hover:border-slate-700 transition-colors">
+                            <div className="flex items-center justify-between pb-1 border-b border-slate-800/60">
+                              <div className="flex items-center gap-1.5 text-emerald-400 text-[11px] font-semibold">
+                                <MessageSquare className="w-3.5 h-3.5" />
+                                <span>Bloco {index + 1} - Texto</span>
+                              </div>
+                              {wppBlocks.length > 1 && (
+                                <button
+                                  type="button"
+                                  onClick={() => handleRemoveBlock(block.id)}
+                                  className="text-slate-500 hover:text-red-400 p-1 rounded-md hover:bg-red-950/40 transition-colors cursor-pointer"
+                                  title="Remover este bloco"
+                                >
+                                  <Trash2 className="w-3.5 h-3.5" />
+                                </button>
+                              )}
+                            </div>
+
+                            <div className="relative">
+                              <textarea
+                                rows={4}
+                                value={block.text || ''}
+                                onChange={(e) => handleUpdateBlockText(block.id, e.target.value)}
+                                placeholder="Digite aqui..."
+                                className="w-full p-2.5 pb-6 bg-[#0f1117] border border-slate-800 rounded-lg text-xs text-white placeholder-slate-500 focus:outline-none focus:border-emerald-500 font-sans leading-relaxed resize-y"
+                              />
+                              <div className="absolute bottom-2 right-2.5 text-[10px] text-slate-500 font-mono pointer-events-none select-none">
+                                {(block.text || '').length}/500
+                              </div>
+                            </div>
+
+                            {/* Tags de variáveis dinâmicas */}
+                            <div className="flex items-center gap-1.5 flex-wrap pt-0.5">
+                              <span className="text-[10px] text-slate-400">Variáveis:</span>
+                              {['{{nome}}', '{{primeiro_nome}}', '{{email}}', '{{telefone}}'].map((v) => (
+                                <button
+                                  key={v}
+                                  type="button"
+                                  onClick={() => handleInsertVariableInBlock(block.id, 'text', v)}
+                                  className="px-2 py-0.5 rounded bg-slate-800/80 hover:bg-slate-700 text-emerald-300 font-mono text-[10px] border border-slate-700/80 transition-colors cursor-pointer"
+                                >
+                                  {v}
+                                </button>
+                              ))}
+                            </div>
+                          </div>
+                        ) : (
+                          /* BLOCO TIPO ARQUIVO / MÍDIA */
+                          <div className="relative bg-[#181c25] border border-slate-800 rounded-xl p-3 space-y-3 group shadow-sm hover:border-slate-700 transition-colors">
+                            <div className="flex items-center justify-between pb-1 border-b border-slate-800/60">
+                              <div className="flex items-center gap-1.5 text-sky-400 text-[11px] font-semibold">
+                                <Paperclip className="w-3.5 h-3.5" />
+                                <span>Bloco {index + 1} - Arquivo</span>
+                              </div>
+
+                              <div className="flex items-center gap-2">
+                                {/* Seletor de Tipo de Arquivo */}
+                                <div className="flex items-center gap-1 bg-[#101217] p-0.5 rounded-lg border border-slate-800">
+                                  {[
+                                    { type: 'image', label: 'Imagem', icon: ImageIcon },
+                                    { type: 'video', label: 'Vídeo', icon: VideoIcon },
+                                    { type: 'audio', label: 'Áudio', icon: Mic },
+                                    { type: 'file', label: 'Doc', icon: FileText },
+                                  ].map((item) => {
+                                    const Icon = item.icon;
+                                    const isActive = block.type === item.type;
+                                    return (
+                                      <button
+                                        key={item.type}
+                                        type="button"
+                                        onClick={() => handleUpdateBlockType(block.id, item.type as any)}
+                                        className={`px-2 py-0.5 rounded text-[10px] font-semibold flex items-center gap-1 transition-all cursor-pointer ${
+                                          isActive
+                                            ? 'bg-sky-500/20 text-sky-300 border border-sky-500/40'
+                                            : 'text-slate-400 hover:text-white'
+                                        }`}
+                                      >
+                                        <Icon className="w-3 h-3" />
+                                        <span>{item.label}</span>
+                                      </button>
+                                    );
+                                  })}
+                                </div>
+
+                                {wppBlocks.length > 1 && (
+                                  <button
+                                    type="button"
+                                    onClick={() => handleRemoveBlock(block.id)}
+                                    className="text-slate-500 hover:text-red-400 p-1 rounded-md hover:bg-red-950/40 transition-colors cursor-pointer"
+                                    title="Remover este bloco"
+                                  >
+                                    <Trash2 className="w-3.5 h-3.5" />
+                                  </button>
+                                )}
+                              </div>
+                            </div>
+
+                            {/* Upload e Pré-visualização */}
+                            <div>
+                              <input
+                                type="file"
+                                id={`wpp_file_input_${block.id}`}
+                                accept={
+                                  block.type === 'image'
+                                    ? 'image/*'
+                                    : block.type === 'video'
+                                    ? 'video/*'
+                                    : block.type === 'audio'
+                                    ? 'audio/*'
+                                    : '*/*'
+                                }
+                                onChange={(e) => handleBlockFileUpload(block.id, e)}
+                                className="hidden"
+                              />
+
+                              {uploadingBlockId === block.id ? (
+                                <div className="p-6 border-2 border-dashed border-slate-700 rounded-xl flex flex-col items-center justify-center gap-2 bg-[#0f1117]">
+                                  <div className="w-6 h-6 border-2 border-sky-500 border-t-transparent rounded-full animate-spin" />
+                                  <span className="text-slate-300 text-xs">Carregando arquivo do seu computador...</span>
+                                </div>
+                              ) : block.mediaUrl || block.mediaBase64 ? (
+                                <div className="space-y-2">
+                                  {block.type === 'image' && (
+                                    <div className="relative rounded-xl border border-slate-800 bg-black/50 p-2 flex items-center justify-center">
+                                      {/* eslint-disable-next-line @next/next/no-img-element */}
+                                      <img
+                                        src={block.mediaBase64 || block.mediaUrl}
+                                        alt="Prévia da Imagem"
+                                        className="max-h-40 rounded-lg object-contain"
+                                      />
+                                    </div>
+                                  )}
+                                  {block.type === 'video' && (
+                                    <div className="relative rounded-xl border border-slate-800 bg-black p-2 flex items-center justify-center">
+                                      <video
+                                        src={block.mediaBase64 || block.mediaUrl}
+                                        controls
+                                        className="max-h-40 rounded-lg w-full"
+                                      />
+                                    </div>
+                                  )}
+                                  {block.type === 'audio' && (
+                                    <div className="rounded-xl border border-slate-800 bg-[#0f1117] p-2.5">
+                                      <div className="text-[10px] text-emerald-400 font-semibold mb-1 flex items-center gap-1">
+                                        <Mic className="w-3 h-3" />
+                                        <span>Mensagem de Voz Gravada (PTT)</span>
+                                      </div>
+                                      <audio src={block.mediaBase64 || block.mediaUrl} controls className="w-full h-8" />
+                                    </div>
+                                  )}
+                                  {block.type === 'file' && (
+                                    <div className="rounded-xl border border-slate-800 bg-[#0f1117] p-3 flex items-center gap-2.5">
+                                      <FileText className="w-6 h-6 text-sky-400 shrink-0" />
+                                      <div className="truncate flex-1">
+                                        <span className="text-white text-xs block truncate font-medium">{block.mediaFileName || 'documento.pdf'}</span>
+                                        {block.mediaSize && (
+                                          <span className="text-[10px] text-slate-500">{(block.mediaSize / 1024 / 1024).toFixed(1)} MB</span>
+                                        )}
+                                      </div>
+                                    </div>
+                                  )}
+
+                                  {/* Barra de Ações do Arquivo */}
+                                  <div className="flex items-center justify-between p-2 bg-[#0f1117] border border-slate-800 rounded-lg">
+                                    <div className="flex items-center gap-2 truncate">
+                                      <Paperclip className="w-3.5 h-3.5 text-sky-400 shrink-0" />
+                                      <span className="text-slate-200 text-xs truncate max-w-[200px]">
+                                        {block.mediaFileName || 'arquivo'}
+                                      </span>
+                                      {block.mediaSize && (
+                                        <span className="text-[10px] text-slate-500">
+                                          ({(block.mediaSize / 1024 / 1024).toFixed(1)} MB)
+                                        </span>
+                                      )}
+                                    </div>
+                                    <div className="flex items-center gap-2 shrink-0">
+                                      <label
+                                        htmlFor={`wpp_file_input_${block.id}`}
+                                        className="px-2 py-0.5 bg-slate-800 hover:bg-slate-700 text-slate-200 rounded text-[11px] cursor-pointer font-medium"
+                                      >
+                                        Trocar
+                                      </label>
+                                      <button
+                                        type="button"
+                                        onClick={() => handleClearBlockMedia(block.id)}
+                                        className="px-2 py-0.5 text-red-400 hover:text-red-300 text-[11px] font-medium cursor-pointer"
+                                      >
+                                        Remover
+                                      </button>
+                                    </div>
+                                  </div>
+                                </div>
+                              ) : (
+                                <label
+                                  htmlFor={`wpp_file_input_${block.id}`}
+                                  className="cursor-pointer border-2 border-dashed border-slate-700 hover:border-sky-500/60 rounded-xl p-4 flex flex-col items-center justify-center gap-1.5 hover:bg-slate-800/30 transition-all text-center block"
+                                >
+                                  <div className="w-8 h-8 rounded-full bg-sky-950/60 border border-sky-800/60 flex items-center justify-center text-sky-400">
+                                    <Upload className="w-4 h-4" />
+                                  </div>
+                                  <span className="font-semibold text-slate-200 text-xs">
+                                    Clique para selecionar {block.type === 'image' ? 'imagem' : block.type === 'video' ? 'vídeo' : block.type === 'audio' ? 'áudio' : 'arquivo'} do seu PC
+                                  </span>
+                                  <span className="text-[10px] text-slate-400">
+                                    {block.type === 'image'
+                                      ? 'JPG, PNG, WEBP, GIF (até 25MB)'
+                                      : block.type === 'video'
+                                      ? 'MP4, MOV, WebM (até 50MB)'
+                                      : block.type === 'audio'
+                                      ? 'MP3, WAV, OGG, M4A, OPUS'
+                                      : 'PDF, DOC, ZIP, XLSX'}
+                                  </span>
+                                </label>
+                              )}
+                            </div>
+
+                            {/* Legenda do Arquivo (Opcional) */}
+                            <div>
+                              <label className="block text-slate-300 text-[11px] font-medium mb-1">
+                                Legenda do Arquivo (Opcional)
+                              </label>
+                              <div className="relative">
+                                <textarea
+                                  rows={2}
+                                  value={block.caption || ''}
+                                  onChange={(e) => handleUpdateBlockCaption(block.id, e.target.value)}
+                                  placeholder="Ex: Olá {{primeiro_nome}}! Confira esse arquivo:"
+                                  className="w-full p-2.5 pb-6 bg-[#0f1117] border border-slate-800 rounded-lg text-xs text-white placeholder-slate-500 focus:outline-none focus:border-sky-500 font-sans leading-relaxed resize-y"
+                                />
+                                <div className="absolute bottom-2 right-2.5 text-[10px] text-slate-500 font-mono pointer-events-none select-none">
+                                  {(block.caption || '').length}/500
+                                </div>
+                              </div>
+                              <div className="flex items-center gap-1.5 flex-wrap pt-0.5">
+                                <span className="text-[10px] text-slate-400">Variáveis:</span>
+                                {['{{nome}}', '{{primeiro_nome}}', '{{email}}', '{{telefone}}'].map((v) => (
+                                  <button
+                                    key={v}
+                                    type="button"
+                                    onClick={() => handleInsertVariableInBlock(block.id, 'caption', v)}
+                                    className="px-2 py-0.5 rounded bg-slate-800/80 hover:bg-slate-700 text-sky-300 font-mono text-[10px] border border-slate-700/80 transition-colors cursor-pointer"
+                                  >
+                                    {v}
+                                  </button>
+                                ))}
+                              </div>
+                            </div>
+                          </div>
                         )}
-                      </h4>
-                      <p className="text-[11px] text-slate-300 mt-0.5">
-                        {Boolean((selectedNode.data.config as any)?.contentJson)
-                          ? 'Design visual responsivo ativo. Clique para personalizar os blocos, botões e imagens.'
-                          : 'Crie e-mails profissionais com blocos arrastáveis, imagens, botões e vídeos.'}
-                      </p>
+                      </div>
+                    ))}
+
+                    {/* Botão + Adicionar Bloco e Menu Flutuante */}
+                    <div className="relative pt-1">
+                      <button
+                        type="button"
+                        onClick={() => setShowAddBlockMenu((prev) => !prev)}
+                        className="w-full py-2.5 border-2 border-dashed border-slate-700/80 hover:border-emerald-500/80 bg-slate-900/40 hover:bg-slate-800/40 rounded-xl text-slate-300 font-semibold text-xs flex items-center justify-center gap-2 transition-all cursor-pointer"
+                      >
+                        <Plus className="w-4 h-4 text-emerald-400" />
+                        <span>Adicionar Bloco</span>
+                        <ChevronDown className={`w-3.5 h-3.5 text-slate-400 transition-transform ${showAddBlockMenu ? 'rotate-180' : ''}`} />
+                      </button>
+
+                      {showAddBlockMenu && (
+                        <div className="absolute left-1/2 -translate-x-1/2 bottom-full mb-2 w-64 bg-[#1a1e2b] border border-slate-700 rounded-xl shadow-2xl p-2 z-30 animate-in fade-in zoom-in-95 duration-150">
+                          <span className="block px-2.5 py-1 text-[11px] font-bold text-slate-200">
+                            Selecione o tipo do bloco:
+                          </span>
+                          <div className="mt-1 space-y-1">
+                            <button
+                              type="button"
+                              onClick={handleAddTextBlock}
+                              className="w-full px-3 py-2 flex items-center gap-2.5 rounded-lg hover:bg-emerald-600/20 hover:text-emerald-300 text-slate-200 text-xs font-medium text-left transition-colors cursor-pointer"
+                            >
+                              <MessageSquare className="w-4 h-4 text-emerald-400 shrink-0" />
+                              <span>Texto</span>
+                            </button>
+                            <button
+                              type="button"
+                              onClick={() => handleAddMediaBlock('image')}
+                              className="w-full px-3 py-2 flex items-center gap-2.5 rounded-lg hover:bg-sky-600/20 hover:text-sky-300 text-slate-200 text-xs font-medium text-left transition-colors cursor-pointer"
+                            >
+                              <Paperclip className="w-4 h-4 text-sky-400 shrink-0" />
+                              <span>Arquivo (Imagem, Vídeo, Áudio ou Doc)</span>
+                            </button>
+                          </div>
+                        </div>
+                      )}
                     </div>
                   </div>
-                  <button
-                    type="button"
-                    onClick={() => setIsVisualEmailBuilderOpen(true)}
-                    className="px-4 py-2 bg-gradient-to-r from-orange-600 to-indigo-600 hover:from-orange-500 hover:to-indigo-500 text-white rounded-xl font-bold text-xs shadow-lg shadow-indigo-600/30 shrink-0 flex items-center gap-1.5 transition-all"
-                  >
-                    <Sparkles className="w-3.5 h-3.5" />
-                    <span>
-                      {Boolean((selectedNode.data.config as any)?.contentJson)
-                        ? 'Editar Design Visual'
-                        : 'Abrir Construtor Visual'}
-                    </span>
-                  </button>
                 </div>
               )}
 
-              {/* Se for E-mail, pede o assunto */}
+              {/* SE FOR E-MAIL: CONSTRUTOR VISUAL E ASSUNTO / TEXTO */}
               {selectedNode.type === 'email' && (
-                <div>
-                  <label className="block text-slate-300 font-semibold mb-1">Assunto do E-mail</label>
-                  <input
-                    type="text"
-                    defaultValue={(selectedNode.data.config as any)?.subject || ''}
-                    id="email_subject_input"
-                    placeholder="Ex: Seu link exclusivo de acesso"
-                    className="w-full p-2.5 bg-[#12141a] border border-slate-700 rounded-xl text-xs text-white focus:outline-none focus:border-indigo-500"
-                  />
-                  <div className="flex items-center gap-1.5 flex-wrap mt-1.5">
-                    <span className="text-[10px] text-slate-400">Variáveis para o assunto:</span>
-                    {['{{nome}}', '{{primeiro_nome}}'].map((v) => (
-                      <button
-                        key={v}
-                        type="button"
-                        onClick={() => {
-                          const el = document.getElementById('email_subject_input') as HTMLInputElement;
-                          if (el) el.value += ` ${v}`;
-                        }}
-                        className="px-2 py-0.5 rounded bg-slate-800 hover:bg-slate-700 text-orange-300 font-mono text-[10px] border border-slate-700"
-                      >
-                        {v}
-                      </button>
-                    ))}
-                  </div>
-                </div>
-              )}
-
-              {/* CONTEÚDO 1: TEXTO (WhatsApp ou E-mail) */}
-              {(selectedNode.type === 'email' || (selectedNode.type === 'whatsapp' && wppMessageType === 'text')) && (
-                <div>
-                  <label className="block text-slate-300 font-semibold mb-1">
-                    {selectedNode.type === 'whatsapp' ? 'Mensagem do WhatsApp' : 'Conteúdo do E-mail'}
-                  </label>
-                  <textarea
-                    rows={6}
-                    id="message_body_input"
-                    defaultValue={
-                      selectedNode.type === 'whatsapp'
-                        ? (selectedNode.data.config as any)?.message ||
-                          (selectedNode.data.config as any)?.text ||
-                          ''
-                        : (selectedNode.data.config as any)?.content || ''
-                    }
-                    placeholder={
-                      selectedNode.type === 'whatsapp'
-                        ? 'Olá {{nome}}! Seu link foi liberado: ...'
-                        : 'Olá {{nome}},\n\nAqui está o seu acesso...'
-                    }
-                    className="w-full p-2.5 bg-[#12141a] border border-slate-700 rounded-xl text-xs text-white focus:outline-none focus:border-indigo-500 font-sans leading-relaxed"
-                  />
-
-                  {/* Tags de variáveis dinâmicas */}
-                  <div className="flex items-center gap-1.5 flex-wrap mt-2">
-                    <span className="text-[10px] text-slate-400">Variáveis disponíveis:</span>
-                    {['{{nome}}', '{{primeiro_nome}}', '{{email}}', '{{telefone}}'].map((v) => (
-                      <button
-                        key={v}
-                        type="button"
-                        onClick={() => {
-                          const el = document.getElementById('message_body_input') as HTMLTextAreaElement;
-                          if (el) {
-                            el.value += ` ${v}`;
-                          }
-                        }}
-                        className="px-2 py-0.5 rounded bg-slate-800 hover:bg-slate-700 text-indigo-300 font-mono text-[10px] border border-slate-700"
-                      >
-                        {v}
-                      </button>
-                    ))}
-                  </div>
-                </div>
-              )}
-
-              {/* CONTEÚDO 2: IMAGEM (WhatsApp) */}
-              {selectedNode.type === 'whatsapp' && wppMessageType === 'image' && (
-                <div className="space-y-3">
-                  <div>
-                    <label className="block text-slate-300 font-semibold mb-1">
-                      Arquivo de Imagem (do seu computador)
-                    </label>
-                    <input
-                      type="file"
-                      id="wpp_image_file_input"
-                      accept="image/*"
-                      onChange={handleFileUpload}
-                      className="hidden"
-                    />
-
-                    {wppUploading ? (
-                      <div className="p-8 border-2 border-dashed border-slate-700 rounded-xl flex flex-col items-center justify-center gap-2 bg-slate-900/40">
-                        <div className="w-6 h-6 border-2 border-emerald-500 border-t-transparent rounded-full animate-spin" />
-                        <span className="text-slate-300 text-xs">Carregando imagem do seu computador...</span>
+                <>
+                  <div className="p-4 bg-gradient-to-r from-orange-950/60 via-indigo-950/60 to-purple-950/60 border border-orange-500/30 rounded-2xl flex items-center justify-between gap-4 shadow-lg">
+                    <div className="flex items-center gap-3">
+                      <div className="w-10 h-10 rounded-xl bg-orange-600/30 border border-orange-500/50 flex items-center justify-center text-orange-400 shrink-0">
+                        <Sparkles className="w-5 h-5" />
                       </div>
-                    ) : wppMediaUrl || wppMediaBase64 ? (
-                      <div className="space-y-2">
-                        <div className="relative rounded-xl border border-slate-700 bg-black/50 p-2 flex items-center justify-center">
-                          {/* eslint-disable-next-line @next/next/no-img-element */}
-                          <img
-                            src={wppMediaBase64 || wppMediaUrl}
-                            alt="Prévia da Imagem"
-                            className="max-h-48 rounded-lg object-contain"
-                          />
-                        </div>
-                        <div className="flex items-center justify-between p-2.5 bg-slate-900/70 border border-slate-800 rounded-xl">
-                          <div className="flex items-center gap-2 truncate">
-                            <ImageIcon className="w-4 h-4 text-emerald-400 shrink-0" />
-                            <span className="text-slate-200 text-xs truncate max-w-[240px]">
-                              {wppMediaFileName || 'imagem.jpg'}
+                      <div>
+                        <h4 className="font-bold text-white text-xs flex items-center gap-2">
+                          Construtor Visual de E-mails
+                          {Boolean((selectedNode.data.config as any)?.contentJson) && (
+                            <span className="text-[10px] bg-emerald-950 text-emerald-300 border border-emerald-800/60 px-2 py-0.2 rounded-full font-semibold">
+                              ✨ Modelo Ativo
                             </span>
-                            {wppMediaSize && (
-                              <span className="text-[10px] text-slate-500">
-                                ({(wppMediaSize / 1024 / 1024).toFixed(1)} MB)
-                              </span>
-                            )}
-                          </div>
-                          <div className="flex items-center gap-2 shrink-0">
-                            <label
-                              htmlFor="wpp_image_file_input"
-                              className="px-2.5 py-1 bg-slate-800 hover:bg-slate-700 text-slate-200 rounded-lg text-[11px] cursor-pointer font-medium"
-                            >
-                              Trocar
-                            </label>
-                            <button
-                              type="button"
-                              onClick={() => {
-                                setWppMediaUrl('');
-                                setWppMediaBase64('');
-                                setWppMediaFileName('');
-                                setWppMediaMimeType('');
-                                setWppMediaSize(null);
-                              }}
-                              className="px-2 py-1 text-red-400 hover:text-red-300 text-[11px] font-medium"
-                            >
-                              Remover
-                            </button>
-                          </div>
-                        </div>
+                          )}
+                        </h4>
+                        <p className="text-[11px] text-slate-300 mt-0.5">
+                          {Boolean((selectedNode.data.config as any)?.contentJson)
+                            ? 'Design visual responsivo ativo. Clique para personalizar os blocos, botões e imagens.'
+                            : 'Crie e-mails profissionais com blocos arrastáveis, imagens, botões e vídeos.'}
+                        </p>
                       </div>
-                    ) : (
-                      <label
-                        htmlFor="wpp_image_file_input"
-                        className="cursor-pointer border-2 border-dashed border-slate-700 hover:border-emerald-500/60 rounded-xl p-6 flex flex-col items-center justify-center gap-2 hover:bg-slate-800/30 transition-all text-center block"
-                      >
-                        <div className="w-10 h-10 rounded-full bg-emerald-950/60 border border-emerald-800/60 flex items-center justify-center text-emerald-400">
-                          <Upload className="w-5 h-5" />
-                        </div>
-                        <span className="font-semibold text-slate-200">Clique para selecionar imagem do seu PC</span>
-                        <span className="text-[11px] text-slate-400">Suporta JPG, PNG, WEBP, GIF (até 25MB)</span>
-                      </label>
-                    )}
+                    </div>
+                    <button
+                      type="button"
+                      onClick={() => setIsVisualEmailBuilderOpen(true)}
+                      className="px-4 py-2 bg-gradient-to-r from-orange-600 to-indigo-600 hover:from-orange-500 hover:to-indigo-500 text-white rounded-xl font-bold text-xs shadow-lg shadow-indigo-600/30 shrink-0 flex items-center gap-1.5 transition-all cursor-pointer"
+                    >
+                      <Sparkles className="w-3.5 h-3.5" />
+                      <span>
+                        {Boolean((selectedNode.data.config as any)?.contentJson)
+                          ? 'Editar Design Visual'
+                          : 'Abrir Construtor Visual'}
+                      </span>
+                    </button>
                   </div>
 
-                  {/* Legenda da Imagem */}
                   <div>
-                    <label className="block text-slate-300 font-semibold mb-1">
-                      Legenda da Imagem (Opcional)
-                    </label>
-                    <textarea
-                      rows={3}
-                      id="wpp_caption_input"
-                      value={wppCaption}
-                      onChange={(e) => setWppCaption(e.target.value)}
-                      placeholder="Ex: Olá {{primeiro_nome}}! Confira essa novidade exclusiva que preparei para você:"
-                      className="w-full p-2.5 bg-[#12141a] border border-slate-700 rounded-xl text-xs text-white focus:outline-none focus:border-emerald-500 font-sans leading-relaxed"
+                    <label className="block text-slate-300 font-semibold mb-1">Assunto do E-mail</label>
+                    <input
+                      type="text"
+                      defaultValue={(selectedNode.data.config as any)?.subject || ''}
+                      id="email_subject_input"
+                      placeholder="Ex: Seu link exclusivo de acesso"
+                      className="w-full p-2.5 bg-[#12141a] border border-slate-700 rounded-xl text-xs text-white focus:outline-none focus:border-indigo-500"
                     />
-
-                    {/* Tags de variáveis dinâmicas para a legenda */}
-                    <div className="flex items-center gap-1.5 flex-wrap mt-2">
-                      <span className="text-[10px] text-slate-400">Variáveis disponíveis:</span>
-                      {['{{nome}}', '{{primeiro_nome}}', '{{email}}', '{{telefone}}'].map((v) => (
+                    <div className="flex items-center gap-1.5 flex-wrap mt-1.5">
+                      <span className="text-[10px] text-slate-400">Variáveis para o assunto:</span>
+                      {['{{nome}}', '{{primeiro_nome}}'].map((v) => (
                         <button
                           key={v}
                           type="button"
-                          onClick={() => setWppCaption((prev) => (prev ? `${prev} ${v}` : v))}
-                          className="px-2 py-0.5 rounded bg-slate-800 hover:bg-slate-700 text-emerald-300 font-mono text-[10px] border border-slate-700"
+                          onClick={() => {
+                            const el = document.getElementById('email_subject_input') as HTMLInputElement;
+                            if (el) el.value += ` ${v}`;
+                          }}
+                          className="px-2 py-0.5 rounded bg-slate-800 hover:bg-slate-700 text-orange-300 font-mono text-[10px] border border-slate-700 cursor-pointer"
                         >
                           {v}
                         </button>
                       ))}
                     </div>
                   </div>
-                </div>
-              )}
 
-              {/* CONTEÚDO 3: VÍDEO (WhatsApp) */}
-              {selectedNode.type === 'whatsapp' && wppMessageType === 'video' && (
-                <div className="space-y-3">
                   <div>
-                    <label className="block text-slate-300 font-semibold mb-1">
-                      Arquivo de Vídeo (do seu computador)
-                    </label>
-                    <input
-                      type="file"
-                      id="wpp_video_file_input"
-                      accept="video/*"
-                      onChange={handleFileUpload}
-                      className="hidden"
-                    />
-
-                    {wppUploading ? (
-                      <div className="p-8 border-2 border-dashed border-slate-700 rounded-xl flex flex-col items-center justify-center gap-2 bg-slate-900/40">
-                        <div className="w-6 h-6 border-2 border-emerald-500 border-t-transparent rounded-full animate-spin" />
-                        <span className="text-slate-300 text-xs">Carregando vídeo do seu computador...</span>
-                      </div>
-                    ) : wppMediaUrl || wppMediaBase64 ? (
-                      <div className="space-y-2">
-                        <div className="relative rounded-xl border border-slate-700 bg-black p-2 flex items-center justify-center">
-                          <video
-                            src={wppMediaBase64 || wppMediaUrl}
-                            controls
-                            className="max-h-48 rounded-lg w-full"
-                          />
-                        </div>
-                        <div className="flex items-center justify-between p-2.5 bg-slate-900/70 border border-slate-800 rounded-xl">
-                          <div className="flex items-center gap-2 truncate">
-                            <VideoIcon className="w-4 h-4 text-emerald-400 shrink-0" />
-                            <span className="text-slate-200 text-xs truncate max-w-[240px]">
-                              {wppMediaFileName || 'video.mp4'}
-                            </span>
-                            {wppMediaSize && (
-                              <span className="text-[10px] text-slate-500">
-                                ({(wppMediaSize / 1024 / 1024).toFixed(1)} MB)
-                              </span>
-                            )}
-                          </div>
-                          <div className="flex items-center gap-2 shrink-0">
-                            <label
-                              htmlFor="wpp_video_file_input"
-                              className="px-2.5 py-1 bg-slate-800 hover:bg-slate-700 text-slate-200 rounded-lg text-[11px] cursor-pointer font-medium"
-                            >
-                              Trocar
-                            </label>
-                            <button
-                              type="button"
-                              onClick={() => {
-                                setWppMediaUrl('');
-                                setWppMediaBase64('');
-                                setWppMediaFileName('');
-                                setWppMediaMimeType('');
-                                setWppMediaSize(null);
-                              }}
-                              className="px-2 py-1 text-red-400 hover:text-red-300 text-[11px] font-medium"
-                            >
-                              Remover
-                            </button>
-                          </div>
-                        </div>
-                      </div>
-                    ) : (
-                      <label
-                        htmlFor="wpp_video_file_input"
-                        className="cursor-pointer border-2 border-dashed border-slate-700 hover:border-emerald-500/60 rounded-xl p-6 flex flex-col items-center justify-center gap-2 hover:bg-slate-800/30 transition-all text-center block"
-                      >
-                        <div className="w-10 h-10 rounded-full bg-emerald-950/60 border border-emerald-800/60 flex items-center justify-center text-emerald-400">
-                          <Upload className="w-5 h-5" />
-                        </div>
-                        <span className="font-semibold text-slate-200">Clique para selecionar vídeo do seu PC</span>
-                        <span className="text-[11px] text-slate-400">Suporta MP4, MOV, MKV, AVI, WebM (até 50MB)</span>
-                      </label>
-                    )}
-                  </div>
-
-                  {/* Legenda do Vídeo */}
-                  <div>
-                    <label className="block text-slate-300 font-semibold mb-1">
-                      Legenda do Vídeo (Opcional)
-                    </label>
+                    <label className="block text-slate-300 font-semibold mb-1">Conteúdo do E-mail</label>
                     <textarea
-                      rows={3}
-                      id="wpp_caption_input"
-                      value={wppCaption}
-                      onChange={(e) => setWppCaption(e.target.value)}
-                      placeholder="Ex: Assista a este vídeo rápido que gravei para você, {{primeiro_nome}}!"
-                      className="w-full p-2.5 bg-[#12141a] border border-slate-700 rounded-xl text-xs text-white focus:outline-none focus:border-emerald-500 font-sans leading-relaxed"
+                      rows={6}
+                      id="message_body_input"
+                      defaultValue={(selectedNode.data.config as any)?.content || ''}
+                      placeholder="Olá {{nome}},\n\nAqui está o seu acesso..."
+                      className="w-full p-2.5 bg-[#12141a] border border-slate-700 rounded-xl text-xs text-white focus:outline-none focus:border-indigo-500 font-sans leading-relaxed"
                     />
-
-                    {/* Tags de variáveis dinâmicas para a legenda */}
                     <div className="flex items-center gap-1.5 flex-wrap mt-2">
                       <span className="text-[10px] text-slate-400">Variáveis disponíveis:</span>
                       {['{{nome}}', '{{primeiro_nome}}', '{{email}}', '{{telefone}}'].map((v) => (
                         <button
                           key={v}
                           type="button"
-                          onClick={() => setWppCaption((prev) => (prev ? `${prev} ${v}` : v))}
-                          className="px-2 py-0.5 rounded bg-slate-800 hover:bg-slate-700 text-emerald-300 font-mono text-[10px] border border-slate-700"
+                          onClick={() => {
+                            const el = document.getElementById('message_body_input') as HTMLTextAreaElement;
+                            if (el) el.value += ` ${v}`;
+                          }}
+                          className="px-2 py-0.5 rounded bg-slate-800 hover:bg-slate-700 text-indigo-300 font-mono text-[10px] border border-slate-700 cursor-pointer"
                         >
                           {v}
                         </button>
                       ))}
                     </div>
                   </div>
-                </div>
-              )}
-
-              {/* CONTEÚDO 4: ÁUDIO (WhatsApp) */}
-              {selectedNode.type === 'whatsapp' && wppMessageType === 'audio' && (
-                <div className="space-y-3">
-                  <div className="p-3 bg-emerald-950/40 border border-emerald-800/50 rounded-xl text-emerald-300 text-xs flex items-center gap-2.5">
-                    <Mic className="w-4 h-4 text-emerald-400 shrink-0" />
-                    <span>
-                      <strong>Mensagem de Voz Gravada:</strong> O WhatsApp enviará este áudio simulando uma gravação de voz instantânea (PTT) para aumentar a retenção do lead!
-                    </span>
-                  </div>
-
-                  <div>
-                    <label className="block text-slate-300 font-semibold mb-1">
-                      Arquivo de Áudio (do seu computador)
-                    </label>
-                    <input
-                      type="file"
-                      id="wpp_audio_file_input"
-                      accept="audio/*"
-                      onChange={handleFileUpload}
-                      className="hidden"
-                    />
-
-                    {wppUploading ? (
-                      <div className="p-8 border-2 border-dashed border-slate-700 rounded-xl flex flex-col items-center justify-center gap-2 bg-slate-900/40">
-                        <div className="w-6 h-6 border-2 border-emerald-500 border-t-transparent rounded-full animate-spin" />
-                        <span className="text-slate-300 text-xs">Carregando áudio do seu computador...</span>
-                      </div>
-                    ) : wppMediaUrl || wppMediaBase64 ? (
-                      <div className="space-y-2">
-                        <div className="rounded-xl border border-slate-700 bg-slate-900/80 p-3">
-                          <audio
-                            src={wppMediaBase64 || wppMediaUrl}
-                            controls
-                            className="w-full"
-                          />
-                        </div>
-                        <div className="flex items-center justify-between p-2.5 bg-slate-900/70 border border-slate-800 rounded-xl">
-                          <div className="flex items-center gap-2 truncate">
-                            <Mic className="w-4 h-4 text-emerald-400 shrink-0" />
-                            <span className="text-slate-200 text-xs truncate max-w-[240px]">
-                              {wppMediaFileName || 'audio.mp3'}
-                            </span>
-                            {wppMediaSize && (
-                              <span className="text-[10px] text-slate-500">
-                                ({(wppMediaSize / 1024 / 1024).toFixed(1)} MB)
-                              </span>
-                            )}
-                          </div>
-                          <div className="flex items-center gap-2 shrink-0">
-                            <label
-                              htmlFor="wpp_audio_file_input"
-                              className="px-2.5 py-1 bg-slate-800 hover:bg-slate-700 text-slate-200 rounded-lg text-[11px] cursor-pointer font-medium"
-                            >
-                              Trocar
-                            </label>
-                            <button
-                              type="button"
-                              onClick={() => {
-                                setWppMediaUrl('');
-                                setWppMediaBase64('');
-                                setWppMediaFileName('');
-                                setWppMediaMimeType('');
-                                setWppMediaSize(null);
-                              }}
-                              className="px-2 py-1 text-red-400 hover:text-red-300 text-[11px] font-medium"
-                            >
-                              Remover
-                            </button>
-                          </div>
-                        </div>
-                      </div>
-                    ) : (
-                      <label
-                        htmlFor="wpp_audio_file_input"
-                        className="cursor-pointer border-2 border-dashed border-slate-700 hover:border-emerald-500/60 rounded-xl p-6 flex flex-col items-center justify-center gap-2 hover:bg-slate-800/30 transition-all text-center block"
-                      >
-                        <div className="w-10 h-10 rounded-full bg-emerald-950/60 border border-emerald-800/60 flex items-center justify-center text-emerald-400">
-                          <Mic className="w-5 h-5" />
-                        </div>
-                        <span className="font-semibold text-slate-200">Clique para selecionar áudio do seu PC</span>
-                        <span className="text-[11px] text-slate-400">Suporta MP3, WAV, OGG, M4A, AAC, OPUS</span>
-                      </label>
-                    )}
-                  </div>
-                </div>
+                </>
               )}
             </div>
 
@@ -2446,34 +2547,39 @@ export default function AutomationCanvasPage() {
               <button
                 type="button"
                 onClick={handleDeleteCurrentNode}
-                className="text-red-400 hover:text-red-300 flex items-center gap-1 text-xs"
+                className="text-red-400 hover:text-red-300 flex items-center gap-1 text-xs cursor-pointer"
               >
                 <Trash2 className="w-3.5 h-3.5" />
-                <span>Excluir Bloco</span>
+                <span>Excluir Nó</span>
               </button>
 
               <div className="flex items-center gap-2">
                 <button
                   type="button"
                   onClick={() => setIsMessageDrawerOpen(false)}
-                  className="px-4 py-2 border border-slate-700 hover:bg-slate-800 rounded-xl text-slate-300 font-semibold"
+                  className="px-4 py-2 border border-slate-700 hover:bg-slate-800 rounded-xl text-slate-300 font-semibold cursor-pointer"
                 >
                   Cancelar
                 </button>
                 <button
                   type="button"
                   onClick={() => {
-                    if (selectedNode.type === 'whatsapp' && wppMessageType !== 'text') {
-                      if (!wppMediaUrl && !wppMediaBase64) {
-                        alert('Por favor, selecione um arquivo de mídia do seu computador antes de salvar.');
+                    if (selectedNode.type === 'whatsapp') {
+                      const incompleteMedia = wppBlocks.find(
+                        (b) => b.type !== 'text' && !b.mediaUrl && !b.mediaBase64
+                      );
+                      if (incompleteMedia) {
+                        alert('Por favor, selecione um arquivo para o bloco de arquivo ou remova o bloco antes de salvar.');
                         return;
                       }
+                      handleSaveMessage();
+                    } else {
+                      const bodyEl = document.getElementById('message_body_input') as HTMLTextAreaElement;
+                      const subEl = document.getElementById('email_subject_input') as HTMLInputElement;
+                      handleSaveMessage(bodyEl?.value || '', subEl?.value || '');
                     }
-                    const bodyEl = document.getElementById('message_body_input') as HTMLTextAreaElement;
-                    const subEl = document.getElementById('email_subject_input') as HTMLInputElement;
-                    handleSaveMessage(bodyEl?.value || '', subEl?.value || '');
                   }}
-                  className="px-5 py-2 bg-emerald-600 hover:bg-emerald-500 text-white rounded-xl font-semibold shadow-lg shadow-emerald-600/30 flex items-center gap-1.5"
+                  className="px-5 py-2 bg-emerald-600 hover:bg-emerald-500 text-white rounded-xl font-semibold shadow-lg shadow-emerald-600/30 flex items-center gap-1.5 cursor-pointer"
                 >
                   <Check className="w-4 h-4" />
                   <span>Salvar Mensagem</span>
