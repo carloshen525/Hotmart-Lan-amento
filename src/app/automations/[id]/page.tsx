@@ -832,6 +832,7 @@ export default function AutomationCanvasPage() {
         setStatus(newStatus);
         setSaveNotice(publishStatus === 'ACTIVE' ? 'Automação Ativada com Sucesso!' : 'Salvo com Sucesso!');
         setTimeout(() => setSaveNotice(null), 3000);
+        fetchRealtimeStats();
       }
     } catch {
       setSaveNotice('Erro ao salvar');
@@ -1280,35 +1281,37 @@ export default function AutomationCanvasPage() {
 
         {/* Lado Direito do Topo */}
         <div className="flex items-center gap-3">
-          {/* Switch Ativar / Desativar estilo da imagem */}
+          {/* Switch Único Ativar / Desativar para o Fluxo Inteiro */}
           <div className="flex items-center gap-2 bg-[#1b1e27] px-3 py-1 rounded-full border border-slate-800">
             <span
               className={`text-[11px] font-semibold ${
-                (viewMode === 'MACRO' ? status === 'ACTIVE' : sequenceActive)
+                status === 'ACTIVE'
                   ? 'text-emerald-400'
                   : 'text-slate-400'
               }`}
             >
-              {(viewMode === 'MACRO' ? status === 'ACTIVE' : sequenceActive) ? 'Ativar' : 'Desativar'}
+              {status === 'ACTIVE' ? 'Ativar' : 'Desativar'}
             </span>
             <button
               type="button"
               onClick={() => {
-                if (viewMode === 'MACRO') {
-                  handleSave(status === 'ACTIVE' ? 'PAUSED' : 'ACTIVE');
-                } else {
-                  setSequenceActive(!sequenceActive);
-                }
+                const nextStatus = status === 'ACTIVE' ? 'PAUSED' : 'ACTIVE';
+                handleSave(nextStatus);
               }}
               className={`w-9 h-5 flex items-center rounded-full p-0.5 transition-colors cursor-pointer ${
-                (viewMode === 'MACRO' ? status === 'ACTIVE' : sequenceActive)
+                status === 'ACTIVE'
                   ? 'bg-emerald-500'
                   : 'bg-slate-700'
               }`}
+              title={
+                status === 'ACTIVE'
+                  ? 'Clique para pausar todo o fluxo'
+                  : 'Clique para ativar todo o fluxo e processar os leads'
+              }
             >
               <div
                 className={`bg-white w-4 h-4 rounded-full shadow-md transform transition-transform ${
-                  (viewMode === 'MACRO' ? status === 'ACTIVE' : sequenceActive)
+                  status === 'ACTIVE'
                     ? 'translate-x-4'
                     : 'translate-x-0'
                 }`}

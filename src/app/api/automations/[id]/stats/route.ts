@@ -1,6 +1,7 @@
 import { NextResponse } from 'next/server';
 import { prisma } from '@/lib/prisma';
 import { getActiveTenantId } from '@/lib/tenancy';
+import { automationEngine } from '@/services/automation/engine';
 
 export async function GET(request: Request, { params }: { params: { id: string } }) {
   try {
@@ -15,6 +16,10 @@ export async function GET(request: Request, { params }: { params: { id: string }
 
     if (!automation) {
       return NextResponse.json({ error: 'Automação não encontrada' }, { status: 404 });
+    }
+
+    if (automation.status === 'ACTIVE') {
+      await automationEngine.syncExistingLeadsForAutomation(params.id, tenantId).catch(() => {});
     }
 
     const [allEnrollments, allStepLogs, pendingJobs] = await Promise.all([
