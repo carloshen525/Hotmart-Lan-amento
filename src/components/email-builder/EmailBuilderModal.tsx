@@ -373,6 +373,20 @@ export function EmailBuilderModal({
     if (!file) return;
 
     setUploadingImage(true);
+
+    // 1. Pré-visualização instantânea local (0ms de espera no navegador)
+    const reader = new FileReader();
+    reader.onload = () => {
+      if (typeof reader.result === 'string') {
+        updateSelectedBlock({
+          url: reader.result,
+          previewUrl: reader.result,
+        });
+      }
+    };
+    reader.readAsDataURL(file);
+
+    // 2. Persistência no servidor em /uploads/
     try {
       const formData = new FormData();
       formData.append('file', file);
@@ -381,10 +395,11 @@ export function EmailBuilderModal({
         body: formData,
       });
       const data = await res.json();
-      if (res.ok && (data.url || data.dataUrl)) {
-        // Prioriza a URL local (/uploads/...) para manter o documento JSON limpo e leve,
-        // com conversão automática para anexo CID inline no envio
-        updateSelectedBlock({ url: data.url || data.dataUrl });
+      if (res.ok && data.url) {
+        updateSelectedBlock({
+          url: data.url,
+          previewUrl: data.dataUrl || data.url,
+        });
       }
     } catch (err) {
       console.error('Erro no upload da imagem:', err);
@@ -995,8 +1010,18 @@ export function EmailBuilderModal({
                               className="flex items-center justify-center gap-2 w-full p-2.5 bg-slate-800 hover:bg-slate-700 border border-slate-700 rounded-xl cursor-pointer text-xs font-semibold text-slate-200"
                             >
                               <Upload className="w-4 h-4 text-emerald-400" />
-                              <span>{uploadingImage ? 'Enviando...' : 'Carregar Imagem do PC'}</span>
+                              <span>{uploadingImage ? 'Enviando imagem...' : 'Carregar Imagem do PC'}</span>
                             </label>
+                            {selectedBlock.url && (
+                              <div className="relative rounded-lg overflow-hidden border border-slate-700 bg-black/40 p-1.5 flex items-center justify-center">
+                                {/* eslint-disable-next-line @next/next/no-img-element */}
+                                <img
+                                  src={selectedBlock.previewUrl || selectedBlock.url}
+                                  alt="Miniatura"
+                                  className="max-h-24 object-contain rounded"
+                                />
+                              </div>
+                            )}
                             <input
                               type="text"
                               value={selectedBlock.url}

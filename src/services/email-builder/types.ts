@@ -41,6 +41,7 @@ export interface TextBlock extends BaseBlock {
 export interface ImageBlock extends BaseBlock {
   type: 'image';
   url: string;
+  previewUrl?: string;
   alt?: string;
   width?: number; // max-width percentual ou px
   align?: 'left' | 'center' | 'right';

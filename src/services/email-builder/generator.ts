@@ -142,8 +142,9 @@ export function renderBlockToHtml(
       const align = block.align || 'center';
       const width = block.width ? `${block.width}%` : '100%';
       const radius = block.borderRadius !== undefined ? block.borderRadius : 8;
+      const imageUrl = block.previewUrl || block.url;
 
-      const imgTag = `<img src="${block.url}" alt="${block.alt || 'Imagem'}" style="display: inline-block; width: 100%; max-width: 100%; height: auto; border-radius: ${radius}px; border: 0; outline: none; text-decoration: none;" />`;
+      const imgTag = `<img src="${imageUrl}" alt="${block.alt || 'Imagem'}" style="display: inline-block; width: 100%; max-width: 100%; height: auto; border-radius: ${radius}px; border: 0; outline: none; text-decoration: none;" />`;
 
       return `
         <table role="presentation" border="0" cellpadding="0" cellspacing="0" width="100%">
