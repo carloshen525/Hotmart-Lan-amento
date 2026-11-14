@@ -19,12 +19,12 @@ export const prisma = new Proxy({} as PrismaClient, {
   get(target, prop, receiver) {
     let client = getClient();
     
-    // Se a propriedade acessada (como emailSettings ou emailLog) não existir no cliente em cache (ex: hot reload ou schema atualizado), recria o client
+    // Se a propriedade acessada (como checkoutIntegration, emailSettings, etc) não existir ou for undefined, recria o client
     if (
       typeof prop === 'string' &&
       prop !== 'then' &&
       prop !== 'catch' &&
-      !(prop in client)
+      (!Reflect.has(client, prop) || Reflect.get(client, prop) === undefined)
     ) {
       globalForPrisma.prisma = createPrismaClient();
       client = globalForPrisma.prisma;

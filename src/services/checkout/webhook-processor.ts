@@ -83,7 +83,11 @@ export class CheckoutWebhookProcessor {
       `);
 
       try {
-        await prisma.$executeRawUnsafe(`ALTER TABLE "integrations" ADD COLUMN "webhook_url" TEXT;`);
+        const columns: any[] = await prisma.$queryRawUnsafe(`PRAGMA table_info("integrations");`);
+        const hasWebhookUrl = Array.isArray(columns) && columns.some((c: any) => c.name === 'webhook_url');
+        if (!hasWebhookUrl) {
+          await prisma.$executeRawUnsafe(`ALTER TABLE "integrations" ADD COLUMN "webhook_url" TEXT;`);
+        }
       } catch {}
 
       CheckoutWebhookProcessor.tablesChecked = true;
