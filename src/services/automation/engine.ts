@@ -133,13 +133,25 @@ export class AutomationEngine {
 
           case 'SEND_WHATSAPP': {
             if (contact.phone) {
+              const firstName = contact.name ? contact.name.trim().split(/\s+/)[0] : '';
               const res = await messageManager.sendWhatsApp({
                 tenantId,
                 contactId: contact.id,
                 phone: contact.phone,
                 templateName: config.templateName,
-                text: config.text || `Olá ${contact.name}! Prepare-se para o nosso evento ao vivo.`,
-                variables: { nome: contact.name },
+                text: config.text || config.message || `Olá ${contact.name}!`,
+                messageType: config.messageType || (config.mediaUrl ? 'image' : 'text'),
+                mediaUrl: config.mediaUrl,
+                mediaBase64: config.mediaBase64,
+                mediaMimeType: config.mediaMimeType,
+                mediaFileName: config.mediaFileName,
+                caption: config.caption || config.message || config.text,
+                variables: {
+                  nome: contact.name || '',
+                  primeiro_nome: firstName || contact.name || '',
+                  email: contact.email || '',
+                  telefone: contact.phone || '',
+                },
               });
               stepDetails = { whatsappSent: res.success, messageId: res.messageId, provider: res.provider };
             }
@@ -641,12 +653,24 @@ export class AutomationEngine {
     let shouldHalt = false;
 
     if (node.type === 'whatsapp' && contact.phone) {
+      const firstName = contact.name ? contact.name.trim().split(/\s+/)[0] : '';
       await messageManager.sendWhatsApp({
         tenantId,
         contactId: contact.id,
         phone: contact.phone,
         text: cfg.message || cfg.text || `Olá ${contact.name}!`,
-        variables: { nome: contact.name, email: contact.email },
+        messageType: cfg.messageType || (cfg.mediaUrl ? 'image' : 'text'),
+        mediaUrl: cfg.mediaUrl,
+        mediaBase64: cfg.mediaBase64,
+        mediaMimeType: cfg.mediaMimeType,
+        mediaFileName: cfg.mediaFileName,
+        caption: cfg.caption || cfg.message || cfg.text,
+        variables: {
+          nome: contact.name || '',
+          primeiro_nome: firstName || contact.name || '',
+          email: contact.email || '',
+          telefone: contact.phone || '',
+        },
       });
     } else if (node.type === 'email' && contact.email) {
       await messageManager.sendEmail({

@@ -292,7 +292,8 @@ export const WhatsAppNode = memo(({ data, selected }: any) => {
   const waiting = data.config?.waitingCount ?? 0;
   const success = data.config?.successCount ?? 0;
   const failed = data.config?.failedCount ?? 0;
-  const hasText = !!data.config?.message || !!data.config?.text;
+  const messageType = data.config?.messageType || (data.config?.mediaUrl ? 'image' : 'text');
+  const hasContent = !!data.config?.message || !!data.config?.text || !!data.config?.mediaUrl || !!data.config?.mediaBase64;
 
   return (
     <div className="flex flex-col items-center group cursor-pointer select-none">
@@ -312,8 +313,15 @@ export const WhatsAppNode = memo(({ data, selected }: any) => {
         {/* Ícone de Balão/WhatsApp */}
         <MessageSquare className="w-6 h-6 text-white stroke-[2]" />
 
+        {/* Badge indicador de tipo de mídia */}
+        {messageType !== 'text' && (
+          <div className="absolute -top-1.5 -left-1.5 text-[11px] bg-slate-900 border border-slate-700 rounded-full w-5 h-5 flex items-center justify-center shadow">
+            {messageType === 'audio' ? '🎙️' : messageType === 'video' ? '🎥' : '📷'}
+          </div>
+        )}
+
         {/* Badge vermelho de Atenção se a mensagem estiver vazia */}
-        {!hasText && (
+        {!hasContent && (
           <div className="absolute -top-1.5 -right-1.5 w-5 h-5 rounded-full bg-red-600 border-2 border-[#181a20] flex items-center justify-center text-white font-bold text-[10px] shadow-sm animate-pulse">
             !
           </div>

@@ -6,10 +6,10 @@ import { prisma } from '@/lib/prisma';
 export async function POST(request: Request) {
   try {
     const tenantId = await getActiveTenantId();
-    const { phone, text, contactId } = await request.json();
+    const { phone, text, contactId, messageType, mediaUrl, mediaBase64, mediaMimeType, mediaFileName, caption } = await request.json();
 
-    if (!phone || !text) {
-      return NextResponse.json({ error: 'Telefone e mensagem são obrigatórios' }, { status: 400 });
+    if (!phone || (!text && !mediaUrl && !mediaBase64)) {
+      return NextResponse.json({ error: 'Telefone e mensagem ou mídia são obrigatórios' }, { status: 400 });
     }
 
     // Se não informou contactId, busca ou cria contato para rastreio
@@ -41,6 +41,12 @@ export async function POST(request: Request) {
       contactId: targetContactId,
       phone,
       text,
+      messageType,
+      mediaUrl,
+      mediaBase64,
+      mediaMimeType,
+      mediaFileName,
+      caption,
     });
 
     return NextResponse.json(result);

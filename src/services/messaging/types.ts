@@ -4,6 +4,12 @@ export interface SendWhatsAppParams {
   phone: string;
   templateName?: string;
   text?: string;
+  messageType?: 'text' | 'image' | 'video' | 'audio';
+  mediaUrl?: string;
+  mediaBase64?: string;
+  mediaMimeType?: string;
+  mediaFileName?: string;
+  caption?: string;
   variables?: Record<string, string>;
 }
 

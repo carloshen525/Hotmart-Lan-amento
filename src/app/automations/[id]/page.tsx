@@ -53,6 +53,12 @@ import {
   Users,
   Flame,
   Search,
+  Image as ImageIcon,
+  Video as VideoIcon,
+  Mic,
+  Upload,
+  Music,
+  FileUp,
 } from 'lucide-react';
 
 import {
@@ -114,6 +120,17 @@ export default function AutomationCanvasPage() {
   const [isCreateTagOpen, setIsCreateTagOpen] = useState(false);
   const [newTagName, setNewTagName] = useState('');
   const [newTagColor, setNewTagColor] = useState('#8b5cf6');
+
+  // Configurações de Mídia no WhatsApp (Áudio, Vídeo, Imagem e Legenda)
+  const [wppMessageType, setWppMessageType] = useState<'text' | 'image' | 'video' | 'audio'>('text');
+  const [wppMediaUrl, setWppMediaUrl] = useState('');
+  const [wppMediaBase64, setWppMediaBase64] = useState('');
+  const [wppMediaFileName, setWppMediaFileName] = useState('');
+  const [wppMediaMimeType, setWppMediaMimeType] = useState('');
+  const [wppMediaSize, setWppMediaSize] = useState<number | null>(null);
+  const [wppCaption, setWppCaption] = useState('');
+  const [wppUploading, setWppUploading] = useState(false);
+  const [wppUploadError, setWppUploadError] = useState<string | null>(null);
 
   // Modal Avançado de Timer
   const [isTimerModalOpen, setIsTimerModalOpen] = useState(false);
@@ -614,7 +631,7 @@ export default function AutomationCanvasPage() {
     } else if (type === 'aquecimento') {
       openWarmupModal(newN);
     } else {
-      setIsMessageDrawerOpen(true);
+      openMessageModal(newN);
     }
   };
 
@@ -679,7 +696,7 @@ export default function AutomationCanvasPage() {
       }
     } else {
       if (node.type === 'whatsapp' || node.type === 'email') {
-        setIsMessageDrawerOpen(true);
+        openMessageModal(node);
       } else if (node.type === 'timer') {
         openTimerModal(node);
       } else if (node.type === 'aquecimento' || node.type === 'warmup') {
@@ -926,6 +943,71 @@ export default function AutomationCanvasPage() {
     } catch {}
   };
 
+  // Abertura e configuração do modal de WhatsApp / E-mail
+  const openMessageModal = (nodeToConfigure?: Node) => {
+    const target = nodeToConfigure || selectedNode;
+    if (!target) return;
+    setSelectedNode(target);
+
+    const cfg = (target.data?.config as any) || {};
+    if (target.type === 'whatsapp') {
+      const detectedType = cfg.messageType || (cfg.mediaUrl ? (cfg.mediaMimeType?.startsWith('video/') ? 'video' : cfg.mediaMimeType?.startsWith('audio/') ? 'audio' : 'image') : 'text');
+      setWppMessageType(detectedType);
+      setWppMediaUrl(cfg.mediaUrl || '');
+      setWppMediaBase64(cfg.mediaBase64 || '');
+      setWppMediaFileName(cfg.mediaFileName || '');
+      setWppMediaMimeType(cfg.mediaMimeType || '');
+      setWppMediaSize(cfg.mediaSize || null);
+      setWppCaption(cfg.caption || '');
+      setWppUploadError(null);
+    }
+    setIsMessageDrawerOpen(true);
+  };
+
+  // Upload de arquivos locais (Áudio, Vídeo, Imagem)
+  const handleFileUpload = async (e: React.ChangeEvent<HTMLInputElement>) => {
+    const file = e.target.files?.[0];
+    if (!file) return;
+
+    setWppUploading(true);
+    setWppUploadError(null);
+
+    // Pré-visualização instantânea local via Data URL
+    const reader = new FileReader();
+    reader.onload = () => {
+      if (typeof reader.result === 'string') {
+        setWppMediaBase64(reader.result);
+      }
+    };
+    reader.readAsDataURL(file);
+
+    try {
+      const formData = new FormData();
+      formData.append('file', file);
+
+      const res = await fetch('/api/whatsapp/upload', {
+        method: 'POST',
+        body: formData,
+      });
+
+      const data = await res.json();
+      if (!res.ok || !data.success) {
+        throw new Error(data.error || 'Falha ao enviar arquivo');
+      }
+
+      setWppMediaUrl(data.url);
+      setWppMediaBase64(data.dataUrl || data.url);
+      setWppMediaFileName(data.fileName);
+      setWppMediaMimeType(data.mimeType);
+      setWppMediaSize(data.fileSize);
+    } catch (err: any) {
+      console.error('Upload error:', err);
+      setWppUploadError(err.message || 'Erro ao carregar arquivo');
+    } finally {
+      setWppUploading(false);
+    }
+  };
+
   // Salvar mensagem de WhatsApp ou E-mail
   const handleSaveMessage = (messageText: string, emailSubject?: string) => {
     if (!selectedNode) return;
@@ -934,14 +1016,22 @@ export default function AutomationCanvasPage() {
       nds.map((n) => {
         if (n.id === selectedNode.id) {
           const isWpp = n.type === 'whatsapp';
+          const isMedia = isWpp && wppMessageType !== 'text';
           return {
             ...n,
             data: {
               ...n.data,
               config: {
                 ...((n.data.config as object) || {}),
-                message: isWpp ? messageText : undefined,
-                text: isWpp ? messageText : undefined,
+                messageType: isWpp ? wppMessageType : undefined,
+                mediaUrl: isMedia ? wppMediaUrl : undefined,
+                mediaBase64: isMedia ? wppMediaBase64 : undefined,
+                mediaMimeType: isMedia ? wppMediaMimeType : undefined,
+                mediaFileName: isMedia ? wppMediaFileName : undefined,
+                mediaSize: isMedia ? wppMediaSize : undefined,
+                caption: isMedia ? wppCaption : undefined,
+                message: isWpp ? (isMedia ? (wppCaption || `[${wppMessageType.toUpperCase()}] ${wppMediaFileName}`) : messageText) : undefined,
+                text: isWpp ? (isMedia ? (wppCaption || `[${wppMessageType.toUpperCase()}] ${wppMediaFileName}`) : messageText) : undefined,
                 subject: !isWpp ? emailSubject : undefined,
                 content: !isWpp ? messageText : undefined,
               },
@@ -1593,7 +1683,8 @@ export default function AutomationCanvasPage() {
       {/* ============================================================ */}
       {isMessageDrawerOpen && selectedNode && (
         <div className="fixed inset-0 bg-black/60 backdrop-blur-sm z-50 flex items-center justify-center p-4">
-          <div className="bg-[#181c25] rounded-2xl shadow-2xl border border-slate-800 max-w-lg w-full p-6 text-xs text-slate-200">
+          <div className="bg-[#181c25] rounded-2xl shadow-2xl border border-slate-800 max-w-xl w-full p-6 text-xs text-slate-200 max-h-[90vh] overflow-y-auto">
+            {/* Cabeçalho */}
             <div className="flex items-center justify-between pb-3 border-b border-slate-800">
               <div className="flex items-center gap-2">
                 {selectedNode.type === 'whatsapp' ? (
@@ -1601,7 +1692,7 @@ export default function AutomationCanvasPage() {
                     <MessageSquare className="w-5 h-5 text-emerald-400" />
                     <div>
                       <h3 className="font-bold text-white text-sm">Disparo de WhatsApp</h3>
-                      <p className="text-[11px] text-slate-400">Mensagem que será enviada para o lead</p>
+                      <p className="text-[11px] text-slate-400">Texto, imagem, vídeo ou áudio do seu computador</p>
                     </div>
                   </>
                 ) : (
@@ -1622,7 +1713,69 @@ export default function AutomationCanvasPage() {
               </button>
             </div>
 
-            <div className="mt-4 space-y-3">
+            <div className="mt-4 space-y-4">
+              {/* Se for WhatsApp, exibe seletor de tipo de mensagem */}
+              {selectedNode.type === 'whatsapp' && (
+                <div className="grid grid-cols-4 gap-1.5 p-1 bg-[#101217] rounded-xl border border-slate-800">
+                  <button
+                    type="button"
+                    onClick={() => setWppMessageType('text')}
+                    className={`py-2 px-2 rounded-lg flex items-center justify-center gap-1.5 font-semibold text-xs transition-all ${
+                      wppMessageType === 'text'
+                        ? 'bg-emerald-600/20 text-emerald-300 border border-emerald-500/40 shadow-sm'
+                        : 'text-slate-400 hover:text-white hover:bg-slate-800/50'
+                    }`}
+                  >
+                    <MessageSquare className="w-3.5 h-3.5" />
+                    <span>Texto</span>
+                  </button>
+                  <button
+                    type="button"
+                    onClick={() => setWppMessageType('image')}
+                    className={`py-2 px-2 rounded-lg flex items-center justify-center gap-1.5 font-semibold text-xs transition-all ${
+                      wppMessageType === 'image'
+                        ? 'bg-emerald-600/20 text-emerald-300 border border-emerald-500/40 shadow-sm'
+                        : 'text-slate-400 hover:text-white hover:bg-slate-800/50'
+                    }`}
+                  >
+                    <ImageIcon className="w-3.5 h-3.5" />
+                    <span>Imagem</span>
+                  </button>
+                  <button
+                    type="button"
+                    onClick={() => setWppMessageType('video')}
+                    className={`py-2 px-2 rounded-lg flex items-center justify-center gap-1.5 font-semibold text-xs transition-all ${
+                      wppMessageType === 'video'
+                        ? 'bg-emerald-600/20 text-emerald-300 border border-emerald-500/40 shadow-sm'
+                        : 'text-slate-400 hover:text-white hover:bg-slate-800/50'
+                    }`}
+                  >
+                    <VideoIcon className="w-3.5 h-3.5" />
+                    <span>Vídeo</span>
+                  </button>
+                  <button
+                    type="button"
+                    onClick={() => setWppMessageType('audio')}
+                    className={`py-2 px-2 rounded-lg flex items-center justify-center gap-1.5 font-semibold text-xs transition-all ${
+                      wppMessageType === 'audio'
+                        ? 'bg-emerald-600/20 text-emerald-300 border border-emerald-500/40 shadow-sm'
+                        : 'text-slate-400 hover:text-white hover:bg-slate-800/50'
+                    }`}
+                  >
+                    <Mic className="w-3.5 h-3.5" />
+                    <span>Áudio</span>
+                  </button>
+                </div>
+              )}
+
+              {/* Alerta de erro de upload se houver */}
+              {wppUploadError && (
+                <div className="p-3 bg-red-950/50 border border-red-800/60 rounded-xl text-red-300 text-xs flex items-center gap-2">
+                  <XCircle className="w-4 h-4 shrink-0 text-red-400" />
+                  <span>{wppUploadError}</span>
+                </div>
+              )}
+
               {/* Se for E-mail, pede o assunto */}
               {selectedNode.type === 'email' && (
                 <div>
@@ -1637,52 +1790,362 @@ export default function AutomationCanvasPage() {
                 </div>
               )}
 
-              {/* Mensagem / Conteúdo */}
-              <div>
-                <label className="block text-slate-300 font-semibold mb-1">
-                  {selectedNode.type === 'whatsapp' ? 'Mensagem do WhatsApp' : 'Conteúdo do E-mail'}
-                </label>
-                <textarea
-                  rows={6}
-                  id="message_body_input"
-                  defaultValue={
-                    selectedNode.type === 'whatsapp'
-                      ? (selectedNode.data.config as any)?.message ||
-                        (selectedNode.data.config as any)?.text ||
-                        ''
-                      : (selectedNode.data.config as any)?.content || ''
-                  }
-                  placeholder={
-                    selectedNode.type === 'whatsapp'
-                      ? 'Olá {{nome}}! Seu link foi liberado: ...'
-                      : 'Olá {{nome}},\n\nAqui está o seu acesso...'
-                  }
-                  className="w-full p-2.5 bg-[#12141a] border border-slate-700 rounded-xl text-xs text-white focus:outline-none focus:border-indigo-500 font-sans leading-relaxed"
-                />
-              </div>
+              {/* CONTEÚDO 1: TEXTO (WhatsApp ou E-mail) */}
+              {(selectedNode.type === 'email' || (selectedNode.type === 'whatsapp' && wppMessageType === 'text')) && (
+                <div>
+                  <label className="block text-slate-300 font-semibold mb-1">
+                    {selectedNode.type === 'whatsapp' ? 'Mensagem do WhatsApp' : 'Conteúdo do E-mail'}
+                  </label>
+                  <textarea
+                    rows={6}
+                    id="message_body_input"
+                    defaultValue={
+                      selectedNode.type === 'whatsapp'
+                        ? (selectedNode.data.config as any)?.message ||
+                          (selectedNode.data.config as any)?.text ||
+                          ''
+                        : (selectedNode.data.config as any)?.content || ''
+                    }
+                    placeholder={
+                      selectedNode.type === 'whatsapp'
+                        ? 'Olá {{nome}}! Seu link foi liberado: ...'
+                        : 'Olá {{nome}},\n\nAqui está o seu acesso...'
+                    }
+                    className="w-full p-2.5 bg-[#12141a] border border-slate-700 rounded-xl text-xs text-white focus:outline-none focus:border-indigo-500 font-sans leading-relaxed"
+                  />
 
-              {/* Tags de variáveis dinâmicas */}
-              <div className="flex items-center gap-1.5 flex-wrap">
-                <span className="text-[10px] text-slate-400">Variáveis disponíveis:</span>
-                {['{{nome}}', '{{primeiro_nome}}', '{{email}}', '{{telefone}}'].map((v) => (
-                  <button
-                    key={v}
-                    type="button"
-                    onClick={() => {
-                      const el = document.getElementById('message_body_input') as HTMLTextAreaElement;
-                      if (el) {
-                        el.value += ` ${v}`;
-                      }
-                    }}
-                    className="px-2 py-0.5 rounded bg-slate-800 hover:bg-slate-700 text-indigo-300 font-mono text-[10px] border border-slate-700"
-                  >
-                    {v}
-                  </button>
-                ))}
-              </div>
+                  {/* Tags de variáveis dinâmicas */}
+                  <div className="flex items-center gap-1.5 flex-wrap mt-2">
+                    <span className="text-[10px] text-slate-400">Variáveis disponíveis:</span>
+                    {['{{nome}}', '{{primeiro_nome}}', '{{email}}', '{{telefone}}'].map((v) => (
+                      <button
+                        key={v}
+                        type="button"
+                        onClick={() => {
+                          const el = document.getElementById('message_body_input') as HTMLTextAreaElement;
+                          if (el) {
+                            el.value += ` ${v}`;
+                          }
+                        }}
+                        className="px-2 py-0.5 rounded bg-slate-800 hover:bg-slate-700 text-indigo-300 font-mono text-[10px] border border-slate-700"
+                      >
+                        {v}
+                      </button>
+                    ))}
+                  </div>
+                </div>
+              )}
+
+              {/* CONTEÚDO 2: IMAGEM (WhatsApp) */}
+              {selectedNode.type === 'whatsapp' && wppMessageType === 'image' && (
+                <div className="space-y-3">
+                  <div>
+                    <label className="block text-slate-300 font-semibold mb-1">
+                      Arquivo de Imagem (do seu computador)
+                    </label>
+                    <input
+                      type="file"
+                      id="wpp_image_file_input"
+                      accept="image/*"
+                      onChange={handleFileUpload}
+                      className="hidden"
+                    />
+
+                    {wppUploading ? (
+                      <div className="p-8 border-2 border-dashed border-slate-700 rounded-xl flex flex-col items-center justify-center gap-2 bg-slate-900/40">
+                        <div className="w-6 h-6 border-2 border-emerald-500 border-t-transparent rounded-full animate-spin" />
+                        <span className="text-slate-300 text-xs">Carregando imagem do seu computador...</span>
+                      </div>
+                    ) : wppMediaUrl || wppMediaBase64 ? (
+                      <div className="space-y-2">
+                        <div className="relative rounded-xl border border-slate-700 bg-black/50 p-2 flex items-center justify-center">
+                          {/* eslint-disable-next-line @next/next/no-img-element */}
+                          <img
+                            src={wppMediaBase64 || wppMediaUrl}
+                            alt="Prévia da Imagem"
+                            className="max-h-48 rounded-lg object-contain"
+                          />
+                        </div>
+                        <div className="flex items-center justify-between p-2.5 bg-slate-900/70 border border-slate-800 rounded-xl">
+                          <div className="flex items-center gap-2 truncate">
+                            <ImageIcon className="w-4 h-4 text-emerald-400 shrink-0" />
+                            <span className="text-slate-200 text-xs truncate max-w-[240px]">
+                              {wppMediaFileName || 'imagem.jpg'}
+                            </span>
+                            {wppMediaSize && (
+                              <span className="text-[10px] text-slate-500">
+                                ({(wppMediaSize / 1024 / 1024).toFixed(1)} MB)
+                              </span>
+                            )}
+                          </div>
+                          <div className="flex items-center gap-2 shrink-0">
+                            <label
+                              htmlFor="wpp_image_file_input"
+                              className="px-2.5 py-1 bg-slate-800 hover:bg-slate-700 text-slate-200 rounded-lg text-[11px] cursor-pointer font-medium"
+                            >
+                              Trocar
+                            </label>
+                            <button
+                              type="button"
+                              onClick={() => {
+                                setWppMediaUrl('');
+                                setWppMediaBase64('');
+                                setWppMediaFileName('');
+                                setWppMediaMimeType('');
+                                setWppMediaSize(null);
+                              }}
+                              className="px-2 py-1 text-red-400 hover:text-red-300 text-[11px] font-medium"
+                            >
+                              Remover
+                            </button>
+                          </div>
+                        </div>
+                      </div>
+                    ) : (
+                      <label
+                        htmlFor="wpp_image_file_input"
+                        className="cursor-pointer border-2 border-dashed border-slate-700 hover:border-emerald-500/60 rounded-xl p-6 flex flex-col items-center justify-center gap-2 hover:bg-slate-800/30 transition-all text-center block"
+                      >
+                        <div className="w-10 h-10 rounded-full bg-emerald-950/60 border border-emerald-800/60 flex items-center justify-center text-emerald-400">
+                          <Upload className="w-5 h-5" />
+                        </div>
+                        <span className="font-semibold text-slate-200">Clique para selecionar imagem do seu PC</span>
+                        <span className="text-[11px] text-slate-400">Suporta JPG, PNG, WEBP, GIF (até 25MB)</span>
+                      </label>
+                    )}
+                  </div>
+
+                  {/* Legenda da Imagem */}
+                  <div>
+                    <label className="block text-slate-300 font-semibold mb-1">
+                      Legenda da Imagem (Opcional)
+                    </label>
+                    <textarea
+                      rows={3}
+                      id="wpp_caption_input"
+                      value={wppCaption}
+                      onChange={(e) => setWppCaption(e.target.value)}
+                      placeholder="Ex: Olá {{primeiro_nome}}! Confira essa novidade exclusiva que preparei para você:"
+                      className="w-full p-2.5 bg-[#12141a] border border-slate-700 rounded-xl text-xs text-white focus:outline-none focus:border-emerald-500 font-sans leading-relaxed"
+                    />
+
+                    {/* Tags de variáveis dinâmicas para a legenda */}
+                    <div className="flex items-center gap-1.5 flex-wrap mt-2">
+                      <span className="text-[10px] text-slate-400">Variáveis disponíveis:</span>
+                      {['{{nome}}', '{{primeiro_nome}}', '{{email}}', '{{telefone}}'].map((v) => (
+                        <button
+                          key={v}
+                          type="button"
+                          onClick={() => setWppCaption((prev) => (prev ? `${prev} ${v}` : v))}
+                          className="px-2 py-0.5 rounded bg-slate-800 hover:bg-slate-700 text-emerald-300 font-mono text-[10px] border border-slate-700"
+                        >
+                          {v}
+                        </button>
+                      ))}
+                    </div>
+                  </div>
+                </div>
+              )}
+
+              {/* CONTEÚDO 3: VÍDEO (WhatsApp) */}
+              {selectedNode.type === 'whatsapp' && wppMessageType === 'video' && (
+                <div className="space-y-3">
+                  <div>
+                    <label className="block text-slate-300 font-semibold mb-1">
+                      Arquivo de Vídeo (do seu computador)
+                    </label>
+                    <input
+                      type="file"
+                      id="wpp_video_file_input"
+                      accept="video/*"
+                      onChange={handleFileUpload}
+                      className="hidden"
+                    />
+
+                    {wppUploading ? (
+                      <div className="p-8 border-2 border-dashed border-slate-700 rounded-xl flex flex-col items-center justify-center gap-2 bg-slate-900/40">
+                        <div className="w-6 h-6 border-2 border-emerald-500 border-t-transparent rounded-full animate-spin" />
+                        <span className="text-slate-300 text-xs">Carregando vídeo do seu computador...</span>
+                      </div>
+                    ) : wppMediaUrl || wppMediaBase64 ? (
+                      <div className="space-y-2">
+                        <div className="relative rounded-xl border border-slate-700 bg-black p-2 flex items-center justify-center">
+                          <video
+                            src={wppMediaBase64 || wppMediaUrl}
+                            controls
+                            className="max-h-48 rounded-lg w-full"
+                          />
+                        </div>
+                        <div className="flex items-center justify-between p-2.5 bg-slate-900/70 border border-slate-800 rounded-xl">
+                          <div className="flex items-center gap-2 truncate">
+                            <VideoIcon className="w-4 h-4 text-emerald-400 shrink-0" />
+                            <span className="text-slate-200 text-xs truncate max-w-[240px]">
+                              {wppMediaFileName || 'video.mp4'}
+                            </span>
+                            {wppMediaSize && (
+                              <span className="text-[10px] text-slate-500">
+                                ({(wppMediaSize / 1024 / 1024).toFixed(1)} MB)
+                              </span>
+                            )}
+                          </div>
+                          <div className="flex items-center gap-2 shrink-0">
+                            <label
+                              htmlFor="wpp_video_file_input"
+                              className="px-2.5 py-1 bg-slate-800 hover:bg-slate-700 text-slate-200 rounded-lg text-[11px] cursor-pointer font-medium"
+                            >
+                              Trocar
+                            </label>
+                            <button
+                              type="button"
+                              onClick={() => {
+                                setWppMediaUrl('');
+                                setWppMediaBase64('');
+                                setWppMediaFileName('');
+                                setWppMediaMimeType('');
+                                setWppMediaSize(null);
+                              }}
+                              className="px-2 py-1 text-red-400 hover:text-red-300 text-[11px] font-medium"
+                            >
+                              Remover
+                            </button>
+                          </div>
+                        </div>
+                      </div>
+                    ) : (
+                      <label
+                        htmlFor="wpp_video_file_input"
+                        className="cursor-pointer border-2 border-dashed border-slate-700 hover:border-emerald-500/60 rounded-xl p-6 flex flex-col items-center justify-center gap-2 hover:bg-slate-800/30 transition-all text-center block"
+                      >
+                        <div className="w-10 h-10 rounded-full bg-emerald-950/60 border border-emerald-800/60 flex items-center justify-center text-emerald-400">
+                          <Upload className="w-5 h-5" />
+                        </div>
+                        <span className="font-semibold text-slate-200">Clique para selecionar vídeo do seu PC</span>
+                        <span className="text-[11px] text-slate-400">Suporta MP4, MOV, MKV, AVI, WebM (até 50MB)</span>
+                      </label>
+                    )}
+                  </div>
+
+                  {/* Legenda do Vídeo */}
+                  <div>
+                    <label className="block text-slate-300 font-semibold mb-1">
+                      Legenda do Vídeo (Opcional)
+                    </label>
+                    <textarea
+                      rows={3}
+                      id="wpp_caption_input"
+                      value={wppCaption}
+                      onChange={(e) => setWppCaption(e.target.value)}
+                      placeholder="Ex: Assista a este vídeo rápido que gravei para você, {{primeiro_nome}}!"
+                      className="w-full p-2.5 bg-[#12141a] border border-slate-700 rounded-xl text-xs text-white focus:outline-none focus:border-emerald-500 font-sans leading-relaxed"
+                    />
+
+                    {/* Tags de variáveis dinâmicas para a legenda */}
+                    <div className="flex items-center gap-1.5 flex-wrap mt-2">
+                      <span className="text-[10px] text-slate-400">Variáveis disponíveis:</span>
+                      {['{{nome}}', '{{primeiro_nome}}', '{{email}}', '{{telefone}}'].map((v) => (
+                        <button
+                          key={v}
+                          type="button"
+                          onClick={() => setWppCaption((prev) => (prev ? `${prev} ${v}` : v))}
+                          className="px-2 py-0.5 rounded bg-slate-800 hover:bg-slate-700 text-emerald-300 font-mono text-[10px] border border-slate-700"
+                        >
+                          {v}
+                        </button>
+                      ))}
+                    </div>
+                  </div>
+                </div>
+              )}
+
+              {/* CONTEÚDO 4: ÁUDIO (WhatsApp) */}
+              {selectedNode.type === 'whatsapp' && wppMessageType === 'audio' && (
+                <div className="space-y-3">
+                  <div className="p-3 bg-emerald-950/40 border border-emerald-800/50 rounded-xl text-emerald-300 text-xs flex items-center gap-2.5">
+                    <Mic className="w-4 h-4 text-emerald-400 shrink-0" />
+                    <span>
+                      <strong>Mensagem de Voz Gravada:</strong> O WhatsApp enviará este áudio simulando uma gravação de voz instantânea (PTT) para aumentar a retenção do lead!
+                    </span>
+                  </div>
+
+                  <div>
+                    <label className="block text-slate-300 font-semibold mb-1">
+                      Arquivo de Áudio (do seu computador)
+                    </label>
+                    <input
+                      type="file"
+                      id="wpp_audio_file_input"
+                      accept="audio/*"
+                      onChange={handleFileUpload}
+                      className="hidden"
+                    />
+
+                    {wppUploading ? (
+                      <div className="p-8 border-2 border-dashed border-slate-700 rounded-xl flex flex-col items-center justify-center gap-2 bg-slate-900/40">
+                        <div className="w-6 h-6 border-2 border-emerald-500 border-t-transparent rounded-full animate-spin" />
+                        <span className="text-slate-300 text-xs">Carregando áudio do seu computador...</span>
+                      </div>
+                    ) : wppMediaUrl || wppMediaBase64 ? (
+                      <div className="space-y-2">
+                        <div className="rounded-xl border border-slate-700 bg-slate-900/80 p-3">
+                          <audio
+                            src={wppMediaBase64 || wppMediaUrl}
+                            controls
+                            className="w-full"
+                          />
+                        </div>
+                        <div className="flex items-center justify-between p-2.5 bg-slate-900/70 border border-slate-800 rounded-xl">
+                          <div className="flex items-center gap-2 truncate">
+                            <Mic className="w-4 h-4 text-emerald-400 shrink-0" />
+                            <span className="text-slate-200 text-xs truncate max-w-[240px]">
+                              {wppMediaFileName || 'audio.mp3'}
+                            </span>
+                            {wppMediaSize && (
+                              <span className="text-[10px] text-slate-500">
+                                ({(wppMediaSize / 1024 / 1024).toFixed(1)} MB)
+                              </span>
+                            )}
+                          </div>
+                          <div className="flex items-center gap-2 shrink-0">
+                            <label
+                              htmlFor="wpp_audio_file_input"
+                              className="px-2.5 py-1 bg-slate-800 hover:bg-slate-700 text-slate-200 rounded-lg text-[11px] cursor-pointer font-medium"
+                            >
+                              Trocar
+                            </label>
+                            <button
+                              type="button"
+                              onClick={() => {
+                                setWppMediaUrl('');
+                                setWppMediaBase64('');
+                                setWppMediaFileName('');
+                                setWppMediaMimeType('');
+                                setWppMediaSize(null);
+                              }}
+                              className="px-2 py-1 text-red-400 hover:text-red-300 text-[11px] font-medium"
+                            >
+                              Remover
+                            </button>
+                          </div>
+                        </div>
+                      </div>
+                    ) : (
+                      <label
+                        htmlFor="wpp_audio_file_input"
+                        className="cursor-pointer border-2 border-dashed border-slate-700 hover:border-emerald-500/60 rounded-xl p-6 flex flex-col items-center justify-center gap-2 hover:bg-slate-800/30 transition-all text-center block"
+                      >
+                        <div className="w-10 h-10 rounded-full bg-emerald-950/60 border border-emerald-800/60 flex items-center justify-center text-emerald-400">
+                          <Mic className="w-5 h-5" />
+                        </div>
+                        <span className="font-semibold text-slate-200">Clique para selecionar áudio do seu PC</span>
+                        <span className="text-[11px] text-slate-400">Suporta MP3, WAV, OGG, M4A, AAC, OPUS</span>
+                      </label>
+                    )}
+                  </div>
+                </div>
+              )}
             </div>
 
-            <div className="pt-4 mt-4 border-t border-slate-800 flex items-center justify-between">
+            <div className="pt-4 mt-5 border-t border-slate-800 flex items-center justify-between">
               <button
                 type="button"
                 onClick={handleDeleteCurrentNode}
@@ -1703,13 +2166,20 @@ export default function AutomationCanvasPage() {
                 <button
                   type="button"
                   onClick={() => {
+                    if (selectedNode.type === 'whatsapp' && wppMessageType !== 'text') {
+                      if (!wppMediaUrl && !wppMediaBase64) {
+                        alert('Por favor, selecione um arquivo de mídia do seu computador antes de salvar.');
+                        return;
+                      }
+                    }
                     const bodyEl = document.getElementById('message_body_input') as HTMLTextAreaElement;
                     const subEl = document.getElementById('email_subject_input') as HTMLInputElement;
                     handleSaveMessage(bodyEl?.value || '', subEl?.value || '');
                   }}
-                  className="px-5 py-2 bg-indigo-600 hover:bg-indigo-500 text-white rounded-xl font-semibold shadow-lg shadow-indigo-600/30"
+                  className="px-5 py-2 bg-emerald-600 hover:bg-emerald-500 text-white rounded-xl font-semibold shadow-lg shadow-emerald-600/30 flex items-center gap-1.5"
                 >
-                  Salvar Mensagem
+                  <Check className="w-4 h-4" />
+                  <span>Salvar Mensagem</span>
                 </button>
               </div>
             </div>
