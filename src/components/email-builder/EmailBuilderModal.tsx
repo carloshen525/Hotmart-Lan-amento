@@ -381,8 +381,10 @@ export function EmailBuilderModal({
         body: formData,
       });
       const data = await res.json();
-      if (res.ok && data.url) {
-        updateSelectedBlock({ url: data.dataUrl || data.url });
+      if (res.ok && (data.url || data.dataUrl)) {
+        // Prioriza a URL local (/uploads/...) para manter o documento JSON limpo e leve,
+        // com conversão automática para anexo CID inline no envio
+        updateSelectedBlock({ url: data.url || data.dataUrl });
       }
     } catch (err) {
       console.error('Erro no upload da imagem:', err);

@@ -1,6 +1,108 @@
 import nodemailer, { Transporter } from 'nodemailer';
+import fs from 'fs';
+import path from 'path';
 import { EmailProvider } from '../provider.interface';
 import { EmailOptions, EmailResult, EmailSettingsData, VerifyResult } from '../types';
+
+interface AttachmentItem {
+  filename: string;
+  content: Buffer;
+  cid: string;
+  contentType: string;
+  contentDisposition?: string;
+}
+
+/**
+ * Converte imagens Base64 (data:image/...) e arquivos locais (/uploads/...) em anexos inline com CID
+ * para que clientes de e-mail (como Gmail e Outlook) exibam as imagens perfeitamente
+ * e nunca cortem a mensagem por tamanho excedido (limite de 102KB do Gmail).
+ */
+export function processHtmlInlineImages(html: string): {
+  processedHtml: string;
+  attachments: AttachmentItem[];
+} {
+  const attachments: AttachmentItem[] = [];
+  if (!html) return { processedHtml: html || '', attachments };
+
+  let processedHtml = html;
+  let counter = 0;
+  const timestamp = Date.now();
+
+  // 1. Processa imagens em Base64 (data:image/...;base64,...)
+  processedHtml = processedHtml.replace(
+    /src=["'](data:image\/([a-zA-Z0-9+.-]+);base64,([A-Za-z0-9+/=\s]+))["']/gi,
+    (match, fullDataUri, ext, base64Data) => {
+      try {
+        const cleanBase64 = base64Data.replace(/\s/g, '');
+        const buffer = Buffer.from(cleanBase64, 'base64');
+        const cid = `embedded_img_${counter}_${timestamp}`;
+        counter++;
+
+        const cleanExt = (ext || 'png').toLowerCase().replace('jpeg', 'jpg');
+        attachments.push({
+          filename: `imagem_${counter}.${cleanExt}`,
+          content: buffer,
+          cid,
+          contentType: `image/${ext || 'png'}`,
+          contentDisposition: 'inline',
+        });
+
+        return `src="cid:${cid}"`;
+      } catch (err) {
+        console.error('[SMTPProvider] Erro ao converter imagem base64 para CID:', err);
+        return match;
+      }
+    }
+  );
+
+  // 2. Processa imagens salvas localmente no disco (/uploads/... ou uploads/...)
+  processedHtml = processedHtml.replace(
+    /src=["'](\/?uploads\/[^"']+)["']/gi,
+    (match, localRelPath) => {
+      try {
+        const cleanPath = localRelPath.replace(/^\//, '');
+        const diskPath = path.join(process.cwd(), 'public', cleanPath);
+
+        if (fs.existsSync(diskPath)) {
+          const buffer = fs.readFileSync(diskPath);
+          const cid = `local_img_${counter}_${timestamp}`;
+          counter++;
+
+          const extName = path.extname(diskPath).toLowerCase().replace('.', '') || 'jpg';
+          const mimeType =
+            extName === 'png'
+              ? 'image/png'
+              : extName === 'gif'
+              ? 'image/gif'
+              : extName === 'webp'
+              ? 'image/webp'
+              : 'image/jpeg';
+
+          attachments.push({
+            filename: path.basename(diskPath),
+            content: buffer,
+            cid,
+            contentType: mimeType,
+            contentDisposition: 'inline',
+          });
+
+          return `src="cid:${cid}"`;
+        } else {
+          // Se não encontrou no disco, tenta prefixar com APP_URL se configurado
+          const appUrl = (process.env.APP_URL || '').replace(/\/$/, '');
+          if (appUrl) {
+            return `src="${appUrl}/${cleanPath}"`;
+          }
+        }
+      } catch (err) {
+        console.error('[SMTPProvider] Erro ao anexar imagem local:', err);
+      }
+      return match;
+    }
+  );
+
+  return { processedHtml, attachments };
+}
 
 export class SMTPProvider implements EmailProvider {
   private transporter: Transporter;
@@ -105,13 +207,18 @@ export class SMTPProvider implements EmailProvider {
       const fromHeader = `"${fromName}" <${fromEmail}>`;
       const replyToHeader = options.replyTo || this.settings.replyTo || fromEmail;
 
+      // Converte imagens Base64 e arquivos locais em anexos CID inline para o Gmail renderizar sem cortar
+      const { processedHtml, attachments } = processHtmlInlineImages(options.html);
+      const allAttachments = [...(options.attachments || []), ...attachments];
+
       const info = await this.transporter.sendMail({
         from: fromHeader,
         to: options.to,
         replyTo: replyToHeader,
         subject: options.subject,
-        html: options.html,
+        html: processedHtml,
         text: options.text,
+        attachments: allAttachments.length > 0 ? allAttachments : undefined,
       });
 
       return {

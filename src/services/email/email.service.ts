@@ -468,17 +468,26 @@ export class EmailService {
       </div>
     `;
 
-    const fullHtml = `
-      <div style="font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif; max-width: 600px; margin: 0 auto; padding: 20px; color: #1e293b; line-height: 1.6;">
-        ${processedHtml}
-        ${footerHtml}
-      </div>
-    `;
+    const isCompleteDoc = processedHtml.includes('<!DOCTYPE') || processedHtml.includes('<html');
+    let finalHtml = processedHtml;
+
+    if (isCompleteDoc) {
+      // Já é um e-mail responsivo completo gerado pelo Email Builder: injeta link de opt-out sem quebrar o DOCTYPE
+      finalHtml = finalHtml.replace(/{{optout_url}}/g, unsubscribeLink);
+    } else {
+      // E-mail em fragmento de texto simples: aplica container e rodapé padrão
+      finalHtml = `
+        <div style="font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif; max-width: 600px; margin: 0 auto; padding: 20px; color: #1e293b; line-height: 1.6;">
+          ${processedHtml}
+          ${footerHtml}
+        </div>
+      `;
+    }
 
     const provider = this.createProvider(settings);
     const result = await provider.send({
       ...options,
-      html: fullHtml,
+      html: finalHtml,
     });
 
     // Registrar na tabela de auditoria email_logs
@@ -503,7 +512,7 @@ export class EmailService {
           provider: result.provider,
           recipient: options.to,
           subject: options.subject,
-          content: fullHtml,
+          content: finalHtml,
           status: result.status === 'SENT' ? 'DELIVERED' : 'FAILED',
           externalMessageId: result.messageId,
           deliveredAt: result.status === 'SENT' ? new Date() : null,

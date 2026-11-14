@@ -29,6 +29,7 @@ export interface EmailOptions {
   metadata?: Record<string, any>;
   immediate?: boolean; // Se true, envia diretamente sem passar pela fila (ex: teste de conexão)
   scheduledAt?: Date;  // Data agendada para envio na fila
+  attachments?: any[];
 }
 
 export interface EmailResult {
