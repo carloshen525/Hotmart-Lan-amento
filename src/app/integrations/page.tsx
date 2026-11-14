@@ -135,6 +135,14 @@ export default function IntegrationsPage() {
   // Copied states
   const [copiedId, setCopiedId] = useState<string | null>(null);
 
+  // Webhook recém-criado com sucesso para exibição imediata
+  const [createdWebhookSuccess, setCreatedWebhookSuccess] = useState<{
+    id: string;
+    name: string;
+    platform: string;
+    url: string;
+  } | null>(null);
+
   // Simulador Multi-Plataforma
   const [simPlatform, setSimPlatform] = useState<CheckoutPlatformId>('HOTMART');
   const [simEvent, setSimEvent] = useState<StandardCheckoutEventType>('purchase_approved');
@@ -216,8 +224,14 @@ export default function IntegrationsPage() {
     return `${origin}/api/webhooks/checkout/${integrationId}`;
   };
 
+  const getDirectWebhookUrl = () => {
+    const origin = typeof window !== 'undefined' ? window.location.origin : 'http://localhost:3000';
+    return `${origin}/api/webhooks/hotmart?tenant=${tenant?.id || ''}`;
+  };
+
   const handleOpenCreateModal = () => {
     setEditingIntegrationId(null);
+    setCreatedWebhookSuccess(null);
     setModalForm({
       platform: 'HOTMART',
       name: '',
@@ -242,6 +256,7 @@ export default function IntegrationsPage() {
 
   const handleOpenEditModal = (item: IntegrationItem) => {
     setEditingIntegrationId(item.id);
+    setCreatedWebhookSuccess(null);
     let allowed: StandardCheckoutEventType[] = [];
     try {
       allowed = JSON.parse(item.allowedEvents);
@@ -290,8 +305,18 @@ export default function IntegrationsPage() {
 
       const data = await res.json();
       if (res.ok) {
-        setIsModalOpen(false);
         fetchIntegrations();
+        const integrationId = editingIntegrationId || data.integration?.id;
+        if (integrationId) {
+          setCreatedWebhookSuccess({
+            id: integrationId,
+            name: modalForm.name,
+            platform: modalForm.platform,
+            url: getWebhookUrl(integrationId),
+          });
+        } else {
+          setIsModalOpen(false);
+        }
       } else {
         setModalError(data.error || 'Erro ao salvar integração.');
       }
@@ -544,6 +569,57 @@ export default function IntegrationsPage() {
       {/* ABA 1: INTEGRAÇÕES DE CHECKOUT */}
       {activeTab === 'checkout' && (
         <div className="space-y-6">
+          {/* BANNER OFICIAL: WEBHOOK RÁPIDO PARA COPIAR E COLAR NA HOTMART */}
+          <div className="p-5 rounded-2xl bg-gradient-to-r from-orange-50 via-amber-50/70 to-orange-50/50 border border-orange-200/90 shadow-2xs flex flex-col lg:flex-row lg:items-center justify-between gap-4">
+            <div className="flex items-center gap-3.5">
+              <div className="w-11 h-11 rounded-2xl bg-gradient-to-tr from-orange-500 to-amber-500 text-white flex items-center justify-center shadow-md shadow-orange-500/20 shrink-0">
+                <Flame className="w-6 h-6 fill-white" />
+              </div>
+              <div>
+                <div className="flex items-center gap-2">
+                  <h3 className="font-bold text-slate-900 text-sm sm:text-base">
+                    URL para envio de dados na Hotmart (Webhook)
+                  </h3>
+                  <span className="px-2 py-0.5 rounded-full text-[10px] font-bold bg-orange-100 text-orange-800 border border-orange-200">
+                    Oficial 2.0
+                  </span>
+                </div>
+                <p className="text-xs text-slate-600 mt-0.5 leading-relaxed">
+                  Copie esta URL e cole diretamente no campo <strong>&quot;URL para envio de dados&quot;</strong> na tela de Webhooks da Hotmart.
+                </p>
+              </div>
+            </div>
+
+            <div className="flex items-center gap-2 bg-white p-2 rounded-xl border border-orange-200 shrink-0 shadow-2xs">
+              <input
+                type="text"
+                readOnly
+                value={getDirectWebhookUrl()}
+                className="text-xs font-mono text-slate-800 bg-transparent w-48 sm:w-72 focus:outline-none select-all"
+              />
+              <button
+                type="button"
+                onClick={() => copyToClipboard(getDirectWebhookUrl(), 'main_banner_direct')}
+                className={`flex items-center gap-1.5 px-3.5 py-2 rounded-lg text-xs font-bold transition-all shrink-0 ${
+                  copiedId === 'main_banner_direct'
+                    ? 'bg-emerald-600 text-white'
+                    : 'bg-slate-900 hover:bg-slate-800 text-white shadow-xs'
+                }`}
+              >
+                {copiedId === 'main_banner_direct' ? (
+                  <>
+                    <Check className="w-3.5 h-3.5" />
+                    <span>Copiado!</span>
+                  </>
+                ) : (
+                  <>
+                    <Copy className="w-3.5 h-3.5" />
+                    <span>Copiar Webhook</span>
+                  </>
+                )}
+              </button>
+            </div>
+          </div>
           {loadingIntegrations ? (
             <div className="p-12 text-center text-slate-400 bg-white rounded-2xl border border-slate-200">
               <RotateCw className="w-6 h-6 animate-spin mx-auto mb-2 text-indigo-500" />
@@ -1155,235 +1231,377 @@ export default function IntegrationsPage() {
       {/* MODAL GUIADO: CRIAR OU EDITAR INTEGRAÇÃO */}
       {isModalOpen && (
         <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-slate-950/60 backdrop-blur-sm animate-in fade-in duration-200">
-          <div className="bg-white rounded-3xl max-w-2xl w-full border border-slate-200 shadow-2xl overflow-hidden flex flex-col max-h-[90vh]">
+          <div className="bg-white rounded-3xl max-w-2xl w-full border border-slate-200 shadow-2xl overflow-hidden flex flex-col max-h-[92vh]">
             {/* Cabeçalho do Modal */}
-            <div className="p-5 border-b border-slate-100 flex items-center justify-between bg-slate-50/60">
+            <div className="p-5 border-b border-slate-100 flex items-center justify-between bg-slate-50/60 shrink-0">
               <div className="flex items-center gap-2.5">
                 <div className="w-8 h-8 rounded-xl bg-indigo-600 text-white flex items-center justify-center shadow-sm">
                   <Plug className="w-4 h-4" />
                 </div>
                 <div>
                   <h3 className="font-bold text-slate-900 text-sm">
-                    {editingIntegrationId ? 'Editar Integração' : 'Cadastrar Nova Integração de Checkout'}
+                    {createdWebhookSuccess
+                      ? 'Webhook Gerado com Sucesso!'
+                      : editingIntegrationId
+                      ? 'Editar Integração'
+                      : 'Cadastrar Nova Integração de Checkout'}
                   </h3>
                   <p className="text-[11px] text-slate-400">
-                    Selecione a plataforma, configure os eventos e gere sua URL de webhook.
+                    {createdWebhookSuccess
+                      ? 'Copie a URL abaixo e cole no campo "URL para envio de dados" na Hotmart.'
+                      : 'Selecione a plataforma, copie o webhook e salve para ativar.'}
                   </p>
                 </div>
               </div>
               <button
                 type="button"
-                onClick={() => setIsModalOpen(false)}
+                onClick={() => {
+                  setCreatedWebhookSuccess(null);
+                  setIsModalOpen(false);
+                }}
                 className="p-1 rounded-lg text-slate-400 hover:text-slate-700 hover:bg-slate-200/50"
               >
                 <X className="w-4 h-4" />
               </button>
             </div>
 
-            {/* Corpo do Formulário */}
-            <form onSubmit={handleSaveModal} className="p-6 overflow-y-auto space-y-6 text-xs">
-              {modalError && (
-                <div className="p-3 bg-red-50 border border-red-200 text-red-800 rounded-xl flex items-center gap-2">
-                  <AlertCircle className="w-4 h-4 shrink-0 text-red-600" />
-                  <span>{modalError}</span>
+            {/* SE JÁ SALVOU COM SUCESSO: TELA DE COPIAR WEBHOOK */}
+            {createdWebhookSuccess ? (
+              <div className="p-6 space-y-6 text-center overflow-y-auto animate-in fade-in duration-200">
+                <div className="w-16 h-16 rounded-3xl bg-emerald-50 text-emerald-600 mx-auto flex items-center justify-center shadow-sm">
+                  <CheckCircle2 className="w-8 h-8" />
                 </div>
-              )}
 
-              {/* 1. Escolha da Plataforma */}
-              <div className="space-y-2">
-                <label className="font-bold uppercase tracking-wider text-[11px] text-slate-700 block">
-                  1. Escolha a Plataforma de Vendas *
-                </label>
-                <div className="grid grid-cols-2 sm:grid-cols-4 gap-2.5">
-                  {PLATFORM_PRESETS.map((p) => {
-                    const isSelected = modalForm.platform === p.id;
-                    return (
-                      <button
-                        type="button"
-                        key={p.id}
-                        onClick={() => setModalForm({ ...modalForm, platform: p.id })}
-                        className={`p-3 rounded-2xl border text-left transition-all flex flex-col justify-between h-20 ${
-                          isSelected
-                            ? 'border-indigo-600 bg-indigo-50/50 shadow-sm ring-1 ring-indigo-500'
-                            : 'border-slate-200 hover:border-slate-300 hover:bg-slate-50/50'
-                        }`}
-                      >
-                        <div className="flex items-center justify-between w-full">
-                          {renderPlatformIcon(p.id, 'w-4 h-4')}
-                          {isSelected && <Check className="w-3.5 h-3.5 text-indigo-600" />}
-                        </div>
-                        <span className="font-bold text-slate-800 text-xs block">{p.name}</span>
-                      </button>
-                    );
-                  })}
+                <div className="space-y-1">
+                  <h3 className="text-lg font-bold text-slate-900">
+                    Integração &quot;{createdWebhookSuccess.name}&quot; Ativada! 🎉
+                  </h3>
+                  <p className="text-xs text-slate-500 max-w-md mx-auto leading-relaxed">
+                    Aqui está a URL exclusiva gerada para o seu webhook. Copie e cole diretamente no campo <strong>&quot;URL para envio de dados&quot;</strong> na tela da Hotmart.
+                  </p>
                 </div>
-              </div>
 
-              {/* Dica da plataforma selecionada com link oficial */}
-              <div className="p-3 rounded-xl bg-blue-50/60 border border-blue-200 text-blue-900 flex items-start justify-between gap-2">
-                <div className="text-[11px] leading-relaxed">
-                  <strong className="block font-semibold mb-0.5">{selectedPreset.name}:</strong>
-                  <span>{selectedPreset.description}</span>
-                </div>
-                {selectedPreset.defaultDocUrl && (
-                  <a
-                    href={selectedPreset.defaultDocUrl}
-                    target="_blank"
-                    rel="noopener noreferrer"
-                    className="shrink-0 text-blue-600 hover:text-blue-800 flex items-center gap-1 font-semibold text-[11px]"
-                  >
-                    <span>Manual</span>
-                    <ExternalLink className="w-3 h-3" />
-                  </a>
-                )}
-              </div>
-
-              {/* 2. Nome da Integração & Produto */}
-              <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
-                <div>
-                  <label className="block font-semibold text-slate-700 mb-1">
-                    Nome da Integração *
+                {/* Campo com a URL e botão de Copiar */}
+                <div className="p-4 rounded-2xl bg-slate-50 border border-slate-200 space-y-2 text-left">
+                  <label className="text-[10px] font-bold uppercase tracking-wider text-slate-500 block">
+                    URL para envio de dados (Cole na Hotmart):
                   </label>
-                  <input
-                    type="text"
-                    required
-                    placeholder="Ex: Curso Marketing Digital 2026"
-                    value={modalForm.name}
-                    onChange={(e) => setModalForm({ ...modalForm, name: e.target.value })}
-                    className="w-full px-3 py-2 rounded-xl border border-slate-300 text-slate-900 focus:outline-none focus:ring-2 focus:ring-indigo-500 text-xs"
-                  />
+                  <div className="flex items-center gap-2 p-2 rounded-xl bg-white border border-slate-300 shadow-2xs">
+                    <input
+                      type="text"
+                      readOnly
+                      value={createdWebhookSuccess.url}
+                      className="flex-1 bg-transparent text-xs font-mono text-slate-900 focus:outline-none select-all"
+                    />
+                    <button
+                      type="button"
+                      onClick={() => copyToClipboard(createdWebhookSuccess.url, 'success_modal_copy')}
+                      className={`flex items-center gap-1.5 px-4 py-2 rounded-lg text-xs font-bold transition-all shrink-0 ${
+                        copiedId === 'success_modal_copy'
+                          ? 'bg-emerald-600 text-white'
+                          : 'bg-indigo-600 hover:bg-indigo-700 text-white shadow-sm'
+                      }`}
+                    >
+                      {copiedId === 'success_modal_copy' ? (
+                        <>
+                          <Check className="w-4 h-4" />
+                          <span>Copiado com Sucesso!</span>
+                        </>
+                      ) : (
+                        <>
+                          <Copy className="w-4 h-4" />
+                          <span>Copiar Webhook</span>
+                        </>
+                      )}
+                    </button>
+                  </div>
                 </div>
 
-                <div>
-                  <label className="block font-semibold text-slate-700 mb-1">
-                    Produto Vinculado (Opcional)
-                  </label>
-                  <input
-                    type="text"
-                    placeholder="Ex: Mentoria Alta Performance"
-                    value={modalForm.productName}
-                    onChange={(e) => setModalForm({ ...modalForm, productName: e.target.value })}
-                    className="w-full px-3 py-2 rounded-xl border border-slate-300 text-slate-900 focus:outline-none focus:ring-2 focus:ring-indigo-500 text-xs"
-                  />
+                <div className="p-3.5 bg-blue-50/70 border border-blue-200 rounded-xl text-xs text-blue-900 text-left flex items-start gap-2.5">
+                  <Sparkles className="w-4 h-4 text-blue-600 shrink-0 mt-0.5" />
+                  <div className="text-[11px] leading-relaxed">
+                    <strong>Próximo passo na Hotmart:</strong> Cole a URL acima no campo <em>&quot;URL para envio de dados&quot;</em>, selecione a versão <em>2.0.0</em>, marque os eventos e clique em <em>Salvar</em>. O LaunchFlow validará automaticamente!
+                  </div>
                 </div>
-              </div>
 
-              {/* 3. Chave Secreta / Token de Verificação */}
-              <div className="space-y-1">
-                <label className="block font-semibold text-slate-700">
-                  {selectedPreset.tokenLabel}
-                </label>
-                <input
-                  type="text"
-                  placeholder="Cole aqui o token de validação do webhook fornecido pela plataforma"
-                  value={modalForm.secretKey}
-                  onChange={(e) => setModalForm({ ...modalForm, secretKey: e.target.value })}
-                  className="w-full px-3 py-2 rounded-xl border border-slate-300 text-slate-900 font-mono text-xs focus:outline-none focus:ring-2 focus:ring-indigo-500"
-                />
-                <p className="text-[11px] text-slate-400">{selectedPreset.tokenHint}</p>
-              </div>
-
-              {/* 4. Eventos Aceitos (Checkboxes) */}
-              <div className="space-y-2">
-                <div className="flex items-center justify-between">
-                  <label className="font-bold uppercase tracking-wider text-[11px] text-slate-700">
-                    4. Eventos que serão processados
-                  </label>
+                <div className="pt-4 border-t border-slate-100 flex justify-end">
                   <button
                     type="button"
                     onClick={() => {
-                      if (modalForm.allowedEvents.length === AVAILABLE_EVENTS.length) {
-                        setModalForm({ ...modalForm, allowedEvents: [] });
-                      } else {
-                        setModalForm({
-                          ...modalForm,
-                          allowedEvents: AVAILABLE_EVENTS.map((e) => e.id),
-                        });
-                      }
+                      setCreatedWebhookSuccess(null);
+                      setIsModalOpen(false);
                     }}
-                    className="text-[11px] font-semibold text-indigo-600 hover:underline"
+                    className="px-6 py-2.5 rounded-xl bg-slate-900 hover:bg-slate-800 text-white font-semibold text-xs transition-colors shadow-sm"
                   >
-                    {modalForm.allowedEvents.length === AVAILABLE_EVENTS.length
-                      ? 'Desmarcar todos'
-                      : 'Marcar todos'}
+                    Concluído / Fechar
                   </button>
                 </div>
+              </div>
+            ) : (
+              /* FORMULÁRIO DE CADASTRO / EDIÇÃO */
+              <form onSubmit={handleSaveModal} className="flex flex-col flex-1 overflow-hidden text-xs">
+                <div className="p-6 overflow-y-auto space-y-6 flex-1">
+                  {modalError && (
+                    <div className="p-3 bg-red-50 border border-red-200 text-red-800 rounded-xl flex items-center gap-2">
+                      <AlertCircle className="w-4 h-4 shrink-0 text-red-600" />
+                      <span>{modalError}</span>
+                    </div>
+                  )}
 
-                <div className="grid grid-cols-1 sm:grid-cols-2 gap-2 p-3 bg-slate-50 rounded-2xl border border-slate-200">
-                  {AVAILABLE_EVENTS.map((ev) => {
-                    const isChecked = modalForm.allowedEvents.includes(ev.id);
-                    return (
-                      <label
-                        key={ev.id}
-                        className={`flex items-start gap-2.5 p-2 rounded-xl border cursor-pointer transition-colors ${
-                          isChecked
-                            ? 'bg-white border-indigo-200 shadow-2xs'
-                            : 'bg-transparent border-transparent opacity-60 hover:opacity-100'
+                  {/* 1. Escolha da Plataforma */}
+                  <div className="space-y-2">
+                    <label className="font-bold uppercase tracking-wider text-[11px] text-slate-700 block">
+                      1. Escolha a Plataforma de Vendas *
+                    </label>
+                    <div className="grid grid-cols-2 sm:grid-cols-4 gap-2.5">
+                      {PLATFORM_PRESETS.map((p) => {
+                        const isSelected = modalForm.platform === p.id;
+                        return (
+                          <button
+                            type="button"
+                            key={p.id}
+                            onClick={() => setModalForm({ ...modalForm, platform: p.id })}
+                            className={`p-3 rounded-2xl border text-left transition-all flex flex-col justify-between h-20 ${
+                              isSelected
+                                ? 'border-indigo-600 bg-indigo-50/50 shadow-sm ring-1 ring-indigo-500'
+                                : 'border-slate-200 hover:border-slate-300 hover:bg-slate-50/50'
+                            }`}
+                          >
+                            <div className="flex items-center justify-between w-full">
+                              {renderPlatformIcon(p.id, 'w-4 h-4')}
+                              {isSelected && <Check className="w-3.5 h-3.5 text-indigo-600" />}
+                            </div>
+                            <span className="font-bold text-slate-800 text-xs block">{p.name}</span>
+                          </button>
+                        );
+                      })}
+                    </div>
+                  </div>
+
+                  {/* Dica da plataforma selecionada com link oficial */}
+                  <div className="p-3 rounded-xl bg-blue-50/60 border border-blue-200 text-blue-900 flex items-start justify-between gap-2">
+                    <div className="text-[11px] leading-relaxed">
+                      <strong className="block font-semibold mb-0.5">{selectedPreset.name}:</strong>
+                      <span>{selectedPreset.description}</span>
+                    </div>
+                    {selectedPreset.defaultDocUrl && (
+                      <a
+                        href={selectedPreset.defaultDocUrl}
+                        target="_blank"
+                        rel="noopener noreferrer"
+                        className="shrink-0 text-blue-600 hover:text-blue-800 flex items-center gap-1 font-semibold text-[11px]"
+                      >
+                        <span>Manual</span>
+                        <ExternalLink className="w-3 h-3" />
+                      </a>
+                    )}
+                  </div>
+
+                  {/* DESTAQUE: URL DO WEBHOOK PARA COPIAR IMEDIATAMENTE */}
+                  <div className="p-4 rounded-2xl bg-indigo-50/80 border border-indigo-200 space-y-2">
+                    <div className="flex items-center justify-between">
+                      <label className="font-bold uppercase tracking-wider text-[11px] text-indigo-950 flex items-center gap-1.5">
+                        <Sparkles className="w-3.5 h-3.5 text-indigo-600" />
+                        <span>URL para envio de dados (Webhook da Hotmart)</span>
+                      </label>
+                      <span className="text-[10px] font-bold text-indigo-700 bg-indigo-100 px-2 py-0.5 rounded-full">
+                        {editingIntegrationId ? 'URL da Integração' : 'Webhook Direto Disponível'}
+                      </span>
+                    </div>
+
+                    <div className="flex items-center gap-2 p-2 rounded-xl bg-white border border-indigo-200 shadow-2xs">
+                      <input
+                        type="text"
+                        readOnly
+                        value={
+                          editingIntegrationId
+                            ? getWebhookUrl(editingIntegrationId)
+                            : getDirectWebhookUrl()
+                        }
+                        className="flex-1 bg-transparent text-xs font-mono text-slate-800 focus:outline-none select-all"
+                      />
+                      <button
+                        type="button"
+                        onClick={() =>
+                          copyToClipboard(
+                            editingIntegrationId
+                              ? getWebhookUrl(editingIntegrationId)
+                              : getDirectWebhookUrl(),
+                            'modal_url_preview'
+                          )
+                        }
+                        className={`flex items-center gap-1 px-3 py-1.5 rounded-lg text-xs font-bold transition-all shrink-0 ${
+                          copiedId === 'modal_url_preview'
+                            ? 'bg-emerald-600 text-white'
+                            : 'bg-indigo-600 hover:bg-indigo-700 text-white shadow-xs'
                         }`}
                       >
-                        <input
-                          type="checkbox"
-                          checked={isChecked}
-                          onChange={(e) => {
-                            if (e.target.checked) {
-                              setModalForm({
-                                ...modalForm,
-                                allowedEvents: [...modalForm.allowedEvents, ev.id],
-                              });
-                            } else {
-                              setModalForm({
-                                ...modalForm,
-                                allowedEvents: modalForm.allowedEvents.filter((id) => id !== ev.id),
-                              });
-                            }
-                          }}
-                          className="mt-0.5 rounded text-indigo-600 focus:ring-indigo-500"
-                        />
-                        <div>
-                          <strong className="block font-semibold text-slate-800 text-[11px]">
-                            {ev.label}
-                          </strong>
-                          <span className="text-[10px] text-slate-400">{ev.desc}</span>
-                        </div>
-                      </label>
-                    );
-                  })}
-                </div>
-              </div>
+                        {copiedId === 'modal_url_preview' ? (
+                          <>
+                            <Check className="w-3.5 h-3.5" />
+                            <span>Copiado!</span>
+                          </>
+                        ) : (
+                          <>
+                            <Copy className="w-3.5 h-3.5" />
+                            <span>Copiar Webhook</span>
+                          </>
+                        )}
+                      </button>
+                    </div>
+                    <p className="text-[11px] text-indigo-900 leading-relaxed">
+                      👉 <strong>Pode copiar agora mesmo!</strong> Cole esta URL no campo <em>&quot;URL para envio de dados&quot;</em> na Hotmart. Ao clicar em <strong>&quot;Salvar Integração&quot;</strong> abaixo, sua configuração ficará salva e ativada.
+                    </p>
+                  </div>
 
-              {/* Botões do Rodapé */}
-              <div className="pt-4 border-t border-slate-100 flex items-center justify-between">
-                <span className="text-[11px] text-slate-400">
-                  🔒 URL única gerada automaticamente com criptografia e isolamento multi-tenant.
-                </span>
-                <div className="flex items-center gap-2">
-                  <button
-                    type="button"
-                    onClick={() => setIsModalOpen(false)}
-                    className="px-4 py-2 rounded-xl border border-slate-300 text-slate-700 font-semibold hover:bg-slate-50 transition-colors"
-                  >
-                    Cancelar
-                  </button>
-                  <button
-                    type="submit"
-                    disabled={savingModal}
-                    className="flex items-center gap-1.5 px-5 py-2 rounded-xl bg-indigo-600 hover:bg-indigo-700 text-white font-semibold shadow-sm transition-colors disabled:opacity-50"
-                  >
-                    {savingModal ? (
-                      <>
-                        <RotateCw className="w-3.5 h-3.5 animate-spin" />
-                        <span>Salvando...</span>
-                      </>
-                    ) : (
-                      <>
-                        <Check className="w-3.5 h-3.5" />
-                        <span>{editingIntegrationId ? 'Salvar Alterações' : 'Salvar Integração'}</span>
-                      </>
-                    )}
-                  </button>
+                  {/* 2. Nome da Integração & Produto */}
+                  <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
+                    <div>
+                      <label className="block font-semibold text-slate-700 mb-1">
+                        Nome da Integração *
+                      </label>
+                      <input
+                        type="text"
+                        required
+                        placeholder="Ex: Curso Marketing Digital 2026"
+                        value={modalForm.name}
+                        onChange={(e) => setModalForm({ ...modalForm, name: e.target.value })}
+                        className="w-full px-3 py-2 rounded-xl border border-slate-300 text-slate-900 focus:outline-none focus:ring-2 focus:ring-indigo-500 text-xs"
+                      />
+                    </div>
+
+                    <div>
+                      <label className="block font-semibold text-slate-700 mb-1">
+                        Produto Vinculado (Opcional)
+                      </label>
+                      <input
+                        type="text"
+                        placeholder="Ex: Mentoria Alta Performance"
+                        value={modalForm.productName}
+                        onChange={(e) => setModalForm({ ...modalForm, productName: e.target.value })}
+                        className="w-full px-3 py-2 rounded-xl border border-slate-300 text-slate-900 focus:outline-none focus:ring-2 focus:ring-indigo-500 text-xs"
+                      />
+                    </div>
+                  </div>
+
+                  {/* 3. Chave Secreta / Token de Verificação */}
+                  <div className="space-y-1">
+                    <label className="block font-semibold text-slate-700">
+                      {selectedPreset.tokenLabel}
+                    </label>
+                    <input
+                      type="text"
+                      placeholder="Cole aqui o token de validação do webhook fornecido pela plataforma"
+                      value={modalForm.secretKey}
+                      onChange={(e) => setModalForm({ ...modalForm, secretKey: e.target.value })}
+                      className="w-full px-3 py-2 rounded-xl border border-slate-300 text-slate-900 font-mono text-xs focus:outline-none focus:ring-2 focus:ring-indigo-500"
+                    />
+                    <p className="text-[11px] text-slate-400">{selectedPreset.tokenHint}</p>
+                  </div>
+
+                  {/* 4. Eventos Aceitos (Checkboxes) */}
+                  <div className="space-y-2">
+                    <div className="flex items-center justify-between">
+                      <label className="font-bold uppercase tracking-wider text-[11px] text-slate-700">
+                        4. Eventos que serão processados
+                      </label>
+                      <button
+                        type="button"
+                        onClick={() => {
+                          if (modalForm.allowedEvents.length === AVAILABLE_EVENTS.length) {
+                            setModalForm({ ...modalForm, allowedEvents: [] });
+                          } else {
+                            setModalForm({
+                              ...modalForm,
+                              allowedEvents: AVAILABLE_EVENTS.map((e) => e.id),
+                            });
+                          }
+                        }}
+                        className="text-[11px] font-semibold text-indigo-600 hover:underline"
+                      >
+                        {modalForm.allowedEvents.length === AVAILABLE_EVENTS.length
+                          ? 'Desmarcar todos'
+                          : 'Marcar todos'}
+                      </button>
+                    </div>
+
+                    <div className="grid grid-cols-1 sm:grid-cols-2 gap-2 p-3 bg-slate-50 rounded-2xl border border-slate-200">
+                      {AVAILABLE_EVENTS.map((ev) => {
+                        const isChecked = modalForm.allowedEvents.includes(ev.id);
+                        return (
+                          <label
+                            key={ev.id}
+                            className={`flex items-start gap-2.5 p-2 rounded-xl border cursor-pointer transition-colors ${
+                              isChecked
+                                ? 'bg-white border-indigo-200 shadow-2xs'
+                                : 'bg-transparent border-transparent opacity-60 hover:opacity-100'
+                            }`}
+                          >
+                            <input
+                              type="checkbox"
+                              checked={isChecked}
+                              onChange={(e) => {
+                                if (e.target.checked) {
+                                  setModalForm({
+                                    ...modalForm,
+                                    allowedEvents: [...modalForm.allowedEvents, ev.id],
+                                  });
+                                } else {
+                                  setModalForm({
+                                    ...modalForm,
+                                    allowedEvents: modalForm.allowedEvents.filter((id) => id !== ev.id),
+                                  });
+                                }
+                              }}
+                              className="mt-0.5 rounded text-indigo-600 focus:ring-indigo-500"
+                            />
+                            <div>
+                              <strong className="block font-semibold text-slate-800 text-[11px]">
+                                {ev.label}
+                              </strong>
+                              <span className="text-[10px] text-slate-400">{ev.desc}</span>
+                            </div>
+                          </label>
+                        );
+                      })}
+                    </div>
+                  </div>
                 </div>
-              </div>
-            </form>
+
+                {/* Botões do Rodapé (Fixos / Sticky na base do modal) */}
+                <div className="p-4 border-t border-slate-200 bg-slate-50/90 shrink-0 flex items-center justify-between">
+                  <span className="text-[11px] text-slate-500 hidden sm:inline">
+                    🔒 URL gerada com validação automática Hotmart 2.0.
+                  </span>
+                  <div className="flex items-center gap-2 ml-auto">
+                    <button
+                      type="button"
+                      onClick={() => setIsModalOpen(false)}
+                      className="px-4 py-2 rounded-xl border border-slate-300 text-slate-700 font-semibold hover:bg-slate-100 transition-colors"
+                    >
+                      Cancelar
+                    </button>
+                    <button
+                      type="submit"
+                      disabled={savingModal}
+                      className="flex items-center gap-1.5 px-5 py-2 rounded-xl bg-indigo-600 hover:bg-indigo-700 text-white font-semibold shadow-sm transition-colors disabled:opacity-50"
+                    >
+                      {savingModal ? (
+                        <>
+                          <RotateCw className="w-3.5 h-3.5 animate-spin" />
+                          <span>Salvando...</span>
+                        </>
+                      ) : (
+                        <>
+                          <Check className="w-3.5 h-3.5" />
+                          <span>{editingIntegrationId ? 'Salvar Alterações' : 'Salvar Integração'}</span>
+                        </>
+                      )}
+                    </button>
+                  </div>
+                </div>
+              </form>
+            )}
           </div>
         </div>
       )}
