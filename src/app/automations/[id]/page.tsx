@@ -521,9 +521,20 @@ export default function AutomationCanvasPage() {
   const onMacroConnect: OnConnect = useCallback(
     (params) =>
       setMacroEdges((eds) =>
-        addEdge({ ...params, animated: true, style: { stroke: '#ffffff', strokeWidth: 2 } }, eds)
+        addEdge(
+          {
+            ...params,
+            animated: status === 'ACTIVE',
+            style: {
+              stroke: status === 'ACTIVE' ? '#22c55e' : '#ffffff',
+              strokeWidth: status === 'ACTIVE' ? 2.5 : 2,
+              strokeDasharray: status === 'ACTIVE' ? '6 6' : undefined,
+            },
+          },
+          eds
+        )
       ),
-    []
+    [status]
   );
 
   // Handlers para nós da Sequência Interna
@@ -538,9 +549,20 @@ export default function AutomationCanvasPage() {
   const onSequenceConnect: OnConnect = useCallback(
     (params) =>
       setSequenceEdges((eds) =>
-        addEdge({ ...params, animated: true, style: { stroke: '#ffffff', strokeWidth: 2 } }, eds)
+        addEdge(
+          {
+            ...params,
+            animated: status === 'ACTIVE',
+            style: {
+              stroke: status === 'ACTIVE' ? '#22c55e' : '#ffffff',
+              strokeWidth: status === 'ACTIVE' ? 2.5 : 2,
+              strokeDasharray: status === 'ACTIVE' ? '6 6' : undefined,
+            },
+          },
+          eds
+        )
       ),
-    []
+    [status]
   );
 
   // Abrir visão interna da Sequência Lead
@@ -1223,6 +1245,45 @@ export default function AutomationCanvasPage() {
     setIsTagModalOpen(false);
   };
 
+  // Conexões estilizadas conforme o status da automação (ATIVO: pontilhado verde em movimento; DESATIVADO: linha branca contínua)
+  const isFlowActive = status === 'ACTIVE';
+
+  const formatEdgesWithFlowState = useCallback(
+    (edgesList: Edge[]): Edge[] => {
+      return edgesList.map((edge) => {
+        if (isFlowActive) {
+          return {
+            ...edge,
+            animated: true,
+            style: {
+              ...edge.style,
+              stroke: '#22c55e',
+              strokeWidth: 2.5,
+              strokeDasharray: '6 6',
+            },
+          };
+        } else {
+          return {
+            ...edge,
+            animated: false,
+            style: {
+              ...edge.style,
+              stroke: '#ffffff',
+              strokeWidth: 2,
+              strokeDasharray: undefined,
+            },
+          };
+        }
+      });
+    },
+    [isFlowActive]
+  );
+
+  const displayEdges = useMemo(() => {
+    const currentList = viewMode === 'MACRO' ? macroEdges : sequenceEdges;
+    return formatEdgesWithFlowState(currentList);
+  }, [viewMode, macroEdges, sequenceEdges, formatEdgesWithFlowState]);
+
   if (loading) {
     return (
       <div className="flex items-center justify-center h-full bg-[#0e1015]">
@@ -1515,7 +1576,7 @@ export default function AutomationCanvasPage() {
         <div className="flex-1 h-full relative">
           <ReactFlow
             nodes={viewMode === 'MACRO' ? macroNodes : sequenceNodes}
-            edges={viewMode === 'MACRO' ? macroEdges : sequenceEdges}
+            edges={displayEdges}
             onNodesChange={viewMode === 'MACRO' ? onMacroNodesChange : onSequenceNodesChange}
             onEdgesChange={viewMode === 'MACRO' ? onMacroEdgesChange : onSequenceEdgesChange}
             onConnect={viewMode === 'MACRO' ? onMacroConnect : onSequenceConnect}
