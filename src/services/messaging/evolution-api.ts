@@ -9,11 +9,17 @@ export class EvolutionApiService {
   private apiKey: string;
 
   constructor() {
-    this.apiUrl = (process.env.EVOLUTION_API_URL || '')
+    this.apiUrl = (
+      process.env.EVOLUTION_API_URL ||
+      'https://prospeccao-evolution01.pesd8y.easypanel.host'
+    )
       .trim()
       .replace(/^["']|["']$/g, '')
       .replace(/\/$/, '');
-    this.apiKey = (process.env.EVOLUTION_API_KEY || '')
+    this.apiKey = (
+      process.env.EVOLUTION_API_KEY ||
+      'X9mK2vQ7LpR8aNc4HsT1yWf6BgZe3JuD'
+    )
       .trim()
       .replace(/^["']|["']$/g, '');
   }
@@ -466,6 +472,92 @@ export class EvolutionApiService {
   }
 
   /**
+   * Força a sincronização imediata de todas as instâncias existentes na Evolution API
+   * para o Tenant especificado, garantindo que números conectados apareçam imediatamente.
+   */
+  async syncAllFromEvolutionApi(tenantId: string): Promise<{ success: boolean; synced: number; error?: string }> {
+    if (!tenantId || !this.isConfigured()) {
+      return { success: false, synced: 0, error: 'Configuração ou tenantId ausente' };
+    }
+
+    try {
+      const res = await fetch(`${this.apiUrl}/instance/fetchInstances`, {
+        headers: { apikey: this.apiKey },
+        signal: AbortSignal.timeout(10000),
+      });
+
+      if (!res.ok) {
+        return { success: false, synced: 0, error: `Evolution API retornou status ${res.status}` };
+      }
+
+      const evoData = await res.json().catch(() => []);
+      if (!Array.isArray(evoData)) {
+        return { success: false, synced: 0, error: 'Formato inválido retornado pela Evolution API' };
+      }
+
+      let count = 0;
+      for (const evo of evoData) {
+        const evoName = (evo.name || evo.instanceName || evo.instance?.name || evo.instance?.instanceName || '').trim();
+        if (!evoName) continue;
+
+        const evoState = String(
+          evo.connectionStatus ||
+          evo.state ||
+          evo.status ||
+          evo.instance?.state ||
+          evo.instance?.status ||
+          'close'
+        ).toLowerCase();
+
+        const isConnected = evoState === 'open' || evoState === 'connected';
+        const rawPhone = evo.ownerJid ? evo.ownerJid.replace(/@.*$/, '') : '';
+        const phone = rawPhone ? (rawPhone.startsWith('+') ? rawPhone : '+' + rawPhone) : null;
+        const profileName = evo.profileName || (phone ? `WhatsApp ${phone}` : 'WhatsApp Conectado');
+
+        const existing = await prisma.whatsappInstance.findFirst({
+          where: { instanceName: evoName },
+        });
+
+        if (existing) {
+          await prisma.whatsappInstance.update({
+            where: { id: existing.id },
+            data: {
+              tenantId,
+              status: isConnected ? 'CONNECTED' : (evoState === 'connecting' ? 'CONNECTING' : 'DISCONNECTED'),
+              phone: phone || existing.phone,
+              profileName: profileName || existing.profileName,
+              lastConnectedAt: isConnected ? new Date() : existing.lastConnectedAt,
+              qrcode: isConnected ? null : existing.qrcode,
+            },
+          }).catch(() => {});
+          count++;
+        } else if (isConnected || evoState === 'connecting') {
+          const totalTenantInstances = await prisma.whatsappInstance.count({ where: { tenantId } }).catch(() => 0);
+          await prisma.whatsappInstance.create({
+            data: {
+              tenantId,
+              name: profileName + (phone ? ` (${phone})` : ''),
+              instanceName: evoName,
+              instanceToken: evo.token || crypto.randomUUID(),
+              status: isConnected ? 'CONNECTED' : 'CONNECTING',
+              phone,
+              profileName,
+              isDefault: totalTenantInstances === 0,
+              lastConnectedAt: isConnected ? new Date() : null,
+              qrcode: null,
+            },
+          }).catch(() => {});
+          count++;
+        }
+      }
+
+      return { success: true, synced: count };
+    } catch (err: any) {
+      return { success: false, synced: 0, error: err.message };
+    }
+  }
+
+  /**
    * Consulta o status de uma instância ou de todas as instâncias do tenant autenticado
    */
   async getStatus(tenantId?: string, instanceId?: string) {
@@ -485,12 +577,12 @@ export class EvolutionApiService {
       try {
         const evoRes = await fetch(`${this.apiUrl}/instance/fetchInstances`, {
           headers: { apikey: this.apiKey },
-          signal: AbortSignal.timeout(4000),
+          signal: AbortSignal.timeout(10000),
         });
         evoData = await evoRes.json().catch(() => ([]));
         if (Array.isArray(evoData)) {
           for (const evo of evoData) {
-            const evoName = evo.name || evo.instanceName || evo.instance?.name || evo.instance?.instanceName;
+            const evoName = (evo.name || evo.instanceName || evo.instance?.name || evo.instance?.instanceName || '').trim();
             const evoState = String(
               evo.connectionStatus ||
               evo.state ||
@@ -507,12 +599,7 @@ export class EvolutionApiService {
               const profileName = evo.profileName || 'WhatsApp Conectado';
 
               const existing = await prisma.whatsappInstance.findFirst({
-                where: {
-                  OR: [
-                    { instanceName: evoName },
-                    ...(phone ? [{ phone }] : []),
-                  ],
-                },
+                where: { instanceName: evoName },
               });
 
               if (existing) {
@@ -520,7 +607,6 @@ export class EvolutionApiService {
                   where: { id: existing.id },
                   data: {
                     tenantId, // Vincula ao tenant ativo se ainda não estava
-                    instanceName: evoName,
                     status: 'CONNECTED',
                     phone: phone || existing.phone,
                     profileName: profileName || existing.profileName,
@@ -548,8 +634,8 @@ export class EvolutionApiService {
             }
           }
         }
-      } catch {
-        // Silencioso em caso de timeout
+      } catch (err: any) {
+        console.warn('[EvolutionApi] Aviso ao consultar fetchInstances:', err.message);
       }
     }
 
@@ -565,10 +651,29 @@ export class EvolutionApiService {
     }
 
     // Busca todas as instâncias cadastradas deste tenant
-    const instances = await prisma.whatsappInstance.findMany({
+    let instances = await prisma.whatsappInstance.findMany({
       where: { tenantId },
       orderBy: [{ isDefault: 'desc' }, { createdAt: 'desc' }],
     });
+
+    // Se este tenant não tem instâncias registradas ainda, mas existem instâncias cadastradas no sistema:
+    if (instances.length === 0) {
+      const anyInst = await prisma.whatsappInstance.findMany({
+        orderBy: [{ isDefault: 'desc' }, { createdAt: 'desc' }],
+      });
+      if (anyInst.length > 0) {
+        for (const inst of anyInst) {
+          await prisma.whatsappInstance.update({
+            where: { id: inst.id },
+            data: { tenantId },
+          }).catch(() => {});
+        }
+        instances = await prisma.whatsappInstance.findMany({
+          where: { tenantId },
+          orderBy: [{ isDefault: 'desc' }, { createdAt: 'desc' }],
+        });
+      }
+    }
 
     // Sincroniza cada instância
     const syncedInstances = await Promise.all(
@@ -579,7 +684,7 @@ export class EvolutionApiService {
     // mescla diretamente na lista para nunca sumir da tela mesmo se houver delay no banco
     if (Array.isArray(evoData)) {
       for (const evo of evoData) {
-        const evoName = evo.name || evo.instanceName || evo.instance?.name || evo.instance?.instanceName;
+        const evoName = (evo.name || evo.instanceName || evo.instance?.name || evo.instance?.instanceName || '').trim();
         const evoState = String(
           evo.connectionStatus ||
           evo.state ||
@@ -596,7 +701,7 @@ export class EvolutionApiService {
           const profileName = evo.profileName || 'WhatsApp Conectado';
 
           const alreadyInList = syncedInstances.some(
-            (s) => s.instanceName === evoName || (phone && s.phone === phone)
+            (s) => s.instanceName === evoName
           );
 
           if (!alreadyInList) {

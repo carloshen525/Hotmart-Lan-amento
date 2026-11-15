@@ -57,19 +57,14 @@ async function syncWhatsappInstances() {
       const profileName = evo.profileName || (phone ? `WhatsApp ${phone}` : 'WhatsApp');
 
       const existing = await prisma.whatsappInstance.findFirst({
-        where: {
-          OR: [
-            { instanceName: evoName },
-            ...(phone ? [{ phone }] : []),
-          ],
-        },
+        where: { instanceName: evoName },
       });
 
       if (existing) {
         await prisma.whatsappInstance.update({
           where: { id: existing.id },
           data: {
-            instanceName: evoName,
+            tenantId: tenant.id,
             status: isConnected ? 'CONNECTED' : (evoState === 'connecting' ? 'CONNECTING' : 'DISCONNECTED'),
             phone: phone || existing.phone,
             profileName: profileName || existing.profileName,

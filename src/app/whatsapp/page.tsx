@@ -65,9 +65,38 @@ export default function WhatsAppPage() {
   const [sending, setSending] = useState(false);
   const [sendResult, setSendResult] = useState<any>(null);
 
+  const handleManualSync = async () => {
+    setLoading(true);
+    setActionMessage('Sincronizando números conectados na Evolution API em tempo real...');
+    try {
+      const res = await fetch(`/api/whatsapp/sync?_t=${Date.now()}`, {
+        method: 'POST',
+        cache: 'no-store',
+        headers: { 'Cache-Control': 'no-cache, no-store' },
+      });
+      const json = await res.json();
+      if (Array.isArray(json.instances) && json.instances.length > 0) {
+        setInstances(json.instances);
+        const connCount = json.instances.filter((i: any) => i.connected).length;
+        setActionMessage(`✔ Sincronização concluída! ${json.instances.length} número(s) cadastrado(s) (${connCount} conectado(s)).`);
+      } else {
+        await fetchInstances();
+        setActionMessage('Sincronização finalizada. Verifique se o QR code já foi escaneado na Evolution API.');
+      }
+    } catch (err: any) {
+      setActionMessage(`Falha na sincronização: ${err.message}`);
+      await fetchInstances();
+    } finally {
+      setLoading(false);
+    }
+  };
+
   const fetchInstances = async () => {
     try {
-      const res = await fetch('/api/whatsapp');
+      const res = await fetch(`/api/whatsapp?_t=${Date.now()}`, {
+        cache: 'no-store',
+        headers: { 'Cache-Control': 'no-cache, no-store' },
+      });
       const json = await res.json();
       if (Array.isArray(json.instances)) {
         setInstances(json.instances);
@@ -94,6 +123,8 @@ export default function WhatsAppPage() {
             qrcode: json.qrcode,
           },
         ]);
+      } else if (json.error) {
+        setActionMessage(`Aviso: ${json.error}`);
       }
     } catch {}
     setLoading(false);
@@ -104,7 +135,10 @@ export default function WhatsAppPage() {
 
     // Polling a cada 3.5 segundos para checar status em tempo real de todas as linhas
     const interval = setInterval(() => {
-      fetch('/api/whatsapp')
+      fetch(`/api/whatsapp?_t=${Date.now()}`, {
+        cache: 'no-store',
+        headers: { 'Cache-Control': 'no-cache, no-store' },
+      })
         .then((r) => r.json())
         .then((json) => {
           if (Array.isArray(json.instances)) {
@@ -362,10 +396,7 @@ export default function WhatsAppPage() {
 
         <div className="flex items-center gap-2 self-start sm:self-auto shrink-0">
           <button
-            onClick={() => {
-              setLoading(true);
-              fetchInstances();
-            }}
+            onClick={handleManualSync}
             disabled={loading}
             className="px-3.5 py-2.5 bg-white hover:bg-slate-50 text-slate-700 font-semibold text-xs rounded-xl border border-slate-200 shadow-sm flex items-center gap-1.5 transition-all cursor-pointer"
             title="Sincronizar conexões ativas com a Evolution API"
@@ -419,15 +450,24 @@ export default function WhatsAppPage() {
             </div>
             <h2 className="text-base font-bold text-slate-900 mb-1">Nenhum WhatsApp Conectado</h2>
             <p className="text-xs text-slate-500 max-w-md mx-auto mb-6">
-              Adicione o seu primeiro número para começar a disparar automações de lançamento, avisos e recuperação de vendas.
+              Adicione o seu primeiro número para começar a disparar automações de lançamento, avisos e recuperação de vendas, ou sincronize caso já tenha conectado linhas na Evolution API.
             </p>
-            <button
-              onClick={handleOpenConnectModal}
-              className="px-5 py-2.5 bg-emerald-600 hover:bg-emerald-700 text-white font-semibold text-xs rounded-xl shadow-lg shadow-emerald-600/20 inline-flex items-center gap-2 cursor-pointer"
-            >
-              <PlusCircle className="w-4 h-4" />
-              <span>Conectar Primeiro WhatsApp</span>
-            </button>
+            <div className="flex flex-wrap items-center justify-center gap-3">
+              <button
+                onClick={handleOpenConnectModal}
+                className="px-5 py-2.5 bg-emerald-600 hover:bg-emerald-700 text-white font-semibold text-xs rounded-xl shadow-lg shadow-emerald-600/20 inline-flex items-center gap-2 cursor-pointer"
+              >
+                <PlusCircle className="w-4 h-4" />
+                <span>Conectar Primeiro WhatsApp</span>
+              </button>
+              <button
+                onClick={handleManualSync}
+                className="px-4 py-2.5 bg-white hover:bg-slate-50 text-slate-700 font-semibold text-xs rounded-xl border border-slate-200 shadow-sm inline-flex items-center gap-2 cursor-pointer"
+              >
+                <RefreshCw className="w-3.5 h-3.5 text-slate-500" />
+                <span>Sincronizar Linhas Existentes</span>
+              </button>
+            </div>
           </div>
         ) : (
           /* Lista de Cards de Números */
