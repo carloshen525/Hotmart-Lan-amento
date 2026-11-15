@@ -456,6 +456,8 @@ export class EvolutionApiService {
    * Consulta o status de uma instância ou de todas as instâncias do sistema
    */
   async getStatus(tenantId?: string, instanceId?: string) {
+    let evoData: any[] = [];
+
     // 1. Sincroniza instâncias ativas da Evolution API para o banco automaticamente
     if (this.isConfigured()) {
       try {
@@ -463,7 +465,7 @@ export class EvolutionApiService {
           headers: { apikey: this.apiKey },
           signal: AbortSignal.timeout(4000),
         });
-        const evoData = await evoRes.json().catch(() => ([]));
+        evoData = await evoRes.json().catch(() => ([]));
         if (Array.isArray(evoData)) {
           const openList = evoData.filter((i: any) => i.connectionStatus === 'open');
           for (const evo of openList) {
@@ -495,20 +497,36 @@ export class EvolutionApiService {
             } else {
               const friendlyName = profileName + (phone ? ` (${phone})` : '');
               const totalCount = await prisma.whatsappInstance.count().catch(() => 0);
-              await prisma.whatsappInstance.create({
-                data: {
-                  tenantId: tenantId || null,
-                  name: friendlyName,
-                  instanceName: evo.name,
-                  instanceToken: evo.token || crypto.randomUUID(),
-                  status: 'CONNECTED',
-                  phone,
-                  profileName,
-                  isDefault: totalCount === 0,
-                  lastConnectedAt: new Date(),
-                  qrcode: null,
-                },
-              }).catch(() => {});
+              try {
+                await prisma.whatsappInstance.create({
+                  data: {
+                    tenantId: null,
+                    name: friendlyName,
+                    instanceName: evo.name,
+                    instanceToken: evo.token || crypto.randomUUID(),
+                    status: 'CONNECTED',
+                    phone,
+                    profileName,
+                    isDefault: totalCount === 0,
+                    lastConnectedAt: new Date(),
+                    qrcode: null,
+                  },
+                });
+              } catch {
+                // Fallback de retrocompatibilidade para esquemas antigos
+                await prisma.whatsappInstance.create({
+                  data: {
+                    tenantId: null,
+                    instanceName: evo.name,
+                    instanceToken: evo.token || crypto.randomUUID(),
+                    status: 'CONNECTED',
+                    phone,
+                    profileName,
+                    lastConnectedAt: new Date(),
+                    qrcode: null,
+                  },
+                }).catch(() => {});
+              }
             }
           }
         }
@@ -531,7 +549,42 @@ export class EvolutionApiService {
       orderBy: [{ isDefault: 'desc' }, { createdAt: 'desc' }],
     });
 
-    if (instances.length === 0) {
+    // Sincroniza cada instância
+    let syncedInstances = await Promise.all(
+      instances.map((inst) => this.syncSingleInstance(inst))
+    );
+
+    // 2. Garantia absoluta: se a Evolution API possui instâncias abertas (conectadas),
+    // mescla diretamente na lista para nunca sumir da tela mesmo se a gravação no banco falhar
+    if (Array.isArray(evoData)) {
+      const openEvo = evoData.filter((i: any) => i.connectionStatus === 'open');
+      for (const evo of openEvo) {
+        const rawPhone = evo.ownerJid ? evo.ownerJid.replace(/@.*$/, '') : '';
+        const phone = rawPhone ? (rawPhone.startsWith('+') ? rawPhone : '+' + rawPhone) : null;
+        const profileName = evo.profileName || 'WhatsApp Conectado';
+
+        const alreadyInList = syncedInstances.some(
+          (s) => s.instanceName === evo.name || (phone && s.phone === phone)
+        );
+
+        if (!alreadyInList) {
+          syncedInstances.push({
+            id: evo.id || evo.name,
+            name: profileName + (phone ? ` (${phone})` : ''),
+            instanceName: evo.name,
+            connected: true,
+            status: 'CONNECTED',
+            phone,
+            profileName,
+            isDefault: syncedInstances.length === 0,
+            lastConnectedAt: evo.updatedAt ? new Date(evo.updatedAt) : new Date(),
+            qrcode: null,
+          });
+        }
+      }
+    }
+
+    if (syncedInstances.length === 0) {
       return {
         hasInstance: false,
         connected: false,
@@ -539,11 +592,6 @@ export class EvolutionApiService {
         instances: [],
       };
     }
-
-    // Sincroniza cada instância
-    const syncedInstances = await Promise.all(
-      instances.map((inst) => this.syncSingleInstance(inst))
-    );
 
     const anyConnected = syncedInstances.some((i) => i.connected);
     const primary = syncedInstances.find((i) => i.isDefault) || syncedInstances[0];
