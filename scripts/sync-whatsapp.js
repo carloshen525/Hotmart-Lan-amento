@@ -21,6 +21,14 @@ async function syncWhatsappInstances() {
   console.log('[SYNC] Verificando conexões ativas na Evolution API...');
 
   try {
+    // Higieniza linhas corrompidas no SQLite antes de consultar
+    await prisma.$executeRawUnsafe(`
+      DELETE FROM "WhatsappInstance" WHERE "id" = 'id' OR "instanceName" = 'instanceName' OR "isDefault" = 'isDefault' OR typeof("isDefault") = 'text';
+    `).catch(() => {});
+    await prisma.$executeRawUnsafe(`
+      UPDATE "WhatsappInstance" SET "isDefault" = CASE WHEN "isDefault" IN (1, '1', 'true', 'TRUE') THEN 1 ELSE 0 END;
+    `).catch(() => {});
+
     const tenant = await prisma.tenant.findFirst({ orderBy: { createdAt: 'asc' } });
     if (!tenant) {
       console.log('[SYNC] Nenhum tenant cadastrado no banco ainda. Sincronização adiada.');

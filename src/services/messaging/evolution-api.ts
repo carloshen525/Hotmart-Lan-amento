@@ -34,13 +34,41 @@ export class EvolutionApiService {
   }
 
   /**
+   * Higieniza preventivamente a tabela WhatsappInstance contra tipos inconsistentes no SQLite
+   */
+  async sanitizeTable(force = false) {
+    try {
+      await prisma.$executeRawUnsafe(`
+        DELETE FROM "WhatsappInstance" 
+        WHERE "id" = 'id' 
+           OR "instanceName" = 'instanceName' 
+           OR "isDefault" = 'isDefault' 
+           OR typeof("isDefault") = 'text';
+      `);
+      await prisma.$executeRawUnsafe(`
+        UPDATE "WhatsappInstance" 
+        SET "isDefault" = CASE WHEN "isDefault" IN (1, '1', 'true', 'TRUE') THEN 1 ELSE 0 END;
+      `);
+    } catch {}
+  }
+
+  /**
    * Obtém todas as instâncias do WhatsApp cadastradas para o tenant
    */
   async listAllInstances(tenantId?: string) {
-    return prisma.whatsappInstance.findMany({
-      where: tenantId ? { tenantId } : undefined,
-      orderBy: [{ isDefault: 'desc' }, { createdAt: 'desc' }],
-    });
+    await this.sanitizeTable();
+    try {
+      return await prisma.whatsappInstance.findMany({
+        where: tenantId ? { tenantId } : undefined,
+        orderBy: [{ isDefault: 'desc' }, { createdAt: 'desc' }],
+      });
+    } catch {
+      await this.sanitizeTable(true);
+      return prisma.whatsappInstance.findMany({
+        where: tenantId ? { tenantId } : undefined,
+        orderBy: [{ createdAt: 'desc' }],
+      }).catch(() => []);
+    }
   }
 
   /**
@@ -615,17 +643,38 @@ export class EvolutionApiService {
       return this.syncSingleInstance(instance);
     }
 
-    // 2. Busca todas as instâncias cadastradas deste tenant no SQLite
-    let dbInstances = await prisma.whatsappInstance.findMany({
-      where: { tenantId },
-      orderBy: [{ isDefault: 'desc' }, { createdAt: 'desc' }],
-    });
+    // 2. Higieniza preventivamente e busca todas as instâncias cadastradas deste tenant no SQLite
+    await this.sanitizeTable();
+
+    let dbInstances: any[] = [];
+    try {
+      dbInstances = await prisma.whatsappInstance.findMany({
+        where: { tenantId },
+        orderBy: [{ isDefault: 'desc' }, { createdAt: 'desc' }],
+      });
+    } catch (err: any) {
+      console.warn('[EvolutionApi] findMany falhou por inconsistência de dados, executando sanitização forçada:', err.message);
+      await this.sanitizeTable(true);
+      dbInstances = await prisma.whatsappInstance.findMany({
+        where: { tenantId },
+        orderBy: [{ createdAt: 'desc' }],
+      }).catch(() => []);
+    }
 
     // Se este tenant não tem nenhuma instância no SQLite, adota as instâncias existentes no sistema
     if (dbInstances.length === 0) {
-      const anyInst = await prisma.whatsappInstance.findMany({
-        orderBy: [{ isDefault: 'desc' }, { createdAt: 'desc' }],
-      });
+      let anyInst: any[] = [];
+      try {
+        anyInst = await prisma.whatsappInstance.findMany({
+          orderBy: [{ isDefault: 'desc' }, { createdAt: 'desc' }],
+        });
+      } catch {
+        await this.sanitizeTable(true);
+        anyInst = await prisma.whatsappInstance.findMany({
+          orderBy: [{ createdAt: 'desc' }],
+        }).catch(() => []);
+      }
+
       if (anyInst.length > 0) {
         for (const inst of anyInst) {
           await prisma.whatsappInstance.update({
@@ -636,7 +685,7 @@ export class EvolutionApiService {
         dbInstances = await prisma.whatsappInstance.findMany({
           where: { tenantId },
           orderBy: [{ isDefault: 'desc' }, { createdAt: 'desc' }],
-        });
+        }).catch(() => []);
       }
     }
 

@@ -52,6 +52,7 @@ async function migrateWhatsappMultiTenant() {
 
       // 5. Copia dados da tabela antiga para a nova tabela
       // Se tenantId for nulo ou vazio, associa ao defaultTenantId
+      // Higieniza isDefault para garantir valor booleano (0 ou 1) e descarta linhas de cabeçalho
       await prisma.$executeRawUnsafe(`
         INSERT OR IGNORE INTO "new_WhatsappInstance" (
           "id", "tenantId", "name", "instanceName", "instanceToken", 
@@ -69,23 +70,35 @@ async function migrateWhatsappMultiTenant() {
           "profilePicUrl", 
           COALESCE("status", 'DISCONNECTED'), 
           "qrcode", 
-          COALESCE("isDefault", 0), 
+          CASE 
+            WHEN "isDefault" IN (1, '1', 'true', 'TRUE') THEN 1 
+            ELSE 0 
+          END, 
           "lastConnectedAt", 
           COALESCE("createdAt", CURRENT_TIMESTAMP), 
           COALESCE("updatedAt", CURRENT_TIMESTAMP)
-        FROM "WhatsappInstance";
+        FROM "WhatsappInstance"
+        WHERE "id" != 'id' AND "instanceName" != 'instanceName' AND "isDefault" != 'isDefault';
       `);
 
       // 6. Substitui a tabela antiga pela nova (eliminando para sempre o índice UNIQUE embutido)
       await prisma.$executeRawUnsafe('DROP TABLE "WhatsappInstance";');
       await prisma.$executeRawUnsafe('ALTER TABLE "new_WhatsappInstance" RENAME TO "WhatsappInstance";');
 
-      // 7. Remove qualquer índice único residual de tenantId
+      // 7. Remove qualquer linha inconsistente ou valor textual remanescente
+      await prisma.$executeRawUnsafe(`
+        DELETE FROM "WhatsappInstance" WHERE "id" = 'id' OR "instanceName" = 'instanceName' OR "isDefault" = 'isDefault' OR typeof("isDefault") = 'text';
+      `).catch(() => {});
+      await prisma.$executeRawUnsafe(`
+        UPDATE "WhatsappInstance" SET "isDefault" = CASE WHEN "isDefault" IN (1, '1', 'true', 'TRUE') THEN 1 ELSE 0 END;
+      `).catch(() => {});
+
+      // 8. Remove qualquer índice único residual de tenantId
       try {
         await prisma.$executeRawUnsafe('DROP INDEX IF EXISTS "WhatsappInstance_tenantId_key";');
       } catch {}
 
-      // 8. Recria os índices corretos (instancename único e tenantId indexado)
+      // 9. Recria os índices corretos (instancename único e tenantId indexado)
       await prisma.$executeRawUnsafe(
         'CREATE UNIQUE INDEX IF NOT EXISTS "WhatsappInstance_instanceName_key" ON "WhatsappInstance"("instanceName");'
       );
