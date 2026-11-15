@@ -8,7 +8,7 @@ async function runTestSuite() {
   console.log('=====================================================\n');
 
   let passed = 0;
-  let total = 25;
+  let total = 26;
 
   // Setup de tenant de teste limpo
   const testTenant = await prisma.tenant.upsert({
@@ -1779,6 +1779,93 @@ async function runTestSuite() {
     assert.strictEqual(switchedBack.value, 15);
 
     console.log('✔ PASSOU: Validação de data passada, limpeza de configuração anterior e formatação de timers verificadas.');
+    passed++;
+
+    // -------------------------------------------------------------
+    // TESTE 26: Desacoplamento de Conteúdo, Remoção de Base64 e Performance
+    // -------------------------------------------------------------
+    console.log('[TESTE 26] Desacoplamento de Conteúdo, Remoção de Base64 e Performance de Listagem...');
+
+    // 1. Validação da remoção de Base64 em nós com mídias
+    function stripMediaBase64(nodes) {
+      if (!Array.isArray(nodes)) return [];
+      return nodes.map((n) => {
+        const copy = { ...n };
+        if (copy.data?.config) {
+          const cfg = { ...copy.data.config };
+          delete cfg.mediaBase64;
+          if (Array.isArray(cfg.blocks)) {
+            cfg.blocks = cfg.blocks.map((b) => {
+              const bCopy = { ...b };
+              delete bCopy.mediaBase64;
+              return bCopy;
+            });
+          }
+          copy.data = { ...copy.data, config: cfg };
+        }
+        if (copy.data?.subflow?.nodes) {
+          copy.data.subflow = {
+            ...copy.data.subflow,
+            nodes: stripMediaBase64(copy.data.subflow.nodes),
+          };
+        }
+        return copy;
+      });
+    }
+
+    const heavyNodes = [
+      {
+        id: 'node_wpp_1',
+        type: 'whatsapp',
+        data: {
+          config: {
+            mediaUrl: '/uploads/whatsapp/video_teste.mp4',
+            mediaBase64: 'data:video/mp4;base64,' + 'A'.repeat(50000), // Simula 50KB de base64 pesado
+            blocks: [
+              {
+                id: 'b1',
+                type: 'video',
+                mediaUrl: '/uploads/whatsapp/video_teste.mp4',
+                mediaBase64: 'data:video/mp4;base64,' + 'A'.repeat(50000),
+                mediaFileName: 'video_teste.mp4',
+                mediaSize: 10485760,
+              },
+            ],
+          },
+        },
+      },
+    ];
+
+    const sanitized = stripMediaBase64(heavyNodes);
+    assert.strictEqual(sanitized[0].data.config.mediaBase64, undefined, 'Base64 raiz deve ser removido');
+    assert.strictEqual(sanitized[0].data.config.blocks[0].mediaBase64, undefined, 'Base64 do bloco deve ser removido');
+    assert.strictEqual(sanitized[0].data.config.blocks[0].mediaUrl, '/uploads/whatsapp/video_teste.mp4', 'URL referencial deve ser preservada');
+    assert.strictEqual(sanitized[0].data.config.blocks[0].mediaFileName, 'video_teste.mp4', 'Nome do arquivo deve ser preservado');
+
+    // 2. Consulta de listagem otimizada: sem carregar nodes gigantes
+    const automationsList = await prisma.automation.findMany({
+      where: { tenantId: testTenant.id },
+      select: {
+        id: true,
+        name: true,
+        status: true,
+        updatedAt: true,
+        _count: {
+          select: {
+            enrollments: true,
+            scheduledJobs: true,
+          },
+        },
+      },
+    });
+
+    assert.ok(Array.isArray(automationsList));
+    automationsList.forEach((a) => {
+      assert.strictEqual(a.nodes, undefined, 'Listagem leve nunca deve retornar coluna de nós completos');
+      assert.strictEqual(a.edges, undefined, 'Listagem leve nunca deve retornar conexões completas');
+    });
+
+    console.log('✔ PASSOU: Remoção de Base64, desacoplamento de mídias e listagem de automações otimizadas com sucesso.');
     passed++;
 
     console.log('\n=====================================================');

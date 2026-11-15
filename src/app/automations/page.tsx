@@ -23,6 +23,7 @@ import {
   ArrowRight,
   AlertCircle,
   Share2,
+  RefreshCw,
 } from 'lucide-react';
 import { PRESET_TEMPLATES, AutomationTemplate, generateShareCode } from '@/lib/automation-templates';
 
@@ -33,8 +34,8 @@ interface Automation {
   status: string;
   triggerType: string;
   triggerConfig?: string;
-  nodes: string;
-  edges: string;
+  stagesCount?: number;
+  mediaCount?: number;
   updatedAt: string;
   _count: {
     enrollments: number;
@@ -46,6 +47,7 @@ export default function AutomationsListPage() {
   const router = useRouter();
   const [automations, setAutomations] = useState<Automation[]>([]);
   const [loading, setLoading] = useState(true);
+  const [togglingId, setTogglingId] = useState<string | null>(null);
 
   // Modal Nova Campanha
   const [isModalOpen, setIsModalOpen] = useState(false);
@@ -88,12 +90,12 @@ export default function AutomationsListPage() {
         body: JSON.stringify({ automationId: automation.id }),
       });
       const data = await res.json();
-      const code = data.shareCode || generateShareCode(automation);
+      const code = data.shareCode || `LF-${automation.id}`;
       await navigator.clipboard.writeText(code);
       setCopiedCodeId(automation.id);
       setTimeout(() => setCopiedCodeId(null), 3000);
     } catch {
-      const code = generateShareCode(automation);
+      const code = `LF-${automation.id}`;
       await navigator.clipboard.writeText(code);
       setCopiedCodeId(automation.id);
       setTimeout(() => setCopiedCodeId(null), 3000);
@@ -188,14 +190,34 @@ export default function AutomationsListPage() {
     setCreating(false);
   };
 
+  // Alternar status (Ativar / Pausar) com feedback instantâneo e proteção contra cliques múltiplos
   const toggleStatus = async (id: string, currentStatus: string) => {
+    if (togglingId) return; // Impede requisições concorrentes
+    setTogglingId(id);
     const nextStatus = currentStatus === 'ACTIVE' ? 'PAUSED' : 'ACTIVE';
-    await fetch(`/api/automations/${id}`, {
-      method: 'PUT',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ status: nextStatus }),
-    });
-    fetchAutomations();
+
+    // Atualização otimista imediata na UI
+    setAutomations((prev) =>
+      prev.map((a) => (a.id === id ? { ...a, status: nextStatus } : a))
+    );
+
+    try {
+      const res = await fetch(`/api/automations/${id}`, {
+        method: 'PUT',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ status: nextStatus }),
+      });
+      if (!res.ok) {
+        throw new Error('Falha ao atualizar status');
+      }
+    } catch {
+      // Reverte em caso de erro
+      setAutomations((prev) =>
+        prev.map((a) => (a.id === id ? { ...a, status: currentStatus } : a))
+      );
+    } finally {
+      setTogglingId(null);
+    }
   };
 
   const handleDelete = async (id: string) => {
@@ -280,10 +302,16 @@ export default function AutomationsListPage() {
 
                   <button
                     onClick={() => toggleStatus(a.id, a.status)}
-                    className="text-xs font-semibold text-slate-500 hover:text-slate-800 flex items-center gap-1 cursor-pointer"
+                    disabled={togglingId === a.id}
+                    className="text-xs font-semibold text-slate-500 hover:text-slate-800 flex items-center gap-1.5 cursor-pointer disabled:opacity-50"
                     title={a.status === 'ACTIVE' ? 'Pausar fluxo' : 'Ativar fluxo'}
                   >
-                    {a.status === 'ACTIVE' ? (
+                    {togglingId === a.id ? (
+                      <>
+                        <RefreshCw className="w-3.5 h-3.5 animate-spin text-slate-400" />
+                        <span className="text-[11px] text-slate-400">{a.status === 'ACTIVE' ? 'Pausando...' : 'Ativando...'}</span>
+                      </>
+                    ) : a.status === 'ACTIVE' ? (
                       <>
                         <Pause className="w-3.5 h-3.5 text-amber-600" />
                         <span>Pausar</span>
@@ -302,14 +330,21 @@ export default function AutomationsListPage() {
                   {a.description || 'Automação para captura, engajamento e vendas de lançamentos.'}
                 </p>
 
-                <div className="flex items-center gap-4 mt-4 pt-3 border-t border-slate-100 text-xs text-slate-500">
-                  <div className="flex items-center gap-1.5">
-                    <Users className="w-3.5 h-3.5 text-indigo-600" />
-                    <span>{a._count?.enrollments || 0} inscritos</span>
+                {/* Métricas resumidas de etapas, mídias e leads (Regra 1 e 6) */}
+                <div className="flex items-center gap-4 mt-4 pt-3 border-t border-slate-100 text-xs text-slate-500 flex-wrap">
+                  <div className="flex items-center gap-1.5" title="Quantidade de etapas configuradas">
+                    <Layers className="w-3.5 h-3.5 text-indigo-500" />
+                    <span>{a.stagesCount ?? 0} etapa{(a.stagesCount ?? 0) === 1 ? '' : 's'}</span>
                   </div>
-                  <div className="flex items-center gap-1.5">
-                    <Clock className="w-3.5 h-3.5 text-amber-500" />
-                    <span>{a._count?.scheduledJobs || 0} na fila</span>
+                  {Boolean(a.mediaCount && a.mediaCount > 0) && (
+                    <div className="flex items-center gap-1.5" title="Arquivos de mídia vinculados">
+                      <span className="text-xs">📎</span>
+                      <span>{a.mediaCount} mídia{a.mediaCount === 1 ? '' : 's'}</span>
+                    </div>
+                  )}
+                  <div className="flex items-center gap-1.5" title="Leads participantes do fluxo">
+                    <Users className="w-3.5 h-3.5 text-emerald-600" />
+                    <span>{a._count?.enrollments || 0} leads</span>
                   </div>
                 </div>
               </div>

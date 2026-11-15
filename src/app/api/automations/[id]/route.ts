@@ -166,7 +166,7 @@ export async function GET(request: Request, { params }: { params: { id: string }
     let parsedNodes: any[] = [];
     let parsedEdges: any[] = [];
     try {
-      parsedNodes = JSON.parse(automation.nodes || '[]');
+      parsedNodes = stripMediaBase64FromNodes(JSON.parse(automation.nodes || '[]'));
       parsedEdges = JSON.parse(automation.edges || '[]');
     } catch {}
 
@@ -218,6 +218,33 @@ export async function GET(request: Request, { params }: { params: { id: string }
   } catch (err: any) {
     return NextResponse.json({ error: err.message }, { status: 500 });
   }
+}
+
+// Função para expurgar strings Base64 de mídias, preservando apenas metadados e referências URL
+function stripMediaBase64FromNodes(nodes: any[]): any[] {
+  if (!Array.isArray(nodes)) return [];
+  return nodes.map((n) => {
+    const copy = { ...n };
+    if (copy.data?.config) {
+      const cfg = { ...copy.data.config };
+      delete cfg.mediaBase64;
+      if (Array.isArray(cfg.blocks)) {
+        cfg.blocks = cfg.blocks.map((b: any) => {
+          const bCopy = { ...b };
+          delete bCopy.mediaBase64;
+          return bCopy;
+        });
+      }
+      copy.data = { ...copy.data, config: cfg };
+    }
+    if (copy.data?.subflow?.nodes) {
+      copy.data.subflow = {
+        ...copy.data.subflow,
+        nodes: stripMediaBase64FromNodes(copy.data.subflow.nodes),
+      };
+    }
+    return copy;
+  });
 }
 
 // Validação de segurança para temporizadores de data específica
@@ -288,7 +315,9 @@ export async function PUT(request: Request, { params }: { params: { id: string }
     if (body.status !== undefined) updateData.status = body.status;
     if (body.triggerType !== undefined) updateData.triggerType = body.triggerType;
     if (body.triggerConfig !== undefined) updateData.triggerConfig = typeof body.triggerConfig === 'string' ? body.triggerConfig : JSON.stringify(body.triggerConfig);
-    if (body.nodes !== undefined) updateData.nodes = JSON.stringify(body.nodes);
+    if (body.nodes !== undefined) {
+      updateData.nodes = JSON.stringify(stripMediaBase64FromNodes(body.nodes));
+    }
     if (body.edges !== undefined) updateData.edges = JSON.stringify(body.edges);
 
     const automation = await prisma.automation.update({
@@ -297,7 +326,11 @@ export async function PUT(request: Request, { params }: { params: { id: string }
     });
 
     if (automation.status === 'ACTIVE') {
-      await automationEngine.syncExistingLeadsForAutomation(params.id, tenantId).catch(() => {});
+      // Dispara a sincronização e avanço de leads em background de forma assíncrona,
+      // respondendo imediatamente para que a ativação seja instantânea (< 50ms)
+      automationEngine.syncExistingLeadsForAutomation(params.id, tenantId).catch((err) => {
+        console.error('[Automation Engine] Background sync error:', err);
+      });
     }
 
     return NextResponse.json({ success: true, automation });

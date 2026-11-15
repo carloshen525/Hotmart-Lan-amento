@@ -10,9 +10,19 @@ export async function GET() {
       return NextResponse.json({ automations: [] });
     }
 
-    const automations = await prisma.automation.findMany({
+    // Otimização: Não carregar mídias, mensagens completas ou edges pesadas na listagem.
+    // Retorna apenas dados resumidos (id, nome, status, contagem de etapas e leads)
+    const rawAutomations = await prisma.automation.findMany({
       where: { tenantId },
-      include: {
+      select: {
+        id: true,
+        name: true,
+        description: true,
+        status: true,
+        triggerType: true,
+        updatedAt: true,
+        createdAt: true,
+        nodes: true,
         _count: {
           select: {
             enrollments: true,
@@ -21,6 +31,52 @@ export async function GET() {
         },
       },
       orderBy: { updatedAt: 'desc' },
+    });
+
+    const automations = rawAutomations.map((a) => {
+      let stagesCount = 0;
+      let mediaCount = 0;
+      try {
+        if (a.nodes) {
+          const parsed = JSON.parse(a.nodes);
+          if (Array.isArray(parsed)) {
+            stagesCount = parsed.length;
+            for (const n of parsed) {
+              const blocks = n.data?.config?.blocks;
+              if (Array.isArray(blocks)) {
+                mediaCount += blocks.filter((b: any) => b.type !== 'text' && (b.mediaUrl || b.mediaFileName)).length;
+              } else if (n.data?.config?.mediaUrl || n.data?.config?.mediaType) {
+                mediaCount += 1;
+              }
+              const subNodes = n.data?.subflow?.nodes;
+              if (Array.isArray(subNodes)) {
+                stagesCount += subNodes.length;
+                for (const sn of subNodes) {
+                  const sBlocks = sn.data?.config?.blocks;
+                  if (Array.isArray(sBlocks)) {
+                    mediaCount += sBlocks.filter((b: any) => b.type !== 'text' && (b.mediaUrl || b.mediaFileName)).length;
+                  } else if (sn.data?.config?.mediaUrl || sn.data?.config?.mediaType) {
+                    mediaCount += 1;
+                  }
+                }
+              }
+            }
+          }
+        }
+      } catch {}
+
+      return {
+        id: a.id,
+        name: a.name,
+        description: a.description,
+        status: a.status,
+        triggerType: a.triggerType,
+        updatedAt: a.updatedAt,
+        createdAt: a.createdAt,
+        stagesCount,
+        mediaCount,
+        _count: a._count,
+      };
     });
 
     return NextResponse.json({ automations });

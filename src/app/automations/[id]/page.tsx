@@ -171,6 +171,8 @@ export default function AutomationCanvasPage() {
   // Múltiplos Blocos de Mensagem do WhatsApp (Texto e Arquivos empilhados sem perda de dados)
   const [wppBlocks, setWppBlocks] = useState<MessageBlock[]>([]);
   const [uploadingBlockId, setUploadingBlockId] = useState<string | null>(null);
+  const [uploadProgress, setUploadProgress] = useState<Record<string, number>>({});
+  const [isActivating, setIsActivating] = useState(false);
   const [showAddBlockMenu, setShowAddBlockMenu] = useState(false);
 
   // Instâncias / Números de WhatsApp disponíveis no sistema
@@ -394,6 +396,22 @@ export default function AutomationCanvasPage() {
     fetchTags();
     fetchWppInstances();
 
+    // Regra 10: Cache inteligente - recupera dados da sessão instantaneamente
+    const cacheKey = `flow_cache_${automationId}`;
+    try {
+      const cached = sessionStorage.getItem(cacheKey);
+      if (cached) {
+        const parsed = JSON.parse(cached);
+        if (parsed && Array.isArray(parsed.nodes) && parsed.nodes.length > 0) {
+          setName(parsed.name || '');
+          setStatus(parsed.status || 'DRAFT');
+          setMacroNodes(parsed.nodes);
+          setMacroEdges(parsed.edges || []);
+          setLoading(false);
+        }
+      }
+    } catch {}
+
     fetch(`/api/automations/${automationId}`)
       .then((res) => res.json())
       .then((data) => {
@@ -421,6 +439,19 @@ export default function AutomationCanvasPage() {
           } catch {
             parsedEdges = [];
           }
+
+          // Atualiza o cache inteligente local
+          try {
+            sessionStorage.setItem(
+              cacheKey,
+              JSON.stringify({
+                name: data.automation.name,
+                status: data.automation.status,
+                nodes: parsedNodes,
+                edges: parsedEdges,
+              })
+            );
+          } catch {}
 
           if (data.stats) {
             setRealtimeStats(data.stats);
@@ -873,6 +904,11 @@ export default function AutomationCanvasPage() {
 
   // Salvar no Banco de Dados
   const handleSave = async (publishStatus?: string) => {
+    if (saving || isActivating) return; // Impede requisições simultâneas
+    const isActivatingAction = publishStatus === 'ACTIVE';
+    if (isActivatingAction) {
+      setIsActivating(true);
+    }
     setSaving(true);
     setSaveNotice(null);
     try {
@@ -887,6 +923,7 @@ export default function AutomationCanvasPage() {
         if (!wantsToPause) {
           setSaveNotice('⚠️ A automação precisa ser pausada para salvar alterações.');
           setSaving(false);
+          setIsActivating(false);
           return;
         }
         return handleSave('PAUSED');
@@ -926,12 +963,23 @@ export default function AutomationCanvasPage() {
         setStatus(newStatus);
         setSaveNotice(
           newStatus === 'ACTIVE'
-            ? 'Automação Ativada com Sucesso!'
+            ? 'Automação Ativa!'
             : newStatus === 'PAUSED'
             ? 'Automação Pausada e Salva!'
             : 'Salvo com Sucesso!'
         );
         setTimeout(() => setSaveNotice(null), 3500);
+
+        // Atualização do cache inteligente local (Regra 10)
+        try {
+          sessionStorage.setItem(`flow_cache_${automationId}`, JSON.stringify({
+            name,
+            status: newStatus,
+            nodes: currentMacroNodes,
+            edges: macroEdges,
+          }));
+        } catch {}
+
         fetchRealtimeStats();
       } else {
         setSaveNotice(data.error || 'Erro ao salvar alterações');
@@ -940,6 +988,7 @@ export default function AutomationCanvasPage() {
       setSaveNotice('Erro ao salvar');
     } finally {
       setSaving(false);
+      setIsActivating(false);
     }
   };
 
@@ -1486,65 +1535,92 @@ export default function AutomationCanvasPage() {
     );
   };
 
-  const handleBlockFileUpload = async (blockId: string, e: React.ChangeEvent<HTMLInputElement>) => {
+  // Upload desacoplado em segundo plano com barra de progresso (Regras 2, 7, 8 e 11)
+  const handleBlockFileUpload = (blockId: string, e: React.ChangeEvent<HTMLInputElement>) => {
     const file = e.target.files?.[0];
     if (!file) return;
 
     setUploadingBlockId(blockId);
+    setUploadProgress((prev) => ({ ...prev, [blockId]: 0 }));
     setWppUploadError(null);
 
-    // Pré-visualização instantânea local via Data URL
-    const reader = new FileReader();
-    reader.onload = () => {
-      if (typeof reader.result === 'string') {
-        const previewUrl = reader.result;
-        setWppBlocks((prev) =>
-          prev.map((b) => (b.id === blockId ? { ...b, mediaBase64: previewUrl } : b))
-        );
+    // Pré-visualização instantânea local leve via Object URL (zero custo de memória)
+    const previewBlobUrl = URL.createObjectURL(file);
+
+    let autoType: 'image' | 'video' | 'audio' | 'file' = 'file';
+    if (file.type?.startsWith('image/')) autoType = 'image';
+    else if (file.type?.startsWith('video/')) autoType = 'video';
+    else if (file.type?.startsWith('audio/') || file.name.match(/\.(mp3|wav|ogg|m4a|aac)$/i)) autoType = 'audio';
+
+    setWppBlocks((prev) =>
+      prev.map((b) =>
+        b.id === blockId
+          ? {
+              ...b,
+              type: autoType,
+              mediaUrl: previewBlobUrl,
+              mediaFileName: file.name,
+              mediaSize: file.size,
+              mediaMimeType: file.type,
+            }
+          : b
+      )
+    );
+
+    // Upload assíncrono desacoplado via XHR com rastreamento real de progresso
+    const xhr = new XMLHttpRequest();
+    const formData = new FormData();
+    formData.append('file', file);
+
+    xhr.upload.onprogress = (evt) => {
+      if (evt.lengthComputable) {
+        const percent = Math.round((evt.loaded / evt.total) * 100);
+        setUploadProgress((prev) => ({ ...prev, [blockId]: percent }));
       }
     };
-    reader.readAsDataURL(file);
 
-    try {
-      const formData = new FormData();
-      formData.append('file', file);
-
-      const res = await fetch('/api/whatsapp/upload', {
-        method: 'POST',
-        body: formData,
-      });
-
-      const data = await res.json();
-      if (!res.ok || !data.success) {
-        throw new Error(data.error || 'Falha ao enviar arquivo');
+    xhr.onload = () => {
+      try {
+        if (xhr.status >= 200 && xhr.status < 300) {
+          const data = JSON.parse(xhr.responseText);
+          if (data.success && data.url) {
+            URL.revokeObjectURL(previewBlobUrl);
+            setWppBlocks((prev) =>
+              prev.map((b) =>
+                b.id === blockId
+                  ? {
+                      ...b,
+                      type: data.mediaType || autoType,
+                      mediaId: data.mediaId,
+                      mediaUrl: data.url,
+                      mediaFileName: data.fileName,
+                      mediaMimeType: data.mimeType,
+                      mediaSize: data.fileSize,
+                      mediaBase64: undefined, // Nunca persiste base64
+                    }
+                  : b
+              )
+            );
+          } else {
+            throw new Error(data.error || 'Falha no upload do arquivo');
+          }
+        } else {
+          throw new Error('Falha no upload do arquivo');
+        }
+      } catch (err: any) {
+        setWppUploadError(err.message || 'Erro ao carregar arquivo');
+      } finally {
+        setUploadingBlockId(null);
       }
+    };
 
-      let autoType: 'image' | 'video' | 'audio' | 'file' = 'file';
-      if (data.mimeType?.startsWith('image/')) autoType = 'image';
-      else if (data.mimeType?.startsWith('video/')) autoType = 'video';
-      else if (data.mimeType?.startsWith('audio/')) autoType = 'audio';
-
-      setWppBlocks((prev) =>
-        prev.map((b) =>
-          b.id === blockId
-            ? {
-                ...b,
-                type: autoType,
-                mediaUrl: data.url,
-                mediaBase64: data.dataUrl || data.url,
-                mediaFileName: data.fileName,
-                mediaMimeType: data.mimeType,
-                mediaSize: data.fileSize,
-              }
-            : b
-        )
-      );
-    } catch (err: any) {
-      console.error('Upload error:', err);
-      setWppUploadError(err.message || 'Erro ao carregar arquivo');
-    } finally {
+    xhr.onerror = () => {
+      setWppUploadError('Erro de conexão ao carregar arquivo');
       setUploadingBlockId(null);
-    }
+    };
+
+    xhr.open('POST', '/api/whatsapp/upload');
+    xhr.send(formData);
   };
 
   const handleClearBlockMedia = (blockId: string) => {
@@ -1564,7 +1640,7 @@ export default function AutomationCanvasPage() {
     );
   };
 
-  // Salvar mensagem de WhatsApp ou E-mail
+  // Salvar mensagem de WhatsApp ou E-mail (Regra 5 e 7: salva apenas referências, sem Base64)
   const handleSaveMessage = (legacyMessageText?: string, emailSubject?: string) => {
     if (!selectedNode) return;
 
@@ -1581,29 +1657,38 @@ export default function AutomationCanvasPage() {
         if (n.id === selectedNode.id) {
           const isWpp = n.type === 'whatsapp';
           if (isWpp) {
-            const firstMedia = wppBlocks.find((b) => b.type !== 'text');
-            const firstText = wppBlocks.find((b) => b.type === 'text');
+            // Expurgar Base64 de todos os blocos antes de persistir
+            const sanitizedBlocks = wppBlocks.map((b) => {
+              const { mediaBase64, ...rest } = b;
+              return rest;
+            });
+
+            const firstMedia = sanitizedBlocks.find((b) => b.type !== 'text');
+            const firstText = sanitizedBlocks.find((b) => b.type === 'text');
             const selectedInst = availableWppInstances.find((i) => i.id === selectedWppInstanceId);
+
+            const nextCfg: any = {
+              ...((n.data.config as object) || {}),
+              whatsappInstanceId: selectedWppInstanceId || undefined,
+              whatsappInstanceName: selectedInst?.name || undefined,
+              whatsappPhone: selectedInst?.phone || undefined,
+              blocks: sanitizedBlocks,
+              messageType: firstMedia ? firstMedia.type : 'text',
+              mediaUrl: firstMedia?.mediaUrl,
+              mediaMimeType: firstMedia?.mediaMimeType,
+              mediaFileName: firstMedia?.mediaFileName,
+              mediaSize: firstMedia?.mediaSize,
+              caption: firstMedia?.caption,
+              message: firstText?.text || firstMedia?.caption || '[Mensagem WhatsApp]',
+              text: firstText?.text || firstMedia?.caption || '[Mensagem WhatsApp]',
+            };
+            delete nextCfg.mediaBase64;
+
             return {
               ...n,
               data: {
                 ...n.data,
-                config: {
-                  ...((n.data.config as object) || {}),
-                  whatsappInstanceId: selectedWppInstanceId || undefined,
-                  whatsappInstanceName: selectedInst?.name || undefined,
-                  whatsappPhone: selectedInst?.phone || undefined,
-                  blocks: wppBlocks,
-                  messageType: firstMedia ? firstMedia.type : 'text',
-                  mediaUrl: firstMedia?.mediaUrl,
-                  mediaBase64: firstMedia?.mediaBase64,
-                  mediaMimeType: firstMedia?.mediaMimeType,
-                  mediaFileName: firstMedia?.mediaFileName,
-                  mediaSize: firstMedia?.mediaSize,
-                  caption: firstMedia?.caption,
-                  message: firstText?.text || firstMedia?.caption || '[Mensagem WhatsApp]',
-                  text: firstText?.text || firstMedia?.caption || '[Mensagem WhatsApp]',
-                },
+                config: nextCfg,
               },
             };
           } else {
@@ -1759,10 +1844,11 @@ export default function AutomationCanvasPage() {
                   : 'text-amber-400'
               }`}
             >
-              {status === 'ACTIVE' ? 'Fluxo Ativo' : 'Fluxo Pausado'}
+              {isActivating ? 'Ativando...' : status === 'ACTIVE' ? 'Fluxo Ativo' : 'Fluxo Pausado'}
             </span>
             <button
               type="button"
+              disabled={saving || isActivating}
               onClick={() => {
                 const nextStatus = status === 'ACTIVE' ? 'PAUSED' : 'ACTIVE';
                 handleSave(nextStatus);
@@ -1771,7 +1857,7 @@ export default function AutomationCanvasPage() {
                 status === 'ACTIVE'
                   ? 'bg-emerald-500'
                   : 'bg-slate-700'
-              }`}
+              } ${saving || isActivating ? 'opacity-50 cursor-not-allowed' : ''}`}
               title={
                 status === 'ACTIVE'
                   ? 'Clique para pausar todo o fluxo e permitir edições'
@@ -1883,11 +1969,18 @@ export default function AutomationCanvasPage() {
           <button
             type="button"
             onClick={() => handleSave('ACTIVE')}
-            disabled={saving}
-            className="flex items-center gap-1.5 px-3.5 py-1 bg-emerald-600 hover:bg-emerald-500 text-white rounded-lg font-semibold transition-all cursor-pointer shadow-md shadow-emerald-600/30 active:scale-95"
+            disabled={saving || isActivating}
+            className="flex items-center gap-2 px-3.5 py-1 bg-emerald-600 hover:bg-emerald-500 text-white rounded-lg font-semibold transition-all cursor-pointer shadow-md shadow-emerald-600/30 active:scale-95 disabled:opacity-50 disabled:cursor-not-allowed"
             title="Ativar o fluxo para processar os leads normalmente"
           >
-            <span>▶️ Ativar Automação</span>
+            {isActivating ? (
+              <>
+                <RefreshCw className="w-3.5 h-3.5 animate-spin text-white" />
+                <span>Ativando...</span>
+              </>
+            ) : (
+              <span>▶️ Ativar Automação</span>
+            )}
           </button>
         </div>
       )}
@@ -2590,18 +2683,30 @@ export default function AutomationCanvasPage() {
                               />
 
                               {uploadingBlockId === block.id ? (
-                                <div className="p-6 border-2 border-dashed border-slate-700 rounded-xl flex flex-col items-center justify-center gap-2 bg-[#0f1117]">
-                                  <div className="w-6 h-6 border-2 border-sky-500 border-t-transparent rounded-full animate-spin" />
-                                  <span className="text-slate-300 text-xs">Carregando arquivo do seu computador...</span>
+                                <div className="p-5 border-2 border-dashed border-sky-500/40 rounded-xl flex flex-col items-center justify-center gap-2.5 bg-[#0f1117]">
+                                  <div className="w-full max-w-xs space-y-1.5">
+                                    <div className="flex items-center justify-between text-xs">
+                                      <span className="text-slate-300 font-medium">Enviando em segundo plano...</span>
+                                      <span className="text-sky-400 font-bold font-mono">{uploadProgress[block.id] || 0}%</span>
+                                    </div>
+                                    <div className="w-full bg-slate-800 rounded-full h-2 overflow-hidden">
+                                      <div
+                                        className="bg-sky-500 h-2 rounded-full transition-all duration-200"
+                                        style={{ width: `${Math.max(5, uploadProgress[block.id] || 0)}%` }}
+                                      />
+                                    </div>
+                                  </div>
+                                  <span className="text-[10px] text-slate-500">O painel continua totalmente utilizável durante o envio.</span>
                                 </div>
-                              ) : block.mediaUrl || block.mediaBase64 ? (
+                              ) : block.mediaUrl ? (
                                 <div className="space-y-2">
                                   {block.type === 'image' && (
                                     <div className="relative rounded-xl border border-slate-800 bg-black/50 p-2 flex items-center justify-center">
                                       {/* eslint-disable-next-line @next/next/no-img-element */}
                                       <img
-                                        src={block.mediaBase64 || block.mediaUrl}
+                                        src={block.mediaUrl}
                                         alt="Prévia da Imagem"
+                                        loading="lazy"
                                         className="max-h-40 rounded-lg object-contain"
                                       />
                                     </div>
@@ -2609,8 +2714,9 @@ export default function AutomationCanvasPage() {
                                   {block.type === 'video' && (
                                     <div className="relative rounded-xl border border-slate-800 bg-black p-2 flex items-center justify-center">
                                       <video
-                                        src={block.mediaBase64 || block.mediaUrl}
+                                        src={block.mediaUrl}
                                         controls
+                                        preload="none"
                                         className="max-h-40 rounded-lg w-full"
                                       />
                                     </div>
@@ -2621,7 +2727,7 @@ export default function AutomationCanvasPage() {
                                         <Mic className="w-3 h-3" />
                                         <span>Mensagem de Voz Gravada (PTT)</span>
                                       </div>
-                                      <audio src={block.mediaBase64 || block.mediaUrl} controls className="w-full h-8" />
+                                      <audio src={block.mediaUrl} controls preload="none" className="w-full h-8" />
                                     </div>
                                   )}
                                   {block.type === 'file' && (

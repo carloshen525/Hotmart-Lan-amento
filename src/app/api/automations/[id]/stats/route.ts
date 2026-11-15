@@ -18,9 +18,8 @@ export async function GET(request: Request, { params }: { params: { id: string }
       return NextResponse.json({ error: 'Automação não encontrada' }, { status: 404 });
     }
 
-    if (automation.status === 'ACTIVE') {
-      await automationEngine.syncExistingLeadsForAutomation(params.id, tenantId).catch(() => {});
-    }
+    // O endpoint de estatísticas é estritamente de leitura (read-only).
+    // Não executa sincronizações pesadas síncronas que bloqueiam o painel.
 
     const [allEnrollments, allStepLogs, pendingJobs] = await Promise.all([
       prisma.automationEnrollment.findMany({

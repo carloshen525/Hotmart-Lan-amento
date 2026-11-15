@@ -50,13 +50,14 @@ export async function POST(request: Request) {
     fs.writeFileSync(filePath, buffer);
 
     const relativeUrl = `/uploads/whatsapp/${fileName}`;
-    const base64Data = buffer.toString('base64');
-    const dataUrl = `data:${mimeType};base64,${base64Data}`;
+    const mediaId = `med_${Date.now()}_${Math.random().toString(36).substring(2, 7)}`;
 
+    // Separação estrita: Retorna apenas metadados leves (URL, tamanho, mimeType)
+    // NUNCA carregar ou armazenar Base64 completo no JSON para garantir alta performance
     return NextResponse.json({
       success: true,
+      mediaId,
       url: relativeUrl,
-      dataUrl,
       fileName: originalName,
       fileSize,
       mimeType,
