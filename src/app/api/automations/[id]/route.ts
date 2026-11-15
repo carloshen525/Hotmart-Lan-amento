@@ -225,6 +225,32 @@ export async function PUT(request: Request, { params }: { params: { id: string }
     const tenantId = await getActiveTenantId();
     const body = await request.json();
 
+    const existing = await prisma.automation.findFirst({
+      where: { id: params.id, tenantId },
+    });
+    if (!existing) {
+      return NextResponse.json({ error: 'Automação não encontrada' }, { status: 404 });
+    }
+
+    const isStructuralEdit =
+      body.nodes !== undefined ||
+      body.edges !== undefined ||
+      body.triggerConfig !== undefined ||
+      body.triggerType !== undefined;
+
+    // Regra: Toda edição dentro do fluxo só pode ser feita com ele pausado/desativado.
+    // Se a automação estiver ATIVA no banco e o usuário enviar edições na estrutura sem pausar:
+    const targetStatus = body.status !== undefined ? body.status : existing.status;
+    if (existing.status === 'ACTIVE' && isStructuralEdit && targetStatus === 'ACTIVE') {
+      return NextResponse.json(
+        {
+          error: 'Toda edição no fluxo só pode ser feita com ele pausado/desativado. Pause a automação antes de salvar alterações.',
+          requiresPause: true,
+        },
+        { status: 400 }
+      );
+    }
+
     const updateData: any = {};
     if (body.name !== undefined) updateData.name = body.name;
     if (body.description !== undefined) updateData.description = body.description;

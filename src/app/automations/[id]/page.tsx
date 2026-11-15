@@ -687,6 +687,14 @@ export default function AutomationCanvasPage() {
 
   // Adicionar blocos no Macro (Tag, Timer, Sequência Lead)
   const addMacroBlock = (type: 'tag' | 'timer' | 'sequence_lead') => {
+    if (status === 'ACTIVE') {
+      const wantsToPause = confirm(
+        'Regra de Edição: Este fluxo está ATIVO em produção.\n\nPara adicionar novos blocos ou editar etapas, a automação precisa ser pausada.\n\nDeseja pausar o fluxo agora para prosseguir com a edição?'
+      );
+      if (!wantsToPause) return;
+      handleSave('PAUSED');
+    }
+
     const id = `node_${type}_${Date.now()}`;
     let newN: Node;
 
@@ -757,6 +765,14 @@ export default function AutomationCanvasPage() {
 
   // Adicionar blocos dentro da Sequência (Timer, Aquecimento, WhatsApp, E-mail)
   const addSequenceBlock = (type: 'timer' | 'aquecimento' | 'whatsapp' | 'email') => {
+    if (status === 'ACTIVE') {
+      const wantsToPause = confirm(
+        'Regra de Edição: Este fluxo está ATIVO em produção.\n\nPara adicionar novos blocos ou editar etapas, a automação precisa ser pausada.\n\nDeseja pausar o fluxo agora para prosseguir com a edição?'
+      );
+      if (!wantsToPause) return;
+      handleSave('PAUSED');
+    }
+
     const id = `seq_${type}_${Date.now()}`;
     let newN: Node;
 
@@ -859,6 +875,20 @@ export default function AutomationCanvasPage() {
     try {
       const newStatus = publishStatus || status;
 
+      // Regra: Toda edição dentro do fluxo só pode ser feita com ele pausado/desativado.
+      // Se a automação estiver ATIVA e o usuário estiver tentando salvar alterações estruturais sem pausar:
+      if (status === 'ACTIVE' && newStatus === 'ACTIVE') {
+        const wantsToPause = confirm(
+          'Regra de Segurança do Fluxo:\n\nToda edição dentro do fluxo só pode ser feita com ele pausado/desativado.\n\nDeseja pausar a automação agora para salvar as suas alterações com segurança?'
+        );
+        if (!wantsToPause) {
+          setSaveNotice('⚠️ A automação precisa ser pausada para salvar alterações.');
+          setSaving(false);
+          return;
+        }
+        return handleSave('PAUSED');
+      }
+
       // Se estiver dentro de uma sequência, salva as alterações locais no nó pai antes
       let currentMacroNodes = [...macroNodes];
       if (viewMode === 'SEQUENCE' && activeSequenceNode) {
@@ -887,11 +917,21 @@ export default function AutomationCanvasPage() {
         }),
       });
 
+      const data = await res.json();
+
       if (res.ok) {
         setStatus(newStatus);
-        setSaveNotice(publishStatus === 'ACTIVE' ? 'Automação Ativada com Sucesso!' : 'Salvo com Sucesso!');
-        setTimeout(() => setSaveNotice(null), 3000);
+        setSaveNotice(
+          newStatus === 'ACTIVE'
+            ? 'Automação Ativada com Sucesso!'
+            : newStatus === 'PAUSED'
+            ? 'Automação Pausada e Salva!'
+            : 'Salvo com Sucesso!'
+        );
+        setTimeout(() => setSaveNotice(null), 3500);
         fetchRealtimeStats();
+      } else {
+        setSaveNotice(data.error || 'Erro ao salvar alterações');
       }
     } catch {
       setSaveNotice('Erro ao salvar');
@@ -952,6 +992,14 @@ export default function AutomationCanvasPage() {
   const handleSaveWarmupConfig = () => {
     if (!selectedNode) return;
 
+    if (status === 'ACTIVE') {
+      const wantsToPause = confirm(
+        'Regra de Edição: O fluxo está ATIVO em produção.\n\nPara alterar as configurações desta etapa, a automação precisa ser pausada.\n\nDeseja pausar o fluxo agora para prosseguir com a edição?'
+      );
+      if (!wantsToPause) return;
+      handleSave('PAUSED');
+    }
+
     const updatedCfg: any = {
       ...((selectedNode.data.config as object) || {}),
       rateLimitPerMinute: warmupRateLimit,
@@ -1003,6 +1051,14 @@ export default function AutomationCanvasPage() {
 
   const handleSaveTimerConfig = () => {
     if (!selectedNode) return;
+
+    if (status === 'ACTIVE') {
+      const wantsToPause = confirm(
+        'Regra de Edição: O fluxo está ATIVO em produção.\n\nPara alterar os tempos ou regras deste agendamento, a automação precisa ser pausada.\n\nDeseja pausar o fluxo agora para prosseguir com a edição?'
+      );
+      if (!wantsToPause) return;
+      handleSave('PAUSED');
+    }
 
     const unitText =
       timerUnit === 'minutes' ? 'minuto(s)' : timerUnit === 'hours' ? 'hora(s)' : 'dia(s)';
@@ -1101,6 +1157,14 @@ export default function AutomationCanvasPage() {
 
   const handleSaveTagConfig = () => {
     if (!selectedNode) return;
+
+    if (status === 'ACTIVE') {
+      const wantsToPause = confirm(
+        'Regra de Edição: O fluxo está ATIVO em produção.\n\nPara alterar as tags deste gatilho de entrada, a automação precisa ser pausada.\n\nDeseja pausar o fluxo agora para prosseguir com a edição?'
+      );
+      if (!wantsToPause) return;
+      handleSave('PAUSED');
+    }
 
     const count = availableTags
       .filter((t) => tagEntryTags.includes(t.name))
@@ -1365,6 +1429,14 @@ export default function AutomationCanvasPage() {
   const handleSaveMessage = (legacyMessageText?: string, emailSubject?: string) => {
     if (!selectedNode) return;
 
+    if (status === 'ACTIVE') {
+      const wantsToPause = confirm(
+        'Regra de Edição: O fluxo está ATIVO em produção.\n\nPara alterar o conteúdo e mensagens desta etapa, a automação precisa ser pausada.\n\nDeseja pausar a automação agora para prosseguir com a edição?'
+      );
+      if (!wantsToPause) return;
+      handleSave('PAUSED');
+    }
+
     setSequenceNodes((nds) =>
       nds.map((n) => {
         if (n.id === selectedNode.id) {
@@ -1418,6 +1490,13 @@ export default function AutomationCanvasPage() {
   // Deletar nó selecionado
   const handleDeleteCurrentNode = () => {
     if (!selectedNode) return;
+    if (status === 'ACTIVE') {
+      const wantsToPause = confirm(
+        'Regra de Edição: Este fluxo está ATIVO em produção.\n\nPara excluir etapas, a automação precisa ser pausada.\n\nDeseja pausar o fluxo agora para prosseguir com a exclusão?'
+      );
+      if (!wantsToPause) return;
+      handleSave('PAUSED');
+    }
     if (viewMode === 'MACRO') {
       setMacroNodes((nds) => nds.filter((n) => n.id !== selectedNode.id));
       setMacroEdges((eds) =>
@@ -1538,10 +1617,10 @@ export default function AutomationCanvasPage() {
               className={`text-[11px] font-semibold ${
                 status === 'ACTIVE'
                   ? 'text-emerald-400'
-                  : 'text-slate-400'
+                  : 'text-amber-400'
               }`}
             >
-              {status === 'ACTIVE' ? 'Ativar' : 'Desativar'}
+              {status === 'ACTIVE' ? 'Fluxo Ativo' : 'Fluxo Pausado'}
             </span>
             <button
               type="button"
@@ -1556,7 +1635,7 @@ export default function AutomationCanvasPage() {
               }`}
               title={
                 status === 'ACTIVE'
-                  ? 'Clique para pausar todo o fluxo'
+                  ? 'Clique para pausar todo o fluxo e permitir edições'
                   : 'Clique para ativar todo o fluxo e processar os leads'
               }
             >
@@ -1632,6 +1711,47 @@ export default function AutomationCanvasPage() {
           </button>
         </div>
       </div>
+
+      {/* Banner de Modo de Edição / Produção */}
+      {status === 'ACTIVE' ? (
+        <div className="bg-emerald-950/40 border-b border-emerald-500/20 px-6 py-2.5 flex items-center justify-between text-xs text-emerald-200">
+          <div className="flex items-center gap-2.5">
+            <span className="w-2.5 h-2.5 rounded-full bg-emerald-400 animate-pulse shadow-sm shadow-emerald-400/50" />
+            <span className="font-bold text-emerald-300 uppercase tracking-wider text-[11px]">Fluxo Ativo:</span>
+            <span className="text-slate-300">
+              O fluxo está operando normalmente. Para alterar nós, mensagens ou sequências, você precisa pausar a automação. Leads que já receberam mensagens não receberão novamente.
+            </span>
+          </div>
+          <button
+            type="button"
+            onClick={() => handleSave('PAUSED')}
+            disabled={saving}
+            className="flex items-center gap-1.5 px-3 py-1 bg-amber-500/20 hover:bg-amber-500/30 text-amber-300 border border-amber-500/40 rounded-lg font-semibold transition-all cursor-pointer shadow-sm active:scale-95"
+            title="Pausar o fluxo para permitir edições com segurança"
+          >
+            <span>⏸️ Pausar para Editar</span>
+          </button>
+        </div>
+      ) : (
+        <div className="bg-amber-950/30 border-b border-amber-500/20 px-6 py-2.5 flex items-center justify-between text-xs text-amber-200">
+          <div className="flex items-center gap-2.5">
+            <span className="w-2.5 h-2.5 rounded-full bg-amber-400" />
+            <span className="font-bold text-amber-300 uppercase tracking-wider text-[11px]">Modo de Edição (Pausado):</span>
+            <span className="text-slate-300">
+              O fluxo está pausado. Você pode alterar mensagens, adicionar ou conectar novas etapas. Ao terminar, ative para retomar os disparos normalmente.
+            </span>
+          </div>
+          <button
+            type="button"
+            onClick={() => handleSave('ACTIVE')}
+            disabled={saving}
+            className="flex items-center gap-1.5 px-3.5 py-1 bg-emerald-600 hover:bg-emerald-500 text-white rounded-lg font-semibold transition-all cursor-pointer shadow-md shadow-emerald-600/30 active:scale-95"
+            title="Ativar o fluxo para processar os leads normalmente"
+          >
+            <span>▶️ Ativar Automação</span>
+          </button>
+        </div>
+      )}
 
       {/* ============================================================ */}
       {/* ÁREA CENTRAL: SIDEBAR DE FERRAMENTAS + CANVAS */}
