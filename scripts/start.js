@@ -26,7 +26,7 @@ try {
   console.error('[PROD START] Aviso na sincronização do schema Prisma (continuando inicialização de forma controlada):', err.message);
 }
 
-// 2. Executa seed de dados essenciais (admin e expert) se necessario
+// 3. Executa seed de dados essenciais (admin e expert) se necessario
 try {
   console.log('[PROD START] Verificando dados essenciais (seed)...');
   execSync('node prisma/seed.js', {
@@ -36,6 +36,18 @@ try {
   console.log('[PROD START] Seed verificado.');
 } catch (err) {
   console.warn('[PROD START] Aviso no seed (continuando inicializacao):', err.message);
+}
+
+// 4. Sincroniza instâncias conectadas da Evolution API para o banco
+try {
+  console.log('[PROD START] Sincronizando instâncias da Evolution API para o banco...');
+  execSync('node scripts/sync-whatsapp.js', {
+    stdio: 'inherit',
+    timeout: 15000,
+  });
+  console.log('[PROD START] Sincronização inicial concluída.');
+} catch (err) {
+  console.warn('[PROD START] Aviso na sincronização do WhatsApp (continuando inicialização):', err.message);
 }
 
 // 3. Inicia o servidor Next.js escutando obrigatoriamente em 0.0.0.0 (obrigatorio para Docker / Easypanel)

@@ -360,14 +360,29 @@ export default function WhatsAppPage() {
           </p>
         </div>
 
-        <button
-          onClick={handleOpenConnectModal}
-          disabled={actionLoading}
-          className="px-4 py-2.5 bg-emerald-600 hover:bg-emerald-700 text-white font-semibold text-xs rounded-xl shadow-lg shadow-emerald-600/20 flex items-center gap-2 transition-all cursor-pointer self-start sm:self-auto shrink-0"
-        >
-          <PlusCircle className="w-4 h-4" />
-          <span>Adicionar Novo Número</span>
-        </button>
+        <div className="flex items-center gap-2 self-start sm:self-auto shrink-0">
+          <button
+            onClick={() => {
+              setLoading(true);
+              fetchInstances();
+            }}
+            disabled={loading}
+            className="px-3.5 py-2.5 bg-white hover:bg-slate-50 text-slate-700 font-semibold text-xs rounded-xl border border-slate-200 shadow-sm flex items-center gap-1.5 transition-all cursor-pointer"
+            title="Sincronizar conexões ativas com a Evolution API"
+          >
+            <RefreshCw className={`w-3.5 h-3.5 text-slate-500 ${loading ? 'animate-spin' : ''}`} />
+            <span>Sincronizar</span>
+          </button>
+
+          <button
+            onClick={handleOpenConnectModal}
+            disabled={actionLoading}
+            className="px-4 py-2.5 bg-emerald-600 hover:bg-emerald-700 text-white font-semibold text-xs rounded-xl shadow-lg shadow-emerald-600/20 flex items-center gap-2 transition-all cursor-pointer"
+          >
+            <PlusCircle className="w-4 h-4" />
+            <span>Adicionar Novo Número</span>
+          </button>
+        </div>
       </div>
 
       {actionMessage && (
