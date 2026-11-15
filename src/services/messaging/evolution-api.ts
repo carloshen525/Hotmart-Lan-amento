@@ -42,20 +42,26 @@ export class EvolutionApiService {
         DELETE FROM "WhatsappInstance" 
         WHERE "id" = 'id' 
            OR "instanceName" = 'instanceName' 
-           OR "isDefault" = 'isDefault' 
-           OR typeof("isDefault") = 'text';
-      `);
+           OR "isDefault" = 'isDefault'
+           OR "id" NOT LIKE 'c%';
+      `).catch(() => {});
       await prisma.$executeRawUnsafe(`
         UPDATE "WhatsappInstance" 
-        SET "isDefault" = CASE WHEN "isDefault" IN (1, '1', 'true', 'TRUE') THEN 1 ELSE 0 END;
-      `);
+        SET "isDefault" = 1 
+        WHERE "isDefault" IN (1, '1', 'true', 'TRUE', 't');
+      `).catch(() => {});
+      await prisma.$executeRawUnsafe(`
+        UPDATE "WhatsappInstance" 
+        SET "isDefault" = 0 
+        WHERE "isDefault" NOT IN (1);
+      `).catch(() => {});
     } catch {}
   }
 
   /**
-   * Obtém todas as instâncias do WhatsApp cadastradas para o tenant
+   * Busca instâncias com fallback imune a dados corrompidos ou inconsistentes no SQLite
    */
-  async listAllInstances(tenantId?: string) {
+  async safeFindManyInstances(tenantId?: string): Promise<any[]> {
     await this.sanitizeTable();
     try {
       return await prisma.whatsappInstance.findMany({
@@ -63,12 +69,43 @@ export class EvolutionApiService {
         orderBy: [{ isDefault: 'desc' }, { createdAt: 'desc' }],
       });
     } catch {
-      await this.sanitizeTable(true);
-      return prisma.whatsappInstance.findMany({
-        where: tenantId ? { tenantId } : undefined,
-        orderBy: [{ createdAt: 'desc' }],
-      }).catch(() => []);
+      try {
+        await this.sanitizeTable(true);
+        const query = tenantId
+          ? `SELECT id, tenantId, name, instanceName, instanceToken, phone, profileName, profilePicUrl, status, qrcode,
+                    CASE WHEN isDefault IN (1, '1', 'true', 'TRUE', 't') THEN 1 ELSE 0 END as isDefault,
+                    lastConnectedAt, createdAt, updatedAt
+             FROM "WhatsappInstance"
+             WHERE tenantId = ?
+             ORDER BY isDefault DESC, createdAt DESC`
+          : `SELECT id, tenantId, name, instanceName, instanceToken, phone, profileName, profilePicUrl, status, qrcode,
+                    CASE WHEN isDefault IN (1, '1', 'true', 'TRUE', 't') THEN 1 ELSE 0 END as isDefault,
+                    lastConnectedAt, createdAt, updatedAt
+             FROM "WhatsappInstance"
+             ORDER BY isDefault DESC, createdAt DESC`;
+
+        const rows: any[] = tenantId
+          ? await prisma.$queryRawUnsafe(query, tenantId)
+          : await prisma.$queryRawUnsafe(query);
+
+        return rows.map((r) => ({
+          ...r,
+          isDefault: Boolean(Number(r.isDefault) === 1),
+          lastConnectedAt: r.lastConnectedAt ? new Date(r.lastConnectedAt) : null,
+          createdAt: r.createdAt ? new Date(r.createdAt) : new Date(),
+          updatedAt: r.updatedAt ? new Date(r.updatedAt) : new Date(),
+        }));
+      } catch {
+        return [];
+      }
     }
+  }
+
+  /**
+   * Obtém todas as instâncias do WhatsApp cadastradas para o tenant
+   */
+  async listAllInstances(tenantId?: string) {
+    return this.safeFindManyInstances(tenantId);
   }
 
   /**
@@ -644,36 +681,11 @@ export class EvolutionApiService {
     }
 
     // 2. Higieniza preventivamente e busca todas as instâncias cadastradas deste tenant no SQLite
-    await this.sanitizeTable();
-
-    let dbInstances: any[] = [];
-    try {
-      dbInstances = await prisma.whatsappInstance.findMany({
-        where: { tenantId },
-        orderBy: [{ isDefault: 'desc' }, { createdAt: 'desc' }],
-      });
-    } catch (err: any) {
-      console.warn('[EvolutionApi] findMany falhou por inconsistência de dados, executando sanitização forçada:', err.message);
-      await this.sanitizeTable(true);
-      dbInstances = await prisma.whatsappInstance.findMany({
-        where: { tenantId },
-        orderBy: [{ createdAt: 'desc' }],
-      }).catch(() => []);
-    }
+    let dbInstances = await this.safeFindManyInstances(tenantId);
 
     // Se este tenant não tem nenhuma instância no SQLite, adota as instâncias existentes no sistema
     if (dbInstances.length === 0) {
-      let anyInst: any[] = [];
-      try {
-        anyInst = await prisma.whatsappInstance.findMany({
-          orderBy: [{ isDefault: 'desc' }, { createdAt: 'desc' }],
-        });
-      } catch {
-        await this.sanitizeTable(true);
-        anyInst = await prisma.whatsappInstance.findMany({
-          orderBy: [{ createdAt: 'desc' }],
-        }).catch(() => []);
-      }
+      const anyInst = await this.safeFindManyInstances();
 
       if (anyInst.length > 0) {
         for (const inst of anyInst) {
@@ -682,10 +694,7 @@ export class EvolutionApiService {
             data: { tenantId },
           }).catch(() => {});
         }
-        dbInstances = await prisma.whatsappInstance.findMany({
-          where: { tenantId },
-          orderBy: [{ isDefault: 'desc' }, { createdAt: 'desc' }],
-        }).catch(() => []);
+        dbInstances = await this.safeFindManyInstances(tenantId);
       }
     }
 
@@ -1139,33 +1148,52 @@ export class EvolutionApiService {
 
       const messageType = params.messageType || (params.mediaUrl ? 'image' : 'text');
 
-      // Se for envio de mídia (imagem, vídeo ou áudio)
+      // Se for envio de mídia (imagem, vídeo, áudio ou documento)
       if (messageType !== 'text' && (params.mediaUrl || params.mediaBase64)) {
-        // Resolve payload de mídia (URL ou Base64)
+        // Resolve payload de mídia: Evolution API exige Base64 puro (SEM prefixo data:...;base64,) ou URL pública válida
         let mediaPayload = params.mediaBase64 || params.mediaUrl || '';
 
-        // Se o arquivo for local (/uploads/...), lemos do disco e convertemos para Data URI
-        // para garantir que a Evolution API receba o arquivo mesmo se estiver em Docker ou outra rede
+        // Se o arquivo for local (/uploads/...), lemos do disco e convertemos para Base64 puro
         if (params.mediaUrl && (params.mediaUrl.startsWith('/uploads/') || params.mediaUrl.startsWith('uploads/'))) {
           try {
             const localRelative = params.mediaUrl.replace(/^\//, '');
             const localPath = path.join(process.cwd(), 'public', localRelative);
             if (fs.existsSync(localPath)) {
               const fileBuf = fs.readFileSync(localPath);
-              const fallbackMime = messageType === 'audio' ? 'audio/mpeg' : messageType === 'video' ? 'video/mp4' : 'image/jpeg';
-              const mime = params.mediaMimeType || fallbackMime;
-              mediaPayload = `data:${mime};base64,${fileBuf.toString('base64')}`;
+              mediaPayload = fileBuf.toString('base64');
             }
           } catch (readErr) {
             console.error('[EvolutionApi] Erro ao ler arquivo de mídia local do disco:', readErr);
           }
         }
 
+        // Se a string contiver o prefixo data:...;base64,, extrai apenas o Base64 puro
+        if (mediaPayload && mediaPayload.includes(';base64,')) {
+          mediaPayload = mediaPayload.split(';base64,')[1] || mediaPayload;
+        }
+
+        // Determina o mediatype correto conforme especificação da Evolution API
+        let mediatype: 'image' | 'video' | 'audio' | 'document' = 'image';
+        if (messageType === 'video' || params.mediaMimeType?.startsWith('video/')) {
+          mediatype = 'video';
+        } else if (messageType === 'audio' || params.mediaMimeType?.startsWith('audio/')) {
+          mediatype = 'audio';
+        } else if (
+          messageType === 'document' ||
+          messageType === 'file' ||
+          params.mediaMimeType?.startsWith('application/') ||
+          params.mediaFileName?.match(/\.(pdf|docx?|xlsx?|pptx?|csv|zip|rar|txt)$/i)
+        ) {
+          mediatype = 'document';
+        } else {
+          mediatype = 'image';
+        }
+
         let response: Response;
         let responseData: any = {};
         let logContent = '';
 
-        if (messageType === 'audio') {
+        if (mediatype === 'audio') {
           // Envio de áudio / mensagem de voz
           logContent = `[🎙️ Áudio] ${params.mediaFileName || 'audio'}`;
           const audioUrl = `${this.apiUrl}/message/sendWhatsAppAudio/${encodeURIComponent(instance.instanceName)}`;
@@ -1199,7 +1227,7 @@ export class EvolutionApiService {
               body: JSON.stringify({
                 number: cleanPhone,
                 mediatype: 'audio',
-                mimetype: params.mediaMimeType || 'audio/mp3',
+                mimetype: params.mediaMimeType || 'audio/mp4',
                 media: mediaPayload,
                 fileName: params.mediaFileName || 'audio.mp3',
               }),
@@ -1207,11 +1235,22 @@ export class EvolutionApiService {
             responseData = await response.json().catch(() => ({}));
           }
         } else {
-          // Envio de Imagem ou Vídeo com legenda
-          const mediaKind = messageType === 'video' ? 'video' : 'image';
-          const defaultMime = messageType === 'video' ? 'video/mp4' : 'image/jpeg';
-          const defaultName = messageType === 'video' ? 'video.mp4' : 'imagem.jpg';
-          logContent = `[${messageType === 'video' ? '🎥 Vídeo' : '📷 Imagem'}] ${formattedCaption ? `Legenda: ${formattedCaption}` : params.mediaFileName || ''}`;
+          // Envio de Imagem, Vídeo ou Documento via sendMedia
+          const defaultMime =
+            mediatype === 'video'
+              ? 'video/mp4'
+              : mediatype === 'document'
+              ? 'application/pdf'
+              : 'image/jpeg';
+          const defaultName =
+            mediatype === 'video'
+              ? 'video.mp4'
+              : mediatype === 'document'
+              ? 'documento.pdf'
+              : 'imagem.jpg';
+
+          const icon = mediatype === 'video' ? '🎥 Vídeo' : mediatype === 'document' ? '📄 Documento' : '📷 Imagem';
+          logContent = `[${icon}] ${formattedCaption ? `Legenda: ${formattedCaption} ` : ''}(${params.mediaFileName || defaultName})`;
 
           const mediaUrl = `${this.apiUrl}/message/sendMedia/${encodeURIComponent(instance.instanceName)}`;
           response = await fetch(mediaUrl, {
@@ -1222,7 +1261,7 @@ export class EvolutionApiService {
             },
             body: JSON.stringify({
               number: cleanPhone,
-              mediatype: mediaKind,
+              mediatype,
               mimetype: params.mediaMimeType || defaultMime,
               caption: formattedCaption || undefined,
               media: mediaPayload,
@@ -1236,8 +1275,29 @@ export class EvolutionApiService {
           responseData = await response.json().catch(() => ({}));
         }
 
-        if (!response.ok) {
-          const errorMsg = responseData?.message || responseData?.error || `Falha no envio de mídia (HTTP ${response.status})`;
+        const isApiSuccess =
+          response.ok &&
+          (responseData?.key?.id ||
+            responseData?.status === 'PENDING' ||
+            responseData?.status === 'SENT' ||
+            responseData?.messageId ||
+            responseData?.message?.imageMessage ||
+            responseData?.message?.videoMessage ||
+            responseData?.message?.audioMessage ||
+            responseData?.message?.documentMessage ||
+            responseData?.message?.conversation ||
+            responseData?.message?.extendedTextMessage);
+
+        if (!response.ok || !isApiSuccess || responseData?.status === 400 || responseData?.status === 500) {
+          const errorMsg =
+            responseData?.response?.message?.[0] ||
+            (Array.isArray(responseData?.response?.message) ? responseData.response.message.join(', ') : null) ||
+            responseData?.message ||
+            responseData?.error ||
+            `Falha na confirmação de envio pela Evolution API (HTTP ${response.status})`;
+
+          console.error('[EvolutionApi] Falha confirmada no envio de mídia:', errorMsg);
+
           await prisma.messageLog.create({
             data: {
               tenantId: params.tenantId,

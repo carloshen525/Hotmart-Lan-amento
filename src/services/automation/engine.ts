@@ -26,6 +26,21 @@ export class AutomationEngine {
       return { skipped: true, reason: 'Contato cancelou inscrições (opt-out)' };
     }
 
+    // Regra: Não criar execuções duplicadas. Cada lead tem apenas uma execução por fluxo.
+    const existingEnrollment = await prisma.automationEnrollment.findFirst({
+      where: {
+        automationId,
+        contactId,
+      },
+    });
+
+    if (existingEnrollment) {
+      if (existingEnrollment.status === 'ACTIVE' && existingEnrollment.currentNodeId) {
+        await this.executeNode(existingEnrollment.id, existingEnrollment.currentNodeId, automation.tenantId);
+      }
+      return { enrollmentId: existingEnrollment.id, alreadyEnrolled: true };
+    }
+
     // Criar a inscrição
     const enrollment = await prisma.automationEnrollment.create({
       data: {
@@ -124,6 +139,33 @@ export class AutomationEngine {
       where: { id: enrollmentId },
       data: { currentNodeId: nodeId },
     });
+
+    // Regra de Idempotência: Se este nó de ação já foi executado com SUCESSO para este lead, nunca repete
+    if (node.data.type === 'action') {
+      const alreadySuccess = await prisma.automationStepLog.findFirst({
+        where: {
+          contactId: contact.id,
+          nodeId: node.id,
+          status: 'SUCCESS',
+          enrollment: { automationId: automation.id },
+        },
+      });
+
+      if (alreadySuccess) {
+        const nextEdges = edges.filter((e) => e.source === node.id);
+        if (nextEdges.length === 0) {
+          await prisma.automationEnrollment.update({
+            where: { id: enrollmentId },
+            data: { status: 'COMPLETED', completedAt: new Date() },
+          });
+        } else {
+          for (const nextEdge of nextEdges) {
+            await this.executeNode(enrollmentId, nextEdge.target, tenantId);
+          }
+        }
+        return;
+      }
+    }
 
     const nodeType = node.data.type;
     const subtype = node.data.subtype;
@@ -662,6 +704,46 @@ export class AutomationEngine {
     const seqNode = nodes.find((n) => n.id === sequenceNodeId);
     if (!seqNode) return;
 
+    // Regra: Não duplicar execuções. Cada lead possui um estado persistente único por fluxo.
+    const existingEnrollment = await prisma.automationEnrollment.findFirst({
+      where: {
+        automationId,
+        contactId,
+      },
+      orderBy: { enteredAt: 'desc' },
+    });
+
+    if (existingEnrollment) {
+      // Lead já possui inscrição nesta automação. NUNCA recriar e NUNCA reiniciar do início!
+      const subflow = (seqNode.data as any).subflow || {};
+      const subNodes: WorkflowNode[] = subflow.nodes || [];
+      const subEdges: WorkflowEdge[] = subflow.edges || [];
+
+      // Caso novas etapas tenham sido adicionadas ao fluxo:
+      // Se a inscrição estava concluída, verifica se a última etapa que o lead completou possui novas saídas
+      if (existingEnrollment.status === 'COMPLETED' && existingEnrollment.currentNodeId) {
+        const outgoingFromLast = subEdges.filter((e) => e.source === existingEnrollment.currentNodeId);
+        if (outgoingFromLast.length > 0) {
+          await prisma.automationEnrollment.update({
+            where: { id: existingEnrollment.id },
+            data: { status: 'ACTIVE', completedAt: null },
+          });
+          for (const edge of outgoingFromLast) {
+            await this.executeSubflowNode(
+              existingEnrollment.id,
+              edge.target,
+              subNodes,
+              subEdges,
+              tenantId,
+              contact,
+              automationId
+            );
+          }
+        }
+      }
+      return;
+    }
+
     // Cria a inscrição posicionada nesta sequência
     const enrollment = await prisma.automationEnrollment.create({
       data: {
@@ -751,6 +833,40 @@ export class AutomationEngine {
       autoId = enr?.automationId || '';
     }
 
+    // 1. Regra de Idempotência: Se este nó já foi executado com SUCESSO para este lead neste fluxo, NUNCA executa novamente.
+    const alreadySuccess = await prisma.automationStepLog.findFirst({
+      where: {
+        contactId: contact.id,
+        nodeId: node.id,
+        status: 'SUCCESS',
+        enrollment: autoId ? { automationId: autoId } : undefined,
+      },
+    });
+
+    if (alreadySuccess) {
+      // Já executou com sucesso! Pula a etapa e avança diretamente para os próximos nós conectados
+      const nextOutgoing = subEdges.filter((e) => e.source === node.id);
+      if (nextOutgoing.length === 0) {
+        await prisma.automationEnrollment.update({
+          where: { id: enrollmentId },
+          data: { status: 'COMPLETED', completedAt: new Date(), currentNodeId: node.id },
+        });
+      } else {
+        for (const edge of nextOutgoing) {
+          await this.executeSubflowNode(
+            enrollmentId,
+            edge.target,
+            subNodes,
+            subEdges,
+            tenantId,
+            contact,
+            autoId
+          );
+        }
+      }
+      return;
+    }
+
     // Atualiza o nó onde o lead se encontra agora
     await prisma.automationEnrollment.update({
       where: { id: enrollmentId },
@@ -769,6 +885,7 @@ export class AutomationEngine {
           const blocks = (cfg.blocks as any[]) || [];
           if (Array.isArray(blocks) && blocks.length > 0) {
             let lastRes: any = null;
+            let sendErrorMsg = '';
             for (let i = 0; i < blocks.length; i++) {
               const b = blocks[i];
               if (i > 0) {
@@ -781,7 +898,7 @@ export class AutomationEngine {
                 phone: contact.phone,
                 whatsappInstanceId: (cfg as any).whatsappInstanceId,
                 text: isMedia ? (b.caption || '') : (b.text || ''),
-                messageType: (['image', 'video', 'audio'].includes(b.type) ? b.type : (isMedia ? 'image' : 'text')) as any,
+                messageType: (['image', 'video', 'audio', 'document', 'file'].includes(b.type) ? b.type : (isMedia ? 'image' : 'text')) as any,
                 mediaUrl: isMedia ? b.mediaUrl : undefined,
                 mediaBase64: isMedia ? b.mediaBase64 : undefined,
                 mediaMimeType: isMedia ? b.mediaMimeType : undefined,
@@ -794,20 +911,33 @@ export class AutomationEngine {
                   telefone: contact.phone || '',
                 },
               });
+
+              if (!lastRes || lastRes.success === false) {
+                sendErrorMsg = lastRes?.error || 'Falha no envio via WhatsApp';
+                break;
+              }
             }
-            stepDetails = {
-              phone: contact.phone,
-              blocksCount: blocks.length,
-              status: lastRes?.status || 'SENT',
-            };
+
+            if (sendErrorMsg) {
+              stepStatus = 'FAILED';
+              stepDetails = { error: sendErrorMsg, phone: contact.phone };
+              shouldHalt = true;
+            } else {
+              stepStatus = 'SUCCESS';
+              stepDetails = {
+                phone: contact.phone,
+                blocksCount: blocks.length,
+                status: lastRes?.status || 'SENT',
+              };
+            }
           } else {
-            await messageManager.sendWhatsApp({
+            const singleRes = await messageManager.sendWhatsApp({
               tenantId,
               contactId: contact.id,
               phone: contact.phone,
               whatsappInstanceId: (cfg as any).whatsappInstanceId,
               text: cfg.message || cfg.text || `Olá ${contact.name}!`,
-              messageType: cfg.messageType || (cfg.mediaUrl ? 'image' : 'text'),
+              messageType: (['image', 'video', 'audio', 'document', 'file'].includes(cfg.messageType) ? cfg.messageType : (cfg.mediaUrl ? 'image' : 'text')) as any,
               mediaUrl: cfg.mediaUrl,
               mediaBase64: cfg.mediaBase64,
               mediaMimeType: cfg.mediaMimeType,
@@ -820,11 +950,20 @@ export class AutomationEngine {
                 telefone: contact.phone || '',
               },
             });
-            stepDetails = { phone: contact.phone, messageType: cfg.messageType || 'text' };
+
+            if (!singleRes || singleRes.success === false) {
+              stepStatus = 'FAILED';
+              stepDetails = { error: singleRes?.error || 'Falha no envio via WhatsApp', phone: contact.phone };
+              shouldHalt = true;
+            } else {
+              stepStatus = 'SUCCESS';
+              stepDetails = { phone: contact.phone, messageType: cfg.messageType || 'text' };
+            }
           }
         } else {
           stepStatus = 'FAILED';
           stepDetails = { error: 'Contato sem telefone cadastrado' };
+          shouldHalt = true;
         }
       } else if (node.type === 'email') {
         if (contact.email) {
@@ -837,7 +976,7 @@ export class AutomationEngine {
             cfg.message ||
             '<p>Olá!</p>';
 
-          await messageManager.sendEmail({
+          const emailRes = await messageManager.sendEmail({
             tenantId,
             contactId: contact.id,
             email: contact.email,
@@ -850,68 +989,99 @@ export class AutomationEngine {
               telefone: contact.phone || '',
             },
           });
-          stepDetails = { email: contact.email, subject: cfg.subject };
+
+          if (!emailRes || emailRes.success === false) {
+            stepStatus = 'FAILED';
+            stepDetails = { error: emailRes?.error || 'Falha no envio de e-mail', email: contact.email };
+            shouldHalt = true;
+          } else {
+            stepDetails = { email: contact.email, subject: cfg.subject };
+          }
         } else {
           stepStatus = 'FAILED';
           stepDetails = { error: 'Contato sem e-mail cadastrado' };
+          shouldHalt = true;
         }
       } else if (node.type === 'timer' || node.type === 'delay') {
-        const waitMinutes = Number(cfg.value ?? cfg.minutes ?? (cfg.unit === 'hours' ? (cfg.value || 1) * 60 : 1));
-        const executeAt = new Date(Date.now() + Math.max(1, waitMinutes) * 60 * 1000);
-
-        const outgoing = subEdges.filter((e) => e.source === node.id);
-        for (const edge of outgoing) {
-          await prisma.scheduledJob.create({
-            data: {
-              tenantId,
-              enrollmentId,
-              contactId: contact.id,
-              automationId: autoId,
-              targetNodeId: edge.target,
-              executeAt,
-              cancelCondition: cfg.cancelCondition || 'NONE',
-            },
-          });
-        }
-
-        await prisma.automationEnrollment.update({
-          where: { id: enrollmentId },
-          data: { status: 'WAITING', currentNodeId: node.id },
+        const existingJob = await prisma.scheduledJob.findFirst({
+          where: {
+            enrollmentId,
+            status: 'PENDING',
+          },
         });
 
-        stepDetails = { scheduledUntil: executeAt, minutes: waitMinutes };
+        if (!existingJob) {
+          const waitMinutes = Number(cfg.value ?? cfg.minutes ?? (cfg.unit === 'hours' ? (cfg.value || 1) * 60 : 1));
+          const executeAt = new Date(Date.now() + Math.max(1, waitMinutes) * 60 * 1000);
+
+          const outgoing = subEdges.filter((e) => e.source === node.id);
+          for (const edge of outgoing) {
+            await prisma.scheduledJob.create({
+              data: {
+                tenantId,
+                enrollmentId,
+                contactId: contact.id,
+                automationId: autoId,
+                targetNodeId: edge.target,
+                executeAt,
+                cancelCondition: cfg.cancelCondition || 'NONE',
+              },
+            });
+          }
+
+          await prisma.automationEnrollment.update({
+            where: { id: enrollmentId },
+            data: { status: 'WAITING', currentNodeId: node.id },
+          });
+
+          stepDetails = { scheduledUntil: executeAt, minutes: waitMinutes };
+        } else {
+          stepDetails = { scheduledUntil: existingJob.executeAt, alreadyScheduled: true };
+        }
         shouldHalt = true;
       } else if (node.type === 'aquecimento' || node.type === 'warmup') {
-        const rateLimit = Number(cfg.rateLimitPerMinute || cfg.releasesPerMinute || 1);
-        const staggeredSeconds = Math.max(1, Math.floor(60 / rateLimit));
-        const executeAt = new Date(Date.now() + staggeredSeconds * 1000);
-
-        const outgoing = subEdges.filter((e) => e.source === node.id);
-        for (const edge of outgoing) {
-          await prisma.scheduledJob.create({
-            data: {
-              tenantId,
-              enrollmentId,
-              contactId: contact.id,
-              automationId: autoId,
-              targetNodeId: edge.target,
-              executeAt,
-              cancelCondition: 'NONE',
-            },
-          });
-        }
-
-        await prisma.automationEnrollment.update({
-          where: { id: enrollmentId },
-          data: { status: 'WAITING', currentNodeId: node.id },
+        const existingJob = await prisma.scheduledJob.findFirst({
+          where: {
+            enrollmentId,
+            status: 'PENDING',
+          },
         });
 
-        stepDetails = { rateLimitPerMinute: rateLimit, staggeredSeconds };
+        if (!existingJob) {
+          const rateLimit = Number(cfg.rateLimitPerMinute || cfg.releasesPerMinute || 1);
+          const staggeredSeconds = Math.max(1, Math.floor(60 / rateLimit));
+          const executeAt = new Date(Date.now() + staggeredSeconds * 1000);
+
+          const outgoing = subEdges.filter((e) => e.source === node.id);
+          for (const edge of outgoing) {
+            await prisma.scheduledJob.create({
+              data: {
+                tenantId,
+                enrollmentId,
+                contactId: contact.id,
+                automationId: autoId,
+                targetNodeId: edge.target,
+                executeAt,
+                cancelCondition: 'NONE',
+              },
+            });
+          }
+
+          await prisma.automationEnrollment.update({
+            where: { id: enrollmentId },
+            data: { status: 'WAITING', currentNodeId: node.id },
+          });
+
+          stepDetails = { rateLimitPerMinute: rateLimit, staggeredSeconds };
+        } else {
+          stepDetails = { scheduledUntil: existingJob.executeAt, alreadyScheduled: true };
+        }
         shouldHalt = true;
       }
     } catch (err: any) {
       stepStatus = 'FAILED';
       stepDetails = { error: err.message };
+      shouldHalt = true;
     }
 
     // Registra o log da etapa do sub-fluxo
@@ -927,7 +1097,15 @@ export class AutomationEngine {
       },
     });
 
-    if (shouldHalt) return;
+    if (shouldHalt || stepStatus === 'FAILED') {
+      if (stepStatus === 'FAILED') {
+        await prisma.automationEnrollment.update({
+          where: { id: enrollmentId },
+          data: { status: 'FAILED' },
+        });
+      }
+      return;
+    }
 
     // Próximos nós conectados internamente
     const nextOutgoing = subEdges.filter((e) => e.source === node.id);
@@ -1024,20 +1202,49 @@ export class AutomationEngine {
         }
 
         for (const seqNode of connectedSequences) {
+          // Verifica se já existe QUALQUER inscrição deste contato nesta automação (independente de status)
           const existingEnrollment = await prisma.automationEnrollment.findFirst({
             where: {
               automationId,
               contactId: contact.id,
-              status: { in: ['ACTIVE', 'WAITING'] },
             },
+            orderBy: { enteredAt: 'desc' },
           });
 
           if (!existingEnrollment) {
+            // Novo lead elegível que entrou na TAG: inscreve normalmente na primeira etapa
             await this.enrollInSequence(automationId, seqNode.id, contact.id, tenantId, {
               source: 'SYNC_ON_ACTIVATION',
               tags: tagList.join(','),
             });
             totalEnrolled++;
+          } else {
+            // Lead já cadastrado: NUNCA reiniciar, NUNCA reenfileirar, NUNCA reenviar mensagens
+            // Se o lead concluiu etapas anteriores e novas etapas foram conectadas, avança para as novas
+            const subflow = (seqNode.data as any).subflow || {};
+            const subNodes: WorkflowNode[] = subflow.nodes || [];
+            const subEdges: WorkflowEdge[] = subflow.edges || [];
+
+            if (existingEnrollment.status === 'COMPLETED' && existingEnrollment.currentNodeId) {
+              const outgoingFromCurrent = subEdges.filter((e) => e.source === existingEnrollment.currentNodeId);
+              if (outgoingFromCurrent.length > 0) {
+                await prisma.automationEnrollment.update({
+                  where: { id: existingEnrollment.id },
+                  data: { status: 'ACTIVE', completedAt: null },
+                });
+                for (const edge of outgoingFromCurrent) {
+                  await this.executeSubflowNode(
+                    existingEnrollment.id,
+                    edge.target,
+                    subNodes,
+                    subEdges,
+                    tenantId,
+                    contact,
+                    automationId
+                  );
+                }
+              }
+            }
           }
         }
       }

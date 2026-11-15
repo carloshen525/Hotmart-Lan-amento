@@ -67,10 +67,83 @@ export async function GET(request: Request, { params }: { params: { id: string }
       }),
     ]);
 
+    // 1. Deduplica enrollments por contactId único (garante conjunto único de leads)
+    const enrollmentsByContact = new Map<string, (typeof allEnrollments)[0]>();
+    for (const enr of allEnrollments) {
+      const existing = enrollmentsByContact.get(enr.contactId);
+      if (!existing) {
+        enrollmentsByContact.set(enr.contactId, enr);
+      } else {
+        if (existing.status !== 'ACTIVE' && (enr.status === 'ACTIVE' || enr.status === 'WAITING')) {
+          enrollmentsByContact.set(enr.contactId, enr);
+        }
+      }
+    }
+    const distinctEnrollments = Array.from(enrollmentsByContact.values());
+    const totalEnrollments = distinctEnrollments.length;
+
+    // 2. Mapeamento por nós com contatos únicos (Set<string>)
+    const nodeSuccessContacts = new Map<string, Set<string>>();
+    const nodeWaitingContacts = new Map<string, Set<string>>();
+    const nodeFailedContacts = new Map<string, Set<string>>();
+
+    for (const log of allStepLogs) {
+      if (!log.nodeId || !log.contactId) continue;
+      if (log.status === 'SUCCESS') {
+        if (!nodeSuccessContacts.has(log.nodeId)) nodeSuccessContacts.set(log.nodeId, new Set());
+        nodeSuccessContacts.get(log.nodeId)!.add(log.contactId);
+      } else if (log.status === 'FAILED') {
+        if (!nodeFailedContacts.has(log.nodeId)) nodeFailedContacts.set(log.nodeId, new Set());
+        nodeFailedContacts.get(log.nodeId)!.add(log.contactId);
+      }
+    }
+
+    for (const job of pendingJobs) {
+      if (!job.targetNodeId || !job.contactId) continue;
+      if (!nodeWaitingContacts.has(job.targetNodeId)) nodeWaitingContacts.set(job.targetNodeId, new Set());
+      nodeWaitingContacts.get(job.targetNodeId)!.add(job.contactId);
+    }
+
+    for (const enr of distinctEnrollments) {
+      if (!enr.currentNodeId) continue;
+      if (enr.status === 'WAITING') {
+        if (!nodeWaitingContacts.has(enr.currentNodeId)) nodeWaitingContacts.set(enr.currentNodeId, new Set());
+        nodeWaitingContacts.get(enr.currentNodeId)!.add(enr.contactId);
+      } else if (enr.status === 'FAILED') {
+        if (!nodeFailedContacts.has(enr.currentNodeId)) nodeFailedContacts.set(enr.currentNodeId, new Set());
+        nodeFailedContacts.get(enr.currentNodeId)!.add(enr.contactId);
+      }
+    }
+
     const nodeStats: Record<
       string,
       { leadsCount: number; waitingCount: number; successCount: number; failedCount: number }
     > = {};
+
+    const allNodeIds = new Set<string>([
+      ...Array.from(nodeSuccessContacts.keys()),
+      ...Array.from(nodeWaitingContacts.keys()),
+      ...Array.from(nodeFailedContacts.keys()),
+    ]);
+
+    for (const nodeId of Array.from(allNodeIds)) {
+      const successSet = nodeSuccessContacts.get(nodeId) || new Set();
+      const waitingSet = nodeWaitingContacts.get(nodeId) || new Set();
+      const failedSet = nodeFailedContacts.get(nodeId) || new Set();
+
+      const uniqueLeads = new Set([
+        ...Array.from(successSet),
+        ...Array.from(waitingSet),
+        ...Array.from(failedSet),
+      ]);
+
+      nodeStats[nodeId] = {
+        leadsCount: uniqueLeads.size,
+        waitingCount: waitingSet.size,
+        successCount: successSet.size,
+        failedCount: failedSet.size,
+      };
+    }
 
     const getNodeStat = (nodeId: string) => {
       if (!nodeStats[nodeId]) {
@@ -79,53 +152,16 @@ export async function GET(request: Request, { params }: { params: { id: string }
       return nodeStats[nodeId];
     };
 
-    for (const log of allStepLogs) {
-      if (!log.nodeId) continue;
-      const stat = getNodeStat(log.nodeId);
-      if (log.status === 'SUCCESS') {
-        stat.successCount += 1;
-      } else if (log.status === 'FAILED') {
-        stat.failedCount += 1;
-      }
-    }
-
-    for (const job of pendingJobs) {
-      if (!job.targetNodeId) continue;
-      const stat = getNodeStat(job.targetNodeId);
-      stat.waitingCount += 1;
-    }
-
-    for (const enr of allEnrollments) {
-      if (enr.currentNodeId) {
-        const stat = getNodeStat(enr.currentNodeId);
-        if (enr.status === 'WAITING') {
-          if (stat.waitingCount === 0) {
-            stat.waitingCount += 1;
-          }
-        } else if (enr.status === 'FAILED' || enr.status === 'CANCELLED') {
-          if (stat.failedCount === 0) {
-            stat.failedCount += 1;
-          }
-        }
-      }
-    }
-
-    const totalEnrollments = allEnrollments.length;
-    const activeInSequence = allEnrollments.filter(
-      (e) => e.status === 'ACTIVE' || e.status === 'WAITING'
-    ).length;
-    const exitedFromSequence = allEnrollments.filter(
-      (e) => e.status === 'COMPLETED' || e.status === 'CANCELLED' || e.status === 'FAILED'
-    ).length;
-
     const startStat = getNodeStat('seq_start');
     startStat.successCount = Math.max(startStat.successCount, totalEnrollments);
     startStat.leadsCount = totalEnrollments;
 
-    for (const key of Object.keys(nodeStats)) {
-      const item = nodeStats[key];
-      item.leadsCount = Math.max(item.leadsCount, item.waitingCount + item.successCount + item.failedCount);
-    }
+    const activeInSequence = distinctEnrollments.filter(
+      (e) => e.status === 'ACTIVE' || e.status === 'WAITING'
+    ).length;
+    const exitedFromSequence = distinctEnrollments.filter(
+      (e) => e.status === 'COMPLETED' || e.status === 'CANCELLED' || e.status === 'FAILED'
+    ).length;
 
     let parsedNodes: any[] = [];
     let parsedEdges: any[] = [];
@@ -138,9 +174,9 @@ export async function GET(request: Request, { params }: { params: { id: string }
       if (n.type === 'sequence_lead') {
         const seqStat = getNodeStat(n.id);
         seqStat.leadsCount = totalEnrollments;
-        seqStat.waitingCount = allEnrollments.filter((e) => e.status === 'WAITING').length;
-        seqStat.successCount = allEnrollments.filter((e) => e.status === 'COMPLETED').length;
-        seqStat.failedCount = allEnrollments.filter(
+        seqStat.waitingCount = distinctEnrollments.filter((e) => e.status === 'WAITING').length;
+        seqStat.successCount = distinctEnrollments.filter((e) => e.status === 'COMPLETED').length;
+        seqStat.failedCount = distinctEnrollments.filter(
           (e) => e.status === 'FAILED' || e.status === 'CANCELLED'
         ).length;
       } else if (n.type === 'tag') {
@@ -148,13 +184,18 @@ export async function GET(request: Request, { params }: { params: { id: string }
         const cfg = n.data?.config || {};
         const tags = cfg.entryTags || cfg.tagNames || (cfg.tagName ? [cfg.tagName] : []);
         if (tags.length > 0) {
-          const count = await prisma.contactTag.count({
+          const count = await prisma.contact.count({
             where: {
-              contact: { tenantId },
-              tag: { name: { in: tags } },
+              tenantId,
+              status: { not: 'UNSUBSCRIBED' },
+              tags: {
+                some: {
+                  tag: { name: { in: tags } },
+                },
+              },
             },
           });
-          tagStat.leadsCount = Math.max(count, totalEnrollments);
+          tagStat.leadsCount = count;
         } else {
           tagStat.leadsCount = totalEnrollments;
         }

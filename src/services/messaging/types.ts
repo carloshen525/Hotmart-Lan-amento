@@ -6,7 +6,7 @@ export interface SendWhatsAppParams {
   senderPhone?: string;
   templateName?: string;
   text?: string;
-  messageType?: 'text' | 'image' | 'video' | 'audio';
+  messageType?: 'text' | 'image' | 'video' | 'audio' | 'document' | 'file';
   mediaUrl?: string;
   mediaBase64?: string;
   mediaMimeType?: string;
