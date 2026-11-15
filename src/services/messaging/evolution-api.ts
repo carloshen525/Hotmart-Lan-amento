@@ -701,7 +701,9 @@ export class EvolutionApiService {
 
     // 4. Se a Evolution API tiver instâncias ABERTAS que ainda não estão no banco deste tenant,
     // insere no banco e adiciona na lista automaticamente!
-    for (const [nameLower, evo] of evoMap.entries()) {
+    const evoEntries = Array.from(evoMap.entries());
+    for (let i = 0; i < evoEntries.length; i++) {
+      const [nameLower, evo] = evoEntries[i];
       const evoState = String(
         evo.connectionStatus ||
         evo.state ||
