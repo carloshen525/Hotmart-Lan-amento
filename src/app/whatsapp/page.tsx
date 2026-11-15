@@ -347,11 +347,11 @@ export default function WhatsAppPage() {
               Multi-Linhas
             </span>
             <span className="px-2.5 py-0.5 rounded-full bg-indigo-50 text-indigo-700 border border-indigo-200 text-[11px] font-semibold">
-              Válido para todos os Experts
+              Isolamento Multi-Tenant
             </span>
           </div>
           <p className="text-sm text-slate-500 mt-1">
-            Cadastre múltiplos números de WhatsApp. Todos os números ficam disponíveis globalmente para qualquer expert e podem ser selecionados dentro de cada fluxo de automação.
+            Cadastre múltiplos números de WhatsApp exclusivos para este Expert. Cada cliente pode conectar quantas linhas desejar, com isolamento completo e seleção por fluxo.
           </p>
         </div>
 
@@ -688,10 +688,10 @@ export default function WhatsAppPage() {
         <ShieldCheck className="w-5 h-5 text-indigo-600 shrink-0 mt-0.5" />
         <div className="space-y-1">
           <span className="font-bold text-slate-900 block">
-            Ambiente Multi-Expert com Números Compartilhados
+            Ambiente Multi-Linhas do Expert (Isolamento Multi-Tenant)
           </span>
           <p className="text-slate-600 text-[11px] leading-relaxed">
-            Ao conectar novos números de WhatsApp, todos eles ficam automaticamente disponíveis para serem utilizados por qualquer Expert da plataforma.
+            Ao conectar novos números de WhatsApp, todos eles ficam vinculados exclusivamente a este Expert/Tenant com isolamento total de dados e mensagens.
             Ao criar ou editar um fluxo de automação, você pode escolher exatamente qual número fará o disparo de cada mensagem.
           </p>
         </div>

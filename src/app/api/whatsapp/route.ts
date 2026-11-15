@@ -4,12 +4,14 @@ import { messageManager } from '@/services/messaging';
 
 /**
  * GET /api/whatsapp
- * Retorna o status de todas as instâncias do sistema ou de uma instância específica (?instanceId=...)
- * Compartilhado entre todos os experts
+ * Retorna o status de todas as instâncias do WhatsApp pertencentes ao Tenant autenticado
  */
 export async function GET(request: Request) {
   try {
     const tenantId = await getActiveTenantId();
+    if (!tenantId) {
+      return NextResponse.json({ error: 'Tenant não autenticado' }, { status: 401 });
+    }
     const { searchParams } = new URL(request.url);
     const instanceId = searchParams.get('instanceId') || undefined;
 

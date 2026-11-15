@@ -23,39 +23,36 @@ export class EvolutionApiService {
   }
 
   /**
-   * Obtém todas as instâncias do WhatsApp cadastradas no sistema
-   * Válidas e compartilhadas entre todos os Experts
+   * Obtém todas as instâncias do WhatsApp cadastradas para o tenant
    */
-  async listAllInstances() {
+  async listAllInstances(tenantId?: string) {
     return prisma.whatsappInstance.findMany({
+      where: tenantId ? { tenantId } : undefined,
       orderBy: [{ isDefault: 'desc' }, { createdAt: 'desc' }],
     });
   }
 
   /**
-   * Obtém uma instância pelo ID ou instanceName
+   * Obtém uma instância pelo ID ou instanceName (filtrado por tenantId se fornecido)
    */
-  async getInstance(idOrName: string) {
+  async getInstance(idOrName: string, tenantId?: string) {
     return prisma.whatsappInstance.findFirst({
       where: {
-        OR: [{ id: idOrName }, { instanceName: idOrName }],
+        AND: [
+          { OR: [{ id: idOrName }, { instanceName: idOrName }] },
+          ...(tenantId ? [{ tenantId }] : []),
+        ],
       },
     });
   }
 
   /**
-   * Obtém a instância do WhatsApp vinculada a este Tenant/Expert no banco ou fallback para a instância padrão
+   * Obtém a instância do WhatsApp vinculada a este Tenant/Expert
    */
   async getTenantInstance(tenantId?: string) {
-    if (tenantId) {
-      const tenantInst = await prisma.whatsappInstance.findFirst({
-        where: { tenantId },
-        orderBy: [{ isDefault: 'desc' }, { createdAt: 'desc' }],
-      });
-      if (tenantInst) return tenantInst;
-    }
-    // Fallback: qualquer instância do sistema (prioriza default ou mais recente)
+    if (!tenantId) return null;
     return prisma.whatsappInstance.findFirst({
+      where: { tenantId },
       orderBy: [{ isDefault: 'desc' }, { createdAt: 'desc' }],
     });
   }
@@ -217,10 +214,20 @@ export class EvolutionApiService {
       isNew = !!paramsOrTenantId.isNew;
     }
 
+    if (!tenantId) {
+      return {
+        connected: false,
+        status: 'DISCONNECTED',
+        error: 'tenantId é obrigatório para conectar ou manipular instâncias do WhatsApp.',
+      };
+    }
+
     let instance: any = null;
 
     if (instanceId) {
-      instance = await prisma.whatsappInstance.findUnique({ where: { id: instanceId } });
+      instance = await prisma.whatsappInstance.findFirst({
+        where: { id: instanceId, tenantId },
+      });
     } else if (!isNew) {
       instance = await this.getTenantInstance(tenantId);
     }
@@ -238,9 +245,11 @@ export class EvolutionApiService {
       instance = null;
     }
 
-    // 1. Se for uma nova instância (ou se nenhuma existir no sistema)
+    // 1. Se for uma nova instância (ou se nenhuma existir para este tenant)
     if (!instance || isNew) {
-      const count = await prisma.whatsappInstance.count();
+      const count = await prisma.whatsappInstance.count({
+        where: { tenantId },
+      });
       const uniqueSuffix = crypto.randomBytes(4).toString('hex');
       const instanceName = `inst_wa_${uniqueSuffix}`;
       const instanceToken = crypto.randomUUID();
@@ -275,7 +284,7 @@ export class EvolutionApiService {
         try {
           instance = await prisma.whatsappInstance.create({
             data: {
-              tenantId: tenantId || null,
+              tenantId,
               name: friendlyName,
               instanceName,
               instanceToken,
@@ -285,28 +294,14 @@ export class EvolutionApiService {
             },
           });
         } catch (createErr: any) {
-          // Fallback resiliente caso o ambiente em produção tenha Prisma Client sem os novos campos
-          console.warn('Prisma create com campos completos falhou, tentando modo de compatibilidade:', createErr?.message);
-          try {
-            instance = await prisma.whatsappInstance.create({
-              data: {
-                tenantId: tenantId || null,
-                instanceName,
-                instanceToken,
-                status: 'CONNECTING',
-                qrcode: qrcodeBase64,
-              },
-            });
-          } catch (fallbackErr: any) {
-            console.error('Prisma fallback create falhou também:', fallbackErr?.message);
-            instance = {
-              id: instanceName,
-              instanceName,
-              name: friendlyName,
-              status: 'CONNECTING',
-              qrcode: qrcodeBase64,
-            };
-          }
+          console.warn('Prisma create falhou, tentando fallback resiliente:', createErr?.message);
+          instance = {
+            id: instanceName,
+            instanceName,
+            name: friendlyName,
+            status: 'CONNECTING',
+            qrcode: qrcodeBase64,
+          };
         }
 
         // Se /instance/create ainda não retornou o base64 de imediato, busca via getFreshQrCode!
@@ -453,12 +448,21 @@ export class EvolutionApiService {
   }
 
   /**
-   * Consulta o status de uma instância ou de todas as instâncias do sistema
+   * Consulta o status de uma instância ou de todas as instâncias do tenant autenticado
    */
   async getStatus(tenantId?: string, instanceId?: string) {
+    if (!tenantId) {
+      return {
+        hasInstance: false,
+        connected: false,
+        status: 'DISCONNECTED',
+        instances: [],
+      };
+    }
+
     let evoData: any[] = [];
 
-    // 1. Sincroniza instâncias ativas da Evolution API para o banco automaticamente
+    // 1. Sincroniza instâncias ativas da Evolution API pertencentes a este tenant
     if (this.isConfigured()) {
       try {
         const evoRes = await fetch(`${this.apiUrl}/instance/fetchInstances`, {
@@ -475,6 +479,7 @@ export class EvolutionApiService {
 
             const existing = await prisma.whatsappInstance.findFirst({
               where: {
+                tenantId,
                 OR: [
                   { instanceName: evo.name },
                   ...(phone ? [{ phone }] : []),
@@ -494,39 +499,6 @@ export class EvolutionApiService {
                   qrcode: null,
                 },
               }).catch(() => {});
-            } else {
-              const friendlyName = profileName + (phone ? ` (${phone})` : '');
-              const totalCount = await prisma.whatsappInstance.count().catch(() => 0);
-              try {
-                await prisma.whatsappInstance.create({
-                  data: {
-                    tenantId: null,
-                    name: friendlyName,
-                    instanceName: evo.name,
-                    instanceToken: evo.token || crypto.randomUUID(),
-                    status: 'CONNECTED',
-                    phone,
-                    profileName,
-                    isDefault: totalCount === 0,
-                    lastConnectedAt: new Date(),
-                    qrcode: null,
-                  },
-                });
-              } catch {
-                // Fallback de retrocompatibilidade para esquemas antigos
-                await prisma.whatsappInstance.create({
-                  data: {
-                    tenantId: null,
-                    instanceName: evo.name,
-                    instanceToken: evo.token || crypto.randomUUID(),
-                    status: 'CONNECTED',
-                    phone,
-                    profileName,
-                    lastConnectedAt: new Date(),
-                    qrcode: null,
-                  },
-                }).catch(() => {});
-              }
             }
           }
         }
@@ -537,52 +509,25 @@ export class EvolutionApiService {
 
     // Se foi especificada uma instância individual
     if (instanceId) {
-      const instance = await prisma.whatsappInstance.findUnique({ where: { id: instanceId } });
+      const instance = await prisma.whatsappInstance.findFirst({
+        where: { id: instanceId, tenantId },
+      });
       if (!instance) {
         return { hasInstance: false, connected: false, status: 'DISCONNECTED' };
       }
       return this.syncSingleInstance(instance);
     }
 
-    // Busca todas as instâncias cadastradas
+    // Busca todas as instâncias cadastradas deste tenant
     const instances = await prisma.whatsappInstance.findMany({
+      where: { tenantId },
       orderBy: [{ isDefault: 'desc' }, { createdAt: 'desc' }],
     });
 
     // Sincroniza cada instância
-    let syncedInstances = await Promise.all(
+    const syncedInstances = await Promise.all(
       instances.map((inst) => this.syncSingleInstance(inst))
     );
-
-    // 2. Garantia absoluta: se a Evolution API possui instâncias abertas (conectadas),
-    // mescla diretamente na lista para nunca sumir da tela mesmo se a gravação no banco falhar
-    if (Array.isArray(evoData)) {
-      const openEvo = evoData.filter((i: any) => i.connectionStatus === 'open');
-      for (const evo of openEvo) {
-        const rawPhone = evo.ownerJid ? evo.ownerJid.replace(/@.*$/, '') : '';
-        const phone = rawPhone ? (rawPhone.startsWith('+') ? rawPhone : '+' + rawPhone) : null;
-        const profileName = evo.profileName || 'WhatsApp Conectado';
-
-        const alreadyInList = syncedInstances.some(
-          (s) => s.instanceName === evo.name || (phone && s.phone === phone)
-        );
-
-        if (!alreadyInList) {
-          syncedInstances.push({
-            id: evo.id || evo.name,
-            name: profileName + (phone ? ` (${phone})` : ''),
-            instanceName: evo.name,
-            connected: true,
-            status: 'CONNECTED',
-            phone,
-            profileName,
-            isDefault: syncedInstances.length === 0,
-            lastConnectedAt: evo.updatedAt ? new Date(evo.updatedAt) : new Date(),
-            qrcode: null,
-          });
-        }
-      }
-    }
 
     if (syncedInstances.length === 0) {
       return {
@@ -710,20 +655,18 @@ export class EvolutionApiService {
   }
 
   /**
-   * Desconecta uma instância específica ou por tenant/primeira
+   * Desconecta uma instância específica ou padrão do tenant
    */
-  async disconnect(idOrTenantId?: string): Promise<boolean> {
-    let instance: any = null;
-    if (idOrTenantId) {
-      instance = await prisma.whatsappInstance.findFirst({
-        where: {
-          OR: [{ id: idOrTenantId }, { instanceName: idOrTenantId }, { tenantId: idOrTenantId }],
-        },
-      });
-    }
-    if (!instance) {
-      instance = await prisma.whatsappInstance.findFirst({ where: { status: 'CONNECTED' } });
-    }
+  async disconnect(targetId: string, tenantId?: string): Promise<boolean> {
+    const instance = await prisma.whatsappInstance.findFirst({
+      where: {
+        AND: [
+          { OR: [{ id: targetId }, { instanceName: targetId }] },
+          ...(tenantId ? [{ tenantId }] : []),
+        ],
+      },
+    });
+
     if (!instance) return true;
 
     try {
@@ -747,22 +690,29 @@ export class EvolutionApiService {
   /**
    * Reinicia uma instância do WhatsApp e gera novo QR Code limpo
    */
-  async reconnect(idOrTenantId?: string) {
+  async reconnect(targetId?: string, tenantId?: string) {
     let instance: any = null;
-    if (idOrTenantId) {
+    if (targetId) {
       instance = await prisma.whatsappInstance.findFirst({
         where: {
-          OR: [{ id: idOrTenantId }, { instanceName: idOrTenantId }, { tenantId: idOrTenantId }],
+          AND: [
+            { OR: [{ id: targetId }, { instanceName: targetId }] },
+            ...(tenantId ? [{ tenantId }] : []),
+          ],
         },
       });
     }
-    if (!instance) {
+    if (!instance && tenantId) {
       instance = await prisma.whatsappInstance.findFirst({
+        where: { tenantId },
         orderBy: [{ isDefault: 'desc' }, { createdAt: 'desc' }],
       });
     }
     if (!instance) {
-      return this.getOrCreateConnection({ isNew: true });
+      if (tenantId) {
+        return this.getOrCreateConnection({ tenantId, isNew: true });
+      }
+      return { connected: false, status: 'DISCONNECTED', error: 'Instância não encontrada' };
     }
 
     try {
@@ -773,19 +723,27 @@ export class EvolutionApiService {
     } catch {}
 
     await new Promise((r) => setTimeout(r, 1500));
-    return this.getOrCreateConnection({ instanceId: instance.id });
+    return this.getOrCreateConnection({ tenantId: instance.tenantId, instanceId: instance.id });
   }
 
   /**
-   * Atualiza apelido/nome amigável ou define como número padrão
+   * Atualiza apelido/nome amigável ou define como número padrão (com isolamento por tenant)
    */
-  async updateInstance(instanceId: string, data: { name?: string; isDefault?: boolean }) {
+  async updateInstance(instanceId: string, tenantId: string, data: { name?: string; isDefault?: boolean }) {
+    const instance = await prisma.whatsappInstance.findFirst({
+      where: { id: instanceId, tenantId },
+    });
+    if (!instance) {
+      throw new Error('Instância do WhatsApp não encontrada para este tenant');
+    }
+
     if (data.isDefault) {
       await prisma.whatsappInstance.updateMany({
-        where: { id: { not: instanceId } },
+        where: { tenantId, id: { not: instanceId } },
         data: { isDefault: false },
       });
     }
+
     return prisma.whatsappInstance.update({
       where: { id: instanceId },
       data: {
@@ -796,10 +754,12 @@ export class EvolutionApiService {
   }
 
   /**
-   * Remove permanentemente uma instância da Evolution API e do banco
+   * Remove permanentemente uma instância da Evolution API e do banco (com isolamento por tenant)
    */
-  async deleteInstance(instanceId: string) {
-    const instance = await prisma.whatsappInstance.findUnique({ where: { id: instanceId } });
+  async deleteInstance(instanceId: string, tenantId: string) {
+    const instance = await prisma.whatsappInstance.findFirst({
+      where: { id: instanceId, tenantId },
+    });
     if (!instance) return false;
 
     try {
@@ -815,7 +775,7 @@ export class EvolutionApiService {
 
   /**
    * Disparo seguro de mensagens nas automações utilizando a instância selecionada
-   * Suporta seleção de número específico, fallback global e tipos Texto, Imagem, Vídeo e Áudio
+   * Suporta seleção de número específico e garante isolamento por tenant
    */
   async send(params: SendWhatsAppParams): Promise<SendResult> {
     if (!this.isConfigured()) {
@@ -830,38 +790,38 @@ export class EvolutionApiService {
 
     let instance: any = null;
 
-    // 1. Instância explicitamente configurada no nó do fluxo
+    // 1. Instância explicitamente configurada no nó do fluxo (filtrando por tenantId)
     if (params.whatsappInstanceId) {
-      instance = await prisma.whatsappInstance.findUnique({
-        where: { id: params.whatsappInstanceId },
+      instance = await prisma.whatsappInstance.findFirst({
+        where: {
+          id: params.whatsappInstanceId,
+          ...(params.tenantId ? { tenantId: params.tenantId } : {}),
+        },
       });
     }
 
-    // 2. Busca por número do remetente caso informado
+    // 2. Busca por número do remetente caso informado (filtrando por tenantId)
     if ((!instance || instance.status !== 'CONNECTED') && params.senderPhone) {
       const cleanSender = params.senderPhone.replace(/\D/g, '');
       instance = await prisma.whatsappInstance.findFirst({
-        where: { phone: { contains: cleanSender.slice(-8) }, status: 'CONNECTED' },
+        where: {
+          phone: { contains: cleanSender.slice(-8) },
+          status: 'CONNECTED',
+          ...(params.tenantId ? { tenantId: params.tenantId } : {}),
+        },
       });
     }
 
-    // 3. Busca por tenant vinculado (se houver)
+    // 3. Busca por tenant vinculado (prioriza padrão do tenant)
     if ((!instance || instance.status !== 'CONNECTED') && params.tenantId) {
       instance = await prisma.whatsappInstance.findFirst({
         where: { tenantId: params.tenantId, status: 'CONNECTED' },
-      });
-    }
-
-    // 4. Fallback global: qualquer WhatsApp conectado no sistema (prioriza default ou primeiro conectado)
-    if (!instance || instance.status !== 'CONNECTED') {
-      instance = await prisma.whatsappInstance.findFirst({
-        where: { status: 'CONNECTED' },
-        orderBy: [{ isDefault: 'desc' }, { createdAt: 'asc' }],
+        orderBy: [{ isDefault: 'desc' }, { createdAt: 'desc' }],
       });
     }
 
     if (!instance || instance.status !== 'CONNECTED') {
-      const errorMsg = 'Nenhum número de WhatsApp conectado no sistema. Acesse o menu WhatsApp para conectar um número.';
+      const errorMsg = 'Nenhum número de WhatsApp conectado para este Expert/Tenant. Acesse o menu WhatsApp para conectar um número.';
       return {
         success: false,
         messageId: '',

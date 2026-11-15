@@ -2,16 +2,28 @@ const { execSync, spawn } = require('child_process');
 
 console.log('[PROD START] Initializing LaunchFlow container...');
 
-// 1. Executa o push do esquema do banco de forma segura e não-bloqueante
+// 1. Executa migração de compatibilidade de instâncias do WhatsApp (remove UNIQUE em tenantId)
+try {
+  console.log('[PROD START] Verificando e atualizando índices do WhatsApp (multi-tenant)...');
+  execSync('node scripts/migrate-whatsapp.js', {
+    stdio: 'inherit',
+    timeout: 10000,
+  });
+  console.log('[PROD START] Migração de índices concluída com sucesso.');
+} catch (err) {
+  console.error('[PROD START] Aviso na migração de índices (continuando com segurança):', err.message);
+}
+
+// 2. Executa o push do esquema do banco de forma segura e não-bloqueante
 try {
   console.log('[PROD START] Sincronizando schema do banco com Prisma...');
   execSync('npx prisma db push --accept-data-loss --skip-generate', {
     stdio: 'inherit',
-    timeout: 15000,
+    timeout: 20000,
   });
   console.log('[PROD START] Schema do banco sincronizado.');
 } catch (err) {
-  console.warn('[PROD START] Aviso na sincronizacao do schema (continuando inicializacao):', err.message);
+  console.error('[PROD START] Aviso na sincronização do schema Prisma (continuando inicialização de forma controlada):', err.message);
 }
 
 // 2. Executa seed de dados essenciais (admin e expert) se necessario

@@ -9,6 +9,9 @@ import { messageManager } from '@/services/messaging';
 export async function POST(request: Request) {
   try {
     const tenantId = await getActiveTenantId();
+    if (!tenantId) {
+      return NextResponse.json({ error: 'Tenant não autenticado' }, { status: 401 });
+    }
     const body = await request.json().catch(() => ({}));
 
     const result = await messageManager.evolutionApi.getOrCreateConnection({

@@ -9,10 +9,13 @@ import { messageManager } from '@/services/messaging';
 export async function POST(request: Request) {
   try {
     const tenantId = await getActiveTenantId();
+    if (!tenantId) {
+      return NextResponse.json({ error: 'Tenant não autenticado' }, { status: 401 });
+    }
     const body = await request.json().catch(() => ({}));
     const targetId = body.instanceId || tenantId;
 
-    await messageManager.evolutionApi.disconnect(targetId);
+    await messageManager.evolutionApi.disconnect(targetId, tenantId);
     return NextResponse.json({ success: true, status: 'DISCONNECTED' });
   } catch (err: any) {
     return NextResponse.json({ error: err.message }, { status: 500 });

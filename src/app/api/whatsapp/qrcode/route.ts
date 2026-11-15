@@ -9,6 +9,9 @@ import { messageManager } from '@/services/messaging';
 export async function GET(request: Request) {
   try {
     const tenantId = await getActiveTenantId();
+    if (!tenantId) {
+      return NextResponse.json({ error: 'Tenant não autenticado' }, { status: 401 });
+    }
     const { searchParams } = new URL(request.url);
     const instanceId = searchParams.get('instanceId') || undefined;
 
