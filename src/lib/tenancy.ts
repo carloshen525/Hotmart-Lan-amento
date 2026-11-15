@@ -7,7 +7,8 @@ const TENANT_COOKIE_NAME = 'launch_active_tenant_id';
 export async function getActiveTenantId(): Promise<string> {
   const session = await getCurrentSession();
   if (session?.tenantId) {
-    return session.tenantId;
+    const exists = await prisma.tenant.findUnique({ where: { id: session.tenantId } });
+    if (exists) return exists.id;
   }
 
   const cookieStore = cookies();
@@ -19,7 +20,7 @@ export async function getActiveTenantId(): Promise<string> {
 
   // Fallback para o primeiro tenant cadastrado se existir
   const firstTenant = await prisma.tenant.findFirst({
-    orderBy: { createdAt: 'desc' },
+    orderBy: { createdAt: 'asc' },
   });
 
   if (firstTenant) {

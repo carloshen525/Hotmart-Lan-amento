@@ -1,6 +1,6 @@
 'use client';
 
-import { useState, useEffect } from 'react';
+import { useState, useEffect, useRef } from 'react';
 import {
   MessageSquare,
   QrCode,
@@ -48,6 +48,11 @@ export default function WhatsAppPage() {
   const [activeModalInstanceId, setActiveModalInstanceId] = useState<string | null>(null);
   const [modalLoading, setModalLoading] = useState(false);
   const [modalTimeLeft, setModalTimeLeft] = useState(25);
+
+  const isConnectModalOpenRef = useRef(isConnectModalOpen);
+  isConnectModalOpenRef.current = isConnectModalOpen;
+  const activeModalInstanceIdRef = useRef(activeModalInstanceId);
+  activeModalInstanceIdRef.current = activeModalInstanceId;
 
   // Edição inline de nome
   const [editingId, setEditingId] = useState<string | null>(null);
@@ -105,13 +110,13 @@ export default function WhatsAppPage() {
           if (Array.isArray(json.instances)) {
             setInstances(json.instances);
             // Se o modal de QR code estiver aberto e a instância conectou
-            if (isConnectModalOpen) {
+            if (isConnectModalOpenRef.current) {
               const connectedMatch = json.instances.find(
                 (i: any) =>
                   i.connected &&
-                  (i.id === activeModalInstanceId ||
-                    i.instanceName === activeModalInstanceId ||
-                    (i.lastConnectedAt && new Date(i.lastConnectedAt).getTime() > Date.now() - 35000))
+                  (i.id === activeModalInstanceIdRef.current ||
+                    i.instanceName === activeModalInstanceIdRef.current ||
+                    (i.lastConnectedAt && new Date(i.lastConnectedAt).getTime() > Date.now() - 60000))
               );
               if (connectedMatch) {
                 setIsConnectModalOpen(false);
