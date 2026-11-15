@@ -166,9 +166,10 @@ export default function WhatsAppPage() {
         const qrData = await qrRes.json();
         if (qrData.qrcode) {
           setActiveModalQrCode(qrData.qrcode);
+        } else if (qrData.error) {
+          setActionMessage(`Aviso: ${qrData.error}`);
         }
-      }
-      if (data.error) {
+      } else if (data.error) {
         setActionMessage(`Aviso: ${data.error}`);
       }
       fetchInstances();

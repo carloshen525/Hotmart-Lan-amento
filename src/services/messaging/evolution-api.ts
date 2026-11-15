@@ -246,6 +246,9 @@ export class EvolutionApiService {
       const instanceToken = crypto.randomUUID();
       const friendlyName = name || (count === 0 ? 'WhatsApp Principal' : `WhatsApp Linha ${count + 1}`);
 
+      let createData: any = null;
+      let qrcodeBase64: string | null = null;
+
       try {
         const createRes = await fetch(`${this.apiUrl}/instance/create`, {
           method: 'POST',
@@ -261,24 +264,50 @@ export class EvolutionApiService {
           }),
         });
 
-        const createData = await createRes.json().catch(() => ({}));
+        createData = await createRes.json().catch(() => ({}));
 
-        let qrcodeBase64 =
+        qrcodeBase64 =
           createData?.qrcode?.base64 ||
           createData?.base64 ||
           null;
 
-        instance = await prisma.whatsappInstance.create({
-          data: {
-            tenantId: tenantId || null,
-            name: friendlyName,
-            instanceName,
-            instanceToken,
-            status: 'CONNECTING',
-            qrcode: qrcodeBase64,
-            isDefault: count === 0,
-          },
-        });
+        let instance: any = null;
+        try {
+          instance = await prisma.whatsappInstance.create({
+            data: {
+              tenantId: tenantId || null,
+              name: friendlyName,
+              instanceName,
+              instanceToken,
+              status: 'CONNECTING',
+              qrcode: qrcodeBase64,
+              isDefault: count === 0,
+            },
+          });
+        } catch (createErr: any) {
+          // Fallback resiliente caso o ambiente em produção tenha Prisma Client sem os novos campos
+          console.warn('Prisma create com campos completos falhou, tentando modo de compatibilidade:', createErr?.message);
+          try {
+            instance = await prisma.whatsappInstance.create({
+              data: {
+                tenantId: tenantId || null,
+                instanceName,
+                instanceToken,
+                status: 'CONNECTING',
+                qrcode: qrcodeBase64,
+              },
+            });
+          } catch (fallbackErr: any) {
+            console.error('Prisma fallback create falhou também:', fallbackErr?.message);
+            instance = {
+              id: instanceName,
+              instanceName,
+              name: friendlyName,
+              status: 'CONNECTING',
+              qrcode: qrcodeBase64,
+            };
+          }
+        }
 
         // Se /instance/create ainda não retornou o base64 de imediato, busca via getFreshQrCode!
         if (!qrcodeBase64) {
@@ -286,10 +315,14 @@ export class EvolutionApiService {
           const fresh = await this.getFreshQrCode(instance.instanceName);
           if (fresh.qrcode) {
             qrcodeBase64 = fresh.qrcode;
-            await prisma.whatsappInstance.update({
-              where: { id: instance.id },
-              data: { qrcode: qrcodeBase64 },
-            });
+            try {
+              if (instance?.id && instance.id !== instance.instanceName) {
+                await prisma.whatsappInstance.update({
+                  where: { id: instance.id },
+                  data: { qrcode: qrcodeBase64 },
+                });
+              }
+            } catch {}
           }
         }
 
@@ -297,11 +330,27 @@ export class EvolutionApiService {
           connected: false,
           status: 'CONNECTING',
           qrcode: qrcodeBase64 || undefined,
-          instanceId: instance.id,
-          instanceName: instance.instanceName,
-          name: instance.name || friendlyName,
+          instanceId: instance?.id || instanceName,
+          instanceName: instance?.instanceName || instanceName,
+          name: instance?.name || friendlyName,
         };
       } catch (err: any) {
+        // Se a Evolution API já retornou o QR Code, NUNCA bloqueie a exibição por erro de banco!
+        const fallbackQr =
+          createData?.qrcode?.base64 ||
+          createData?.base64 ||
+          null;
+
+        if (fallbackQr) {
+          return {
+            connected: false,
+            status: 'CONNECTING',
+            qrcode: fallbackQr,
+            instanceName,
+            name: friendlyName,
+          };
+        }
+
         return {
           connected: false,
           status: 'DISCONNECTED',
