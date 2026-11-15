@@ -49,6 +49,11 @@ export default function ContactsPage() {
   const [loading, setLoading] = useState(true);
   const [search, setSearch] = useState('');
   const [selectedTag, setSelectedTag] = useState('');
+  const [totalCount, setTotalCount] = useState<number | null>(null);
+  const [activeCount, setActiveCount] = useState<number | null>(null);
+  const [optOutCount, setOptOutCount] = useState<number | null>(null);
+  const [withPhoneCount, setWithPhoneCount] = useState<number | null>(null);
+  const [filteredCount, setFilteredCount] = useState<number | null>(null);
   const [isModalOpen, setIsModalOpen] = useState(false);
   const [selectedContact, setSelectedContact] = useState<any | null>(null);
   const [drawerLoading, setDrawerLoading] = useState(false);
@@ -116,6 +121,16 @@ export default function ContactsPage() {
       .then((res) => res.json())
       .then((data) => {
         setContacts(data.contacts || []);
+        if (typeof data.totalCount === 'number') {
+          setTotalCount(data.totalCount);
+          setActiveCount(data.activeCount ?? null);
+          setOptOutCount(data.optOutCount ?? null);
+          setWithPhoneCount(data.withPhoneCount ?? null);
+          setFilteredCount(data.filteredCount ?? (data.contacts || []).length);
+        } else {
+          setTotalCount((data.contacts || []).length);
+          setFilteredCount((data.contacts || []).length);
+        }
         setLoading(false);
       })
       .catch(() => setLoading(false));
@@ -659,7 +674,15 @@ export default function ContactsPage() {
       {/* Topo */}
       <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-4">
         <div>
-          <h1 className="text-2xl font-bold text-slate-900 tracking-tight">CRM e Gestão de Leads</h1>
+          <div className="flex items-center gap-3 flex-wrap">
+            <h1 className="text-2xl font-bold text-slate-900 tracking-tight">CRM e Gestão de Leads</h1>
+            {totalCount !== null && (
+              <span className="inline-flex items-center gap-1.5 px-3 py-1 rounded-full text-xs font-semibold bg-indigo-50 text-indigo-700 border border-indigo-200 shadow-sm">
+                <Users className="w-3.5 h-3.5 text-indigo-600" />
+                <span>{totalCount.toLocaleString('pt-BR')} leads cadastrados</span>
+              </span>
+            )}
+          </div>
           <p className="text-sm text-slate-500 mt-1">
             Contatos, tags, origem do tráfego e movimentação em automações.
           </p>
@@ -693,6 +716,61 @@ export default function ContactsPage() {
             <Plus className="w-4 h-4" />
             <span>Novo Contato</span>
           </button>
+        </div>
+      </div>
+
+      {/* Cards de Métricas da Base de Leads */}
+      <div className="grid grid-cols-2 sm:grid-cols-4 gap-3 sm:gap-4">
+        <div className="bg-white p-4 rounded-xl border border-slate-200/90 shadow-sm flex items-center justify-between">
+          <div>
+            <p className="text-[11px] font-semibold text-slate-500 uppercase tracking-wider">Total na Base</p>
+            <p className="text-xl sm:text-2xl font-bold text-slate-900 mt-0.5">
+              {totalCount !== null ? totalCount.toLocaleString('pt-BR') : '...'}
+            </p>
+            <p className="text-[10px] text-slate-400 mt-0.5">Leads cadastrados</p>
+          </div>
+          <div className="w-10 h-10 rounded-xl bg-indigo-50 border border-indigo-100 flex items-center justify-center text-indigo-600">
+            <Users className="w-5 h-5" />
+          </div>
+        </div>
+
+        <div className="bg-white p-4 rounded-xl border border-slate-200/90 shadow-sm flex items-center justify-between">
+          <div>
+            <p className="text-[11px] font-semibold text-slate-500 uppercase tracking-wider">Leads Ativos</p>
+            <p className="text-xl sm:text-2xl font-bold text-emerald-600 mt-0.5">
+              {activeCount !== null ? activeCount.toLocaleString('pt-BR') : '...'}
+            </p>
+            <p className="text-[10px] text-slate-400 mt-0.5">Elegíveis para funis</p>
+          </div>
+          <div className="w-10 h-10 rounded-xl bg-emerald-50 border border-emerald-100 flex items-center justify-center text-emerald-600">
+            <CheckCircle className="w-5 h-5" />
+          </div>
+        </div>
+
+        <div className="bg-white p-4 rounded-xl border border-slate-200/90 shadow-sm flex items-center justify-between">
+          <div>
+            <p className="text-[11px] font-semibold text-slate-500 uppercase tracking-wider">Com WhatsApp</p>
+            <p className="text-xl sm:text-2xl font-bold text-sky-600 mt-0.5">
+              {withPhoneCount !== null ? withPhoneCount.toLocaleString('pt-BR') : '...'}
+            </p>
+            <p className="text-[10px] text-slate-400 mt-0.5">Telefone cadastrado</p>
+          </div>
+          <div className="w-10 h-10 rounded-xl bg-sky-50 border border-sky-100 flex items-center justify-center text-sky-600">
+            <Phone className="w-5 h-5" />
+          </div>
+        </div>
+
+        <div className="bg-white p-4 rounded-xl border border-slate-200/90 shadow-sm flex items-center justify-between">
+          <div>
+            <p className="text-[11px] font-semibold text-slate-500 uppercase tracking-wider">Opt-Out / Cancelados</p>
+            <p className="text-xl sm:text-2xl font-bold text-amber-600 mt-0.5">
+              {optOutCount !== null ? optOutCount.toLocaleString('pt-BR') : '...'}
+            </p>
+            <p className="text-[10px] text-slate-400 mt-0.5">Descadastrados</p>
+          </div>
+          <div className="w-10 h-10 rounded-xl bg-amber-50 border border-amber-100 flex items-center justify-center text-amber-600">
+            <UserX className="w-5 h-5" />
+          </div>
         </div>
       </div>
 
@@ -735,7 +813,7 @@ export default function ContactsPage() {
           />
         </div>
 
-        <div className="flex items-center gap-2 w-full sm:w-auto">
+        <div className="flex items-center gap-2 w-full sm:w-auto flex-wrap">
           <Filter className="w-4 h-4 text-slate-400" />
           <select
             value={selectedTag}
@@ -758,6 +836,18 @@ export default function ContactsPage() {
               </>
             )}
           </select>
+          {(search || selectedTag) && (
+            <button
+              onClick={() => {
+                setSearch('');
+                setSelectedTag('');
+              }}
+              className="px-2.5 py-2 text-xs text-slate-500 hover:text-slate-800 bg-slate-100 hover:bg-slate-200 rounded-lg font-medium transition-colors"
+              title="Limpar filtros"
+            >
+              Limpar
+            </button>
+          )}
         </div>
       </div>
 
@@ -907,6 +997,30 @@ export default function ContactsPage() {
               )}
             </tbody>
           </table>
+        </div>
+
+        {/* Rodapé com Total de Leads na Base */}
+        <div className="px-5 py-3.5 bg-slate-50 border-t border-slate-200 flex flex-col sm:flex-row items-center justify-between gap-2 text-xs text-slate-500">
+          <div>
+            Mostrando <span className="font-semibold text-slate-800">{contacts.length}</span> lead(s)
+            {filteredCount !== null && filteredCount !== contacts.length && (
+              <> (de <span className="font-semibold text-slate-800">{filteredCount.toLocaleString('pt-BR')}</span> encontrados com os filtros)</>
+            )}
+            {totalCount !== null && (
+              <> • Total geral na base: <span className="font-semibold text-slate-800">{totalCount.toLocaleString('pt-BR')}</span> leads</>
+            )}
+          </div>
+          {(search || selectedTag) && (
+            <button
+              onClick={() => {
+                setSearch('');
+                setSelectedTag('');
+              }}
+              className="text-xs text-indigo-600 hover:text-indigo-800 font-semibold"
+            >
+              Limpar filtros de busca
+            </button>
+          )}
         </div>
       </div>
 

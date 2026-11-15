@@ -38,22 +38,35 @@ export async function GET(request: Request) {
       };
     }
 
-    const contacts = await prisma.contact.findMany({
-      where,
-      include: {
-        tags: {
-          include: { tag: true },
-        },
-        _count: {
-          select: {
-            enrollments: true,
-            messageLogs: true,
+    const [totalInDb, activeInDb, optOutInDb, withPhoneInDb, filteredCount, contacts] =
+      await Promise.all([
+        prisma.contact.count({ where: { tenantId } }),
+        prisma.contact.count({ where: { tenantId, status: 'ACTIVE' } }),
+        prisma.contact.count({ where: { tenantId, status: 'UNSUBSCRIBED' } }),
+        prisma.contact.count({
+          where: {
+            tenantId,
+            AND: [{ phone: { not: null } }, { phone: { not: '' } }],
           },
-        },
-      },
-      orderBy: { createdAt: 'desc' },
-      take: 100,
-    });
+        }),
+        prisma.contact.count({ where }),
+        prisma.contact.findMany({
+          where,
+          include: {
+            tags: {
+              include: { tag: true },
+            },
+            _count: {
+              select: {
+                enrollments: true,
+                messageLogs: true,
+              },
+            },
+          },
+          orderBy: { createdAt: 'desc' },
+          take: format === 'csv' ? undefined : 250,
+        }),
+      ]);
 
     // Suporte a Exportação CSV
     if (format === 'csv') {
@@ -79,7 +92,14 @@ export async function GET(request: Request) {
       });
     }
 
-    return NextResponse.json({ contacts });
+    return NextResponse.json({
+      contacts,
+      totalCount: totalInDb,
+      activeCount: activeInDb,
+      optOutCount: optOutInDb,
+      withPhoneCount: withPhoneInDb,
+      filteredCount,
+    });
   } catch (err: any) {
     return NextResponse.json({ error: err.message }, { status: 500 });
   }
