@@ -8,9 +8,22 @@ function createPrismaClient(): PrismaClient {
   });
 }
 
+let dbMigrationDone = false;
+async function ensureDbColumns(client: PrismaClient) {
+  if (dbMigrationDone) return;
+  dbMigrationDone = true;
+  try {
+    await client.$executeRawUnsafe(`ALTER TABLE "WhatsappInstance" ADD COLUMN "name" TEXT;`).catch(() => {});
+    await client.$executeRawUnsafe(`ALTER TABLE "WhatsappInstance" ADD COLUMN "isDefault" BOOLEAN DEFAULT 0;`).catch(() => {});
+    await client.$executeRawUnsafe(`DROP INDEX IF EXISTS "WhatsappInstance_tenantId_key";`).catch(() => {});
+    await client.$executeRawUnsafe(`CREATE INDEX IF NOT EXISTS "WhatsappInstance_tenantId_idx" ON "WhatsappInstance"("tenantId");`).catch(() => {});
+  } catch {}
+}
+
 function getClient(): PrismaClient {
   if (!globalForPrisma.prisma) {
     globalForPrisma.prisma = createPrismaClient();
+    ensureDbColumns(globalForPrisma.prisma);
   }
   return globalForPrisma.prisma;
 }

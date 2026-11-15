@@ -456,6 +456,67 @@ export class EvolutionApiService {
    * Consulta o status de uma instância ou de todas as instâncias do sistema
    */
   async getStatus(tenantId?: string, instanceId?: string) {
+    // 1. Sincroniza instâncias ativas da Evolution API para o banco automaticamente
+    if (this.isConfigured()) {
+      try {
+        const evoRes = await fetch(`${this.apiUrl}/instance/fetchInstances`, {
+          headers: { apikey: this.apiKey },
+          signal: AbortSignal.timeout(4000),
+        });
+        const evoData = await evoRes.json().catch(() => ([]));
+        if (Array.isArray(evoData)) {
+          const openList = evoData.filter((i: any) => i.connectionStatus === 'open');
+          for (const evo of openList) {
+            const rawPhone = evo.ownerJid ? evo.ownerJid.replace(/@.*$/, '') : '';
+            const phone = rawPhone ? (rawPhone.startsWith('+') ? rawPhone : '+' + rawPhone) : null;
+            const profileName = evo.profileName || 'WhatsApp Conectado';
+
+            const existing = await prisma.whatsappInstance.findFirst({
+              where: {
+                OR: [
+                  { instanceName: evo.name },
+                  ...(phone ? [{ phone }] : []),
+                ],
+              },
+            });
+
+            if (existing) {
+              await prisma.whatsappInstance.update({
+                where: { id: existing.id },
+                data: {
+                  instanceName: evo.name,
+                  status: 'CONNECTED',
+                  phone: phone || existing.phone,
+                  profileName: profileName || existing.profileName,
+                  lastConnectedAt: new Date(),
+                  qrcode: null,
+                },
+              }).catch(() => {});
+            } else {
+              const friendlyName = profileName + (phone ? ` (${phone})` : '');
+              const totalCount = await prisma.whatsappInstance.count().catch(() => 0);
+              await prisma.whatsappInstance.create({
+                data: {
+                  tenantId: tenantId || null,
+                  name: friendlyName,
+                  instanceName: evo.name,
+                  instanceToken: evo.token || crypto.randomUUID(),
+                  status: 'CONNECTED',
+                  phone,
+                  profileName,
+                  isDefault: totalCount === 0,
+                  lastConnectedAt: new Date(),
+                  qrcode: null,
+                },
+              }).catch(() => {});
+            }
+          }
+        }
+      } catch {
+        // Silencioso em caso de timeout
+      }
+    }
+
     // Se foi especificada uma instância individual
     if (instanceId) {
       const instance = await prisma.whatsappInstance.findUnique({ where: { id: instanceId } });

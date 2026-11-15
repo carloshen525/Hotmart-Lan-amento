@@ -104,14 +104,20 @@ export default function WhatsAppPage() {
         .then((json) => {
           if (Array.isArray(json.instances)) {
             setInstances(json.instances);
-            // Se o modal de QR code estiver aberto e a instância acabou de conectar
-            if (activeModalInstanceId) {
-              const current = json.instances.find((i: any) => i.id === activeModalInstanceId);
-              if (current && current.connected) {
+            // Se o modal de QR code estiver aberto e a instância conectou
+            if (isConnectModalOpen) {
+              const connectedMatch = json.instances.find(
+                (i: any) =>
+                  i.connected &&
+                  (i.id === activeModalInstanceId ||
+                    i.instanceName === activeModalInstanceId ||
+                    (i.lastConnectedAt && new Date(i.lastConnectedAt).getTime() > Date.now() - 35000))
+              );
+              if (connectedMatch) {
                 setIsConnectModalOpen(false);
                 setActiveModalQrCode(null);
                 setActiveModalInstanceId(null);
-                setActionMessage(`✔ WhatsApp "${current.name || 'Novo Número'}" conectado com sucesso!`);
+                setActionMessage(`✔ WhatsApp "${connectedMatch.name || connectedMatch.profileName || 'Novo Número'}" conectado com sucesso!`);
               }
             }
           }
