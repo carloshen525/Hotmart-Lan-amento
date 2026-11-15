@@ -184,20 +184,48 @@ export const SequenceLeadNode = memo(({ data, selected }: any) => {
 });
 SequenceLeadNode.displayName = 'SequenceLeadNode';
 
+// Formatação consistente do resumo do Timer para cards e listagens
+export function formatTimerSummary(config: any): string {
+  if (!config) return '⏳ Esperar 1 minuto';
+
+  const isSpecific =
+    config.timerType === 'SPECIFIC_DATE' ||
+    config.delayType === 'specific_date' ||
+    Boolean(config.specificDate && config.timerType !== 'CONTINUOUS');
+
+  if (isSpecific && config.specificDate) {
+    try {
+      const d = new Date(config.specificDate);
+      if (!isNaN(d.getTime())) {
+        const day = String(d.getDate()).padStart(2, '0');
+        const month = String(d.getMonth() + 1).padStart(2, '0');
+        const year = d.getFullYear();
+        const hours = String(d.getHours()).padStart(2, '0');
+        const mins = String(d.getMinutes()).padStart(2, '0');
+        return `⏳ Até ${day}/${month}/${year} às ${hours}:${mins}`;
+      }
+    } catch {}
+    return `⏳ Até ${config.specificDate}`;
+  }
+
+  const val = Number(config.value ?? config.duration ?? config.minutes ?? config.delayMinutes ?? 1);
+  const unit = config.unit || 'minutes';
+
+  if (unit === 'hours' || unit === 'hora' || unit === 'horas') {
+    return val === 1 ? '⏳ Esperar 1 hora' : `⏳ Esperar ${val} horas`;
+  }
+  if (unit === 'days' || unit === 'dia' || unit === 'dias') {
+    return val === 1 ? '⏳ Esperar 1 dia' : `⏳ Esperar ${val} dias`;
+  }
+  return val === 1 ? '⏳ Esperar 1 minuto' : `⏳ Esperar ${val} minutos`;
+}
+
 // 3. Nó de Timer (Temporizador Macro / Micro) - Estilo Idêntico ao Print
 export const TimerNode = memo(({ data, selected }: any) => {
-  const value = data.config?.value ?? data.config?.delayMinutes ?? 1;
-  const unit = data.config?.unit || 'minuto';
+  const summary = formatTimerSummary(data.config);
   const waiting = data.config?.waitingCount ?? 0;
   const success = data.config?.successCount ?? 0;
   const failed = data.config?.failedCount ?? 0;
-
-  const unitText =
-    unit === 'minutes' || unit === 'minuto'
-      ? value === 1 ? '1 minuto' : `${value} minutos`
-      : unit === 'hours' || unit === 'hora'
-      ? value === 1 ? '1 hora' : `${value} horas`
-      : value === 1 ? '1 dia' : `${value} dias`;
 
   return (
     <div className="flex flex-col items-center group cursor-pointer select-none">
@@ -225,9 +253,12 @@ export const TimerNode = memo(({ data, selected }: any) => {
       </div>
 
       {/* Legenda com tempo e dias da semana */}
-      <div className="text-center mt-1.5">
-        <span className="text-[12px] font-medium text-slate-200 tracking-wide block">
-          Timer | {unitText}
+      <div className="text-center mt-1.5 max-w-[210px]">
+        <span
+          className="text-[12px] font-medium text-slate-200 tracking-wide block truncate"
+          title={summary}
+        >
+          {summary}
         </span>
         <span className="text-[10px] text-slate-400 block mt-0.5">
           {data.config?.weekDaysSummary || 'Dom, Seg, Ter, Qua, Qui, Sex, Sáb.'}

@@ -167,7 +167,7 @@ export class AutomationEngine {
       }
     }
 
-    const nodeType = node.data.type;
+    const nodeType = (node.data?.type || node.type) as string;
     const subtype = node.data.subtype;
     const config = node.data.config || {};
 
@@ -376,7 +376,7 @@ export class AutomationEngine {
             chosenHandle = 'yes';
           }
         }
-      } else if (nodeType === 'delay') {
+      } else if (nodeType === 'delay' || nodeType === 'timer') {
         // Temporizador persistente - suporta Tempo Contínuo (minutos, horas, dias) ou Data Específica
         let executeAt: Date;
         let summaryText = '';
@@ -1011,8 +1011,29 @@ export class AutomationEngine {
         });
 
         if (!existingJob) {
-          const waitMinutes = Number(cfg.value ?? cfg.minutes ?? (cfg.unit === 'hours' ? (cfg.value || 1) * 60 : 1));
-          const executeAt = new Date(Date.now() + Math.max(1, waitMinutes) * 60 * 1000);
+          let executeAt: Date;
+          let summaryText = '';
+
+          if (cfg.timerType === 'SPECIFIC_DATE' || cfg.delayType === 'specific_date' || cfg.specificDate) {
+            const target = new Date(cfg.specificDate);
+            executeAt = !isNaN(target.getTime()) ? target : new Date(Date.now() + 60 * 1000);
+            summaryText = `Data específica: ${executeAt.toISOString()}`;
+          } else {
+            const unit = cfg.unit || (cfg.minutes !== undefined ? 'minutes' : cfg.hours !== undefined ? 'hours' : 'days');
+            const amount = Number(cfg.value ?? cfg.duration ?? cfg.minutes ?? cfg.hours ?? cfg.days ?? 1);
+            let waitMinutes = 1;
+
+            if (unit === 'minutes') {
+              waitMinutes = Math.max(1, amount);
+            } else if (unit === 'hours') {
+              waitMinutes = Math.max(1, amount * 60);
+            } else {
+              waitMinutes = Math.max(1, amount * 1440);
+            }
+
+            executeAt = new Date(Date.now() + waitMinutes * 60 * 1000);
+            summaryText = `${amount} ${unit}`;
+          }
 
           const outgoing = subEdges.filter((e) => e.source === node.id);
           for (const edge of outgoing) {
@@ -1034,7 +1055,7 @@ export class AutomationEngine {
             data: { status: 'WAITING', currentNodeId: node.id },
           });
 
-          stepDetails = { scheduledUntil: executeAt, minutes: waitMinutes };
+          stepDetails = { scheduledUntil: executeAt, summary: summaryText };
         } else {
           stepDetails = { scheduledUntil: existingJob.executeAt, alreadyScheduled: true };
         }

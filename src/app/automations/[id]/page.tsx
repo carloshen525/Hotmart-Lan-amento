@@ -65,6 +65,7 @@ import {
   Eye,
   Smartphone,
   ExternalLink,
+  AlertCircle,
 } from 'lucide-react';
 
 import {
@@ -75,6 +76,7 @@ import {
   StartNode,
   WhatsAppNode,
   EmailNode,
+  formatTimerSummary,
 } from '@/components/automation/CustomNodes';
 import { EmailBuilderModal } from '@/components/email-builder/EmailBuilderModal';
 
@@ -184,6 +186,7 @@ export default function AutomationCanvasPage() {
   const [timerValue, setTimerValue] = useState<number>(1);
   const [timerUnit, setTimerUnit] = useState<'minutes' | 'hours' | 'days'>('minutes');
   const [timerSpecificDate, setTimerSpecificDate] = useState<string>('');
+  const [timerError, setTimerError] = useState<string | null>(null);
   const [timerCancelCondition, setTimerCancelCondition] = useState<'PURCHASE_APPROVED' | 'NONE'>('PURCHASE_APPROVED');
   const [timerHasLimit, setTimerHasLimit] = useState(false);
   const [timerHasInterval, setTimerHasInterval] = useState(false);
@@ -1032,12 +1035,33 @@ export default function AutomationCanvasPage() {
   const openTimerModal = (nodeToConfigure?: Node) => {
     const target = nodeToConfigure || selectedNode;
     if (!target) return;
+    setSelectedNode(target);
     const cfg = (target.data.config as any) || {};
 
-    setTimerTab(cfg.timerType === 'SPECIFIC_DATE' ? 'SPECIFIC_DATE' : 'CONTINUOUS');
-    setTimerValue(Number(cfg.value ?? cfg.duration ?? cfg.minutes ?? 1));
+    const isSpecific =
+      cfg.timerType === 'SPECIFIC_DATE' ||
+      cfg.delayType === 'specific_date' ||
+      Boolean(cfg.specificDate && cfg.timerType !== 'CONTINUOUS');
+
+    setTimerTab(isSpecific ? 'SPECIFIC_DATE' : 'CONTINUOUS');
+    setTimerValue(Number(cfg.value ?? cfg.duration ?? cfg.minutes ?? cfg.delayMinutes ?? 1));
     setTimerUnit(cfg.unit || 'minutes');
-    setTimerSpecificDate(cfg.specificDate || '');
+
+    let formattedDate = cfg.specificDate || '';
+    if (formattedDate && !/^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}$/.test(formattedDate)) {
+      try {
+        const d = new Date(formattedDate);
+        if (!isNaN(d.getTime())) {
+          const year = d.getFullYear();
+          const month = String(d.getMonth() + 1).padStart(2, '0');
+          const day = String(d.getDate()).padStart(2, '0');
+          const hours = String(d.getHours()).padStart(2, '0');
+          const minutes = String(d.getMinutes()).padStart(2, '0');
+          formattedDate = `${year}-${month}-${day}T${hours}:${minutes}`;
+        }
+      } catch {}
+    }
+    setTimerSpecificDate(formattedDate);
     setTimerCancelCondition(cfg.cancelCondition || 'PURCHASE_APPROVED');
     setTimerHasLimit(!!cfg.hasLimit);
     setTimerHasInterval(!!cfg.hasInterval);
@@ -1045,41 +1069,95 @@ export default function AutomationCanvasPage() {
     setTimerIntervalEnd(cfg.intervalEnd || '20:00');
     setTimerHasWeekDays(!!cfg.hasWeekDays);
     setTimerWeekDays(cfg.weekDays || ['seg', 'ter', 'qua', 'qui', 'sex']);
+    setTimerError(null);
 
     setIsTimerModalOpen(true);
   };
 
-  const handleSaveTimerConfig = () => {
+  const handleSaveTimerConfig = async () => {
     if (!selectedNode) return;
 
+    // Regra 1: Validação de data no passado para Data/Hora Específica
+    if (timerTab === 'SPECIFIC_DATE') {
+      if (!timerSpecificDate) {
+        setTimerError('❌ A data e hora selecionadas já passaram. Escolha um horário futuro.');
+        return;
+      }
+      const selectedTime = new Date(timerSpecificDate).getTime();
+      if (isNaN(selectedTime) || selectedTime <= Date.now()) {
+        setTimerError('❌ A data e hora selecionadas já passaram. Escolha um horário futuro.');
+        return;
+      }
+    }
+
+    setTimerError(null);
+
+    let nextStatus = status;
     if (status === 'ACTIVE') {
       const wantsToPause = confirm(
         'Regra de Edição: O fluxo está ATIVO em produção.\n\nPara alterar os tempos ou regras deste agendamento, a automação precisa ser pausada.\n\nDeseja pausar o fluxo agora para prosseguir com a edição?'
       );
       if (!wantsToPause) return;
-      handleSave('PAUSED');
+      nextStatus = 'PAUSED';
+      setStatus('PAUSED');
     }
 
-    const unitText =
-      timerUnit === 'minutes' ? 'minuto(s)' : timerUnit === 'hours' ? 'hora(s)' : 'dia(s)';
+    // Regra 4: Limpar completamente configuração anterior ao trocar o tipo de timer
+    let updatedCfg: any;
+    if (timerTab === 'SPECIFIC_DATE') {
+      const baseCfg = { ...((selectedNode.data.config as object) || {}) } as any;
+      delete baseCfg.value;
+      delete baseCfg.unit;
+      delete baseCfg.minutes;
+      delete baseCfg.hours;
+      delete baseCfg.days;
+      delete baseCfg.duration;
+      delete baseCfg.delayMinutes;
+      delete baseCfg.delayType;
 
-    const updatedCfg: any = {
-      ...(selectedNode.data.config as object),
-      timerType: timerTab,
-      unit: timerUnit,
-      value: timerValue,
-      specificDate: timerTab === 'SPECIFIC_DATE' ? timerSpecificDate : undefined,
-      cancelCondition: timerCancelCondition,
-      hasLimit: timerHasLimit,
-      hasInterval: timerHasInterval,
-      intervalStart: timerIntervalStart,
-      intervalEnd: timerIntervalEnd,
-      hasWeekDays: timerHasWeekDays,
-      weekDays: timerWeekDays,
-      weekDaysSummary: timerHasWeekDays
-        ? timerWeekDays.join(', ')
-        : 'Dom, Seg, Ter, Qua, Qui, Sex, Sáb.',
-    };
+      updatedCfg = {
+        ...baseCfg,
+        timerType: 'SPECIFIC_DATE',
+        specificDate: timerSpecificDate,
+        cancelCondition: timerCancelCondition,
+        hasLimit: timerHasLimit,
+        hasInterval: timerHasInterval,
+        intervalStart: timerIntervalStart,
+        intervalEnd: timerIntervalEnd,
+        hasWeekDays: timerHasWeekDays,
+        weekDays: timerWeekDays,
+        weekDaysSummary: timerHasWeekDays
+          ? timerWeekDays.join(', ')
+          : 'Dom, Seg, Ter, Qua, Qui, Sex, Sáb.',
+      };
+    } else {
+      const baseCfg = { ...((selectedNode.data.config as object) || {}) } as any;
+      delete baseCfg.specificDate;
+      delete baseCfg.delayType;
+      delete baseCfg.targetDate;
+      delete baseCfg.targetTime;
+      delete baseCfg.timezone;
+
+      updatedCfg = {
+        ...baseCfg,
+        timerType: 'CONTINUOUS',
+        value: timerValue,
+        unit: timerUnit,
+        cancelCondition: timerCancelCondition,
+        hasLimit: timerHasLimit,
+        hasInterval: timerHasInterval,
+        intervalStart: timerIntervalStart,
+        intervalEnd: timerIntervalEnd,
+        hasWeekDays: timerHasWeekDays,
+        weekDays: timerWeekDays,
+        weekDaysSummary: timerHasWeekDays
+          ? timerWeekDays.join(', ')
+          : 'Dom, Seg, Ter, Qua, Qui, Sex, Sáb.',
+      };
+    }
+
+    // Regras 2, 3 e 5: Atualização imediata do card e estado do fluxo
+    const summary = formatTimerSummary(updatedCfg);
 
     const updateInList = (list: Node[]) =>
       list.map((n) =>
@@ -1088,19 +1166,80 @@ export default function AutomationCanvasPage() {
               ...n,
               data: {
                 ...n.data,
+                label: summary,
                 config: updatedCfg,
               },
             }
           : n
       );
 
+    let updatedMacroNodes = [...macroNodes];
     if (viewMode === 'MACRO') {
       setMacroNodes(updateInList);
+      updatedMacroNodes = updateInList(macroNodes);
     } else {
       setSequenceNodes(updateInList);
+      const nextSequenceNodes = updateInList(sequenceNodes);
+      if (activeSequenceNode) {
+        updatedMacroNodes = updatedMacroNodes.map((m) =>
+          m.id === activeSequenceNode.id
+            ? {
+                ...m,
+                data: {
+                  ...m.data,
+                  subflow: {
+                    nodes: nextSequenceNodes,
+                    edges: sequenceEdges,
+                  },
+                },
+              }
+            : m
+        );
+        setMacroNodes(updatedMacroNodes);
+      }
     }
 
+    setSelectedNode((prev) =>
+      prev && prev.id === selectedNode.id
+        ? {
+            ...prev,
+            data: {
+              ...prev.data,
+              label: summary,
+              config: updatedCfg,
+            },
+          }
+        : prev
+    );
+
     setIsTimerModalOpen(false);
+
+    // Persistência imediata no Banco de Dados (Regra 5 e 6)
+    try {
+      const res = await fetch(`/api/automations/${automationId}`, {
+        method: 'PUT',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          status: nextStatus,
+          nodes: updatedMacroNodes,
+          edges: macroEdges,
+        }),
+      });
+
+      if (!res.ok) {
+        const data = await res.json().catch(() => ({}));
+        setSaveNotice(data.error || 'Erro ao persistir timer no banco de dados');
+      } else {
+        setSaveNotice(
+          nextStatus === 'PAUSED' && status === 'ACTIVE'
+            ? 'Timer configurado e fluxo pausado com sucesso!'
+            : 'Timer configurado e salvo com sucesso!'
+        );
+        setTimeout(() => setSaveNotice(null), 3000);
+      }
+    } catch {
+      setSaveNotice('Erro de conexão ao salvar timer');
+    }
   };
 
   // Tag Selection Modal Handlers (Idêntico à ferramenta de referência)
@@ -2835,7 +2974,10 @@ export default function AutomationCanvasPage() {
             <div className="flex items-center gap-8 border-b border-slate-800 mt-4 text-xs font-semibold">
               <button
                 type="button"
-                onClick={() => setTimerTab('CONTINUOUS')}
+                onClick={() => {
+                  setTimerTab('CONTINUOUS');
+                  setTimerError(null);
+                }}
                 className={`pb-2.5 relative transition-colors cursor-pointer ${
                   timerTab === 'CONTINUOUS' ? 'text-indigo-400' : 'text-slate-400 hover:text-white'
                 }`}
@@ -2847,7 +2989,10 @@ export default function AutomationCanvasPage() {
               </button>
               <button
                 type="button"
-                onClick={() => setTimerTab('SPECIFIC_DATE')}
+                onClick={() => {
+                  setTimerTab('SPECIFIC_DATE');
+                  setTimerError(null);
+                }}
                 className={`pb-2.5 relative transition-colors cursor-pointer ${
                   timerTab === 'SPECIFIC_DATE' ? 'text-indigo-400' : 'text-slate-400 hover:text-white'
                 }`}
@@ -2858,6 +3003,14 @@ export default function AutomationCanvasPage() {
                 )}
               </button>
             </div>
+
+            {/* Notificação de Erro em Vermelho */}
+            {timerError && (
+              <div className="mt-4 p-3 bg-red-950/70 border border-red-500/60 rounded-xl text-red-200 text-xs font-semibold flex items-center gap-2.5 animate-in fade-in shadow-md shadow-red-950/40">
+                <AlertCircle className="w-4 h-4 text-red-400 shrink-0" />
+                <span>{timerError}</span>
+              </div>
+            )}
 
             {/* Conteúdo Aba Tempo Contínuo */}
             {timerTab === 'CONTINUOUS' ? (
@@ -2902,8 +3055,21 @@ export default function AutomationCanvasPage() {
                   <input
                     type="datetime-local"
                     value={timerSpecificDate}
-                    onChange={(e) => setTimerSpecificDate(e.target.value)}
-                    className="w-full p-2.5 bg-[#181c25] border border-slate-700 rounded-lg text-white focus:outline-none focus:border-indigo-500 font-mono text-xs"
+                    min={new Date(Date.now() + 60000).toISOString().slice(0, 16)}
+                    onChange={(e) => {
+                      setTimerSpecificDate(e.target.value);
+                      if (timerError) {
+                        const time = new Date(e.target.value).getTime();
+                        if (!isNaN(time) && time > Date.now()) {
+                          setTimerError(null);
+                        }
+                      }
+                    }}
+                    className={`w-full p-2.5 bg-[#181c25] border rounded-lg text-white font-mono text-xs focus:outline-none transition-all ${
+                      timerError && timerTab === 'SPECIFIC_DATE'
+                        ? 'border-red-500 ring-2 ring-red-500/40 bg-red-950/20 text-red-100'
+                        : 'border-slate-700 focus:border-indigo-500'
+                    }`}
                   />
                 </div>
                 <div className="pt-2 text-[10px] text-slate-400 space-y-0.5">

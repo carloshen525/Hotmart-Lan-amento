@@ -220,6 +220,29 @@ export async function GET(request: Request, { params }: { params: { id: string }
   }
 }
 
+// Validação de segurança para temporizadores de data específica
+function validateTimerNodes(nodes: any[]): string | null {
+  if (!Array.isArray(nodes)) return null;
+  for (const node of nodes) {
+    const cfg = node.data?.config;
+    if (cfg && (cfg.timerType === 'SPECIFIC_DATE' || cfg.delayType === 'specific_date')) {
+      if (!cfg.specificDate) {
+        return '❌ A data e hora selecionadas já passaram. Escolha um horário futuro.';
+      }
+      const targetTime = new Date(cfg.specificDate).getTime();
+      if (isNaN(targetTime) || targetTime <= Date.now()) {
+        return '❌ A data e hora selecionadas já passaram. Escolha um horário futuro.';
+      }
+    }
+    const subNodes = node.data?.subflow?.nodes;
+    if (Array.isArray(subNodes)) {
+      const subError = validateTimerNodes(subNodes);
+      if (subError) return subError;
+    }
+  }
+  return null;
+}
+
 export async function PUT(request: Request, { params }: { params: { id: string } }) {
   try {
     const tenantId = await getActiveTenantId();
@@ -230,6 +253,14 @@ export async function PUT(request: Request, { params }: { params: { id: string }
     });
     if (!existing) {
       return NextResponse.json({ error: 'Automação não encontrada' }, { status: 404 });
+    }
+
+    // Regra 1: Validação no backend - Impedir salvar datas no passado
+    if (body.nodes !== undefined) {
+      const timerValidationError = validateTimerNodes(body.nodes);
+      if (timerValidationError) {
+        return NextResponse.json({ error: timerValidationError }, { status: 400 });
+      }
     }
 
     const isStructuralEdit =

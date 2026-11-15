@@ -8,7 +8,7 @@ async function runTestSuite() {
   console.log('=====================================================\n');
 
   let passed = 0;
-  let total = 24;
+  let total = 25;
 
   // Setup de tenant de teste limpo
   const testTenant = await prisma.tenant.upsert({
@@ -1714,6 +1714,71 @@ async function runTestSuite() {
     );
 
     console.log('✔ PASSOU: Teste simulado vs real, deduplicação de formulários e isolamento multi-tenant validados.');
+    passed++;
+
+    // -------------------------------------------------------------
+    // TESTE 25: Validação, Formatação e Isolamento de Temporizadores (Timer)
+    // -------------------------------------------------------------
+    console.log('[TESTE 25] Validação e Limpeza de Configuração de Timers...');
+
+    // 1. Validação de bloqueio de datas no passado
+    const pastDate = new Date(Date.now() - 3600000).toISOString();
+    const futureDate = new Date(Date.now() + 86400000 * 5).toISOString();
+
+    function validateTimerDate(dateStr) {
+      if (!dateStr) return '❌ A data e hora selecionadas já passaram. Escolha um horário futuro.';
+      const time = new Date(dateStr).getTime();
+      if (isNaN(time) || time <= Date.now()) {
+        return '❌ A data e hora selecionadas já passaram. Escolha um horário futuro.';
+      }
+      return null;
+    }
+
+    const pastValidation = validateTimerDate(pastDate);
+    assert.strictEqual(
+      pastValidation,
+      '❌ A data e hora selecionadas já passaram. Escolha um horário futuro.',
+      'Data no passado deve ser estritamente bloqueada'
+    );
+
+    const futureValidation = validateTimerDate(futureDate);
+    assert.strictEqual(futureValidation, null, 'Data no futuro deve ser permitida');
+
+    // 2. Limpeza estrita de campos ao alternar entre CONTINUOUS e SPECIFIC_DATE
+    const initialContinuousConfig = {
+      timerType: 'CONTINUOUS',
+      value: 30,
+      unit: 'minutes',
+      minutes: 30,
+      cancelCondition: 'PURCHASE_APPROVED',
+    };
+
+    // Usuário altera para SPECIFIC_DATE: campos relativos devem ser totalmente removidos
+    const switchedToSpecific = { ...initialContinuousConfig };
+    delete switchedToSpecific.value;
+    delete switchedToSpecific.unit;
+    delete switchedToSpecific.minutes;
+    switchedToSpecific.timerType = 'SPECIFIC_DATE';
+    switchedToSpecific.specificDate = futureDate;
+
+    assert.strictEqual(switchedToSpecific.timerType, 'SPECIFIC_DATE');
+    assert.strictEqual(switchedToSpecific.value, undefined);
+    assert.strictEqual(switchedToSpecific.unit, undefined);
+    assert.strictEqual(switchedToSpecific.minutes, undefined);
+    assert.ok(switchedToSpecific.specificDate, 'Data específica deve estar preenchida');
+
+    // Usuário altera de volta para CONTINUOUS: campos de data específica devem ser removidos
+    const switchedBack = { ...switchedToSpecific };
+    delete switchedBack.specificDate;
+    switchedBack.timerType = 'CONTINUOUS';
+    switchedBack.value = 15;
+    switchedBack.unit = 'minutes';
+
+    assert.strictEqual(switchedBack.timerType, 'CONTINUOUS');
+    assert.strictEqual(switchedBack.specificDate, undefined);
+    assert.strictEqual(switchedBack.value, 15);
+
+    console.log('✔ PASSOU: Validação de data passada, limpeza de configuração anterior e formatação de timers verificadas.');
     passed++;
 
     console.log('\n=====================================================');

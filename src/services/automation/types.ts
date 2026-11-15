@@ -1,4 +1,16 @@
-export type NodeType = 'trigger' | 'action' | 'condition' | 'delay';
+export type NodeType =
+  | 'trigger'
+  | 'action'
+  | 'condition'
+  | 'delay'
+  | 'timer'
+  | 'sequence_lead'
+  | 'tag'
+  | 'aquecimento'
+  | 'warmup'
+  | 'whatsapp'
+  | 'email'
+  | 'start';
 
 export interface WorkflowNodeData {
   label: string;
