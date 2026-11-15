@@ -18,10 +18,22 @@ export async function getActiveTenantId(): Promise<string> {
     if (exists) return exists.id;
   }
 
-  // Fallback para o primeiro tenant cadastrado se existir
-  const firstTenant = await prisma.tenant.findFirst({
+  // Fallback para o primeiro tenant cadastrado se existir, ou provisiona o padrão
+  let firstTenant = await prisma.tenant.findFirst({
     orderBy: { createdAt: 'asc' },
   });
+
+  if (!firstTenant) {
+    try {
+      firstTenant = await prisma.tenant.create({
+        data: {
+          name: 'Meu Expert Principal',
+          slug: 'expert-principal',
+          status: 'ACTIVE',
+        },
+      });
+    } catch {}
+  }
 
   if (firstTenant) {
     return firstTenant.id;

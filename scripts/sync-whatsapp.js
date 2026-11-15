@@ -2,11 +2,19 @@ const { PrismaClient } = require('@prisma/client');
 
 async function syncWhatsappInstances() {
   const prisma = new PrismaClient();
-  const apiUrl = (process.env.EVOLUTION_API_URL || 'https://prospeccao-evolution01.pesd8y.easypanel.host')
+  const apiUrl = (
+    process.env.EVOLUTION_API_URL ||
+    process.env.SERVER_URL ||
+    'https://prospeccao-evolution01.pesd8y.easypanel.host'
+  )
     .trim()
     .replace(/^["']|["']$/g, '')
     .replace(/\/$/, '');
-  const apiKey = (process.env.EVOLUTION_API_KEY || 'X9mK2vQ7LpR8aNc4HsT1yWf6BgZe3JuD')
+  const apiKey = (
+    process.env.EVOLUTION_API_KEY ||
+    process.env.AUTHENTICATION_API_KEY ||
+    'X9mK2vQ7LpR8aNc4HsT1yWf6BgZe3JuD'
+  )
     .trim()
     .replace(/^["']|["']$/g, '');
 

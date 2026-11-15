@@ -1,6 +1,7 @@
 import { NextResponse } from 'next/server';
 import { getActiveTenantId } from '@/lib/tenancy';
 import { messageManager } from '@/services/messaging';
+import { prisma } from '@/lib/prisma';
 
 export const dynamic = 'force-dynamic';
 export const revalidate = 0;
@@ -12,9 +13,19 @@ export const revalidate = 0;
  */
 export async function POST(request: Request) {
   try {
-    const tenantId = await getActiveTenantId();
+    let tenantId = await getActiveTenantId();
     if (!tenantId) {
-      return NextResponse.json({ error: 'Tenant não autenticado' }, { status: 401 });
+      let defaultTenant = await prisma.tenant.findFirst({ orderBy: { createdAt: 'asc' } });
+      if (!defaultTenant) {
+        defaultTenant = await prisma.tenant.create({
+          data: {
+            name: 'Meu Expert Principal',
+            slug: 'expert-principal',
+            status: 'ACTIVE',
+          },
+        });
+      }
+      tenantId = defaultTenant.id;
     }
 
     // 1. Força a sincronização na Evolution API
