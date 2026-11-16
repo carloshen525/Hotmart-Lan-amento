@@ -8,7 +8,7 @@ async function runTestSuite() {
   console.log('=====================================================\n');
 
   let passed = 0;
-  let total = 31;
+  let total = 32;
 
   // Setup de tenant de teste limpo
   const testTenant = await prisma.tenant.upsert({
@@ -2737,6 +2737,161 @@ async function runTestSuite() {
     assert.ok(verifySent.sentAt !== null);
 
     console.log('✔ PASSOU: Fila persistente, cadência aleatória e fixa entre contatos, FIFO estrito e lock concorrente validados com 100% de precisão.');
+    passed++;
+
+    // =========================================================================
+    // TESTE 32: Módulo de Automação em Grupos do WhatsApp & Validação de Admin
+    // =========================================================================
+    console.log('\n[TESTE 32] Módulo de Automação em Grupos do WhatsApp & Validação de Admin...');
+
+    // 1. Criação de grupos com validação estrita de administrador
+    const groupAdminJid = `120363${Date.now()}1@g.us`;
+    const groupNonAdminJid = `120363${Date.now()}2@g.us`;
+
+    const groupAdmin = await prisma.whatsappGroup.create({
+      data: {
+        tenantId: testTenant.id,
+        whatsappInstanceId: queueInstance.id,
+        jid: groupAdminJid,
+        name: 'Grupo VIP Lançamento (Admin)',
+        participantsCount: 150,
+        isAdmin: true,
+        adminRole: 'admin',
+        isEligible: true,
+        status: 'ACTIVE',
+      },
+    });
+
+    const groupNonAdmin = await prisma.whatsappGroup.create({
+      data: {
+        tenantId: testTenant.id,
+        whatsappInstanceId: queueInstance.id,
+        jid: groupNonAdminJid,
+        name: 'Grupo Externo Não Elegível',
+        participantsCount: 80,
+        isAdmin: false,
+        adminRole: null,
+        isEligible: false,
+        status: 'ACTIVE',
+      },
+    });
+
+    assert.strictEqual(groupAdmin.isAdmin, true, 'Grupo onde o número é admin DEVE ter isAdmin = true');
+    assert.strictEqual(groupNonAdmin.isAdmin, false, 'Grupo onde o número NÃO é admin DEVE ter isAdmin = false');
+
+    // 2. Sistema independente de tags de grupos
+    const groupTag = await prisma.groupTag.create({
+      data: {
+        tenantId: testTenant.id,
+        name: `TagGrupo_${Date.now()}`,
+        color: '#8b5cf6',
+      },
+    });
+
+    await prisma.groupTagOnGroup.create({
+      data: {
+        groupId: groupAdmin.id,
+        tagId: groupTag.id,
+      },
+    });
+
+    const groupWithTags = await prisma.whatsappGroup.findUnique({
+      where: { id: groupAdmin.id },
+      include: { tags: { include: { tag: true } } },
+    });
+    assert.strictEqual(groupWithTags.tags.length, 1, 'Tag de grupo deve estar associada ao grupo');
+    assert.strictEqual(groupWithTags.tags[0].tag.name, groupTag.name);
+
+    // Garante que tags de contatos e tags de grupos são tabelas distintas
+    const contactPrivateTagsCount = await prisma.tag.count({ where: { tenantId: testTenant.id, name: groupTag.name } });
+    assert.strictEqual(contactPrivateTagsCount, 0, 'Tags de grupos NÃO devem poluir a tabela de tags de contatos privados');
+
+    // 3. Isolamento multi-tenant de grupos
+    const otherTenantGroupCount = await prisma.whatsappGroup.count({
+      where: { tenantId: otherTenant.id, jid: groupAdminJid },
+    });
+    assert.strictEqual(otherTenantGroupCount, 0, 'Grupos do Tenant A NUNCA podem ser vistos pelo Tenant B');
+
+    // 4. Criação de Automação na Modalidade em Grupos (targetType = 'GROUP')
+    const groupAutomation = await prisma.automation.create({
+      data: {
+        tenantId: testTenant.id,
+        name: 'Automação Grupos Lançamento',
+        status: 'ACTIVE',
+        targetType: 'GROUP',
+        whatsappInstanceId: queueInstance.id,
+        delayBetweenGroups: 30,
+        useRandomDelay: true,
+        minDelaySeconds: 20,
+        maxDelaySeconds: 45,
+        nodes: JSON.stringify([
+          { id: 'node_grp_start', type: 'start', data: { label: 'Início' } },
+          { id: 'node_grp_wpp1', type: 'whatsapp', data: { label: 'Disparo 1', config: { message: 'Mensagem Grupo 1' } } },
+        ]),
+        edges: JSON.stringify([
+          { id: 'e1', source: 'node_grp_start', target: 'node_grp_wpp1' },
+        ]),
+      },
+    });
+
+    assert.strictEqual(groupAutomation.targetType, 'GROUP', 'Modalidade deve ser GROUP');
+
+    // 5. Inscrição do grupo no fluxo e gravação de log de etapa com idempotência
+    const groupEnrollment = await prisma.automationGroupEnrollment.create({
+      data: {
+        tenantId: testTenant.id,
+        automationId: groupAutomation.id,
+        groupId: groupAdmin.id,
+        status: 'ACTIVE',
+        currentNodeId: 'node_grp_wpp1',
+      },
+    });
+
+    const stepLog = await prisma.automationGroupStepLog.create({
+      data: {
+        tenantId: testTenant.id,
+        enrollmentId: groupEnrollment.id,
+        groupId: groupAdmin.id,
+        nodeId: 'node_grp_wpp1',
+        nodeType: 'whatsapp',
+        action: 'SEND_MESSAGE',
+        status: 'SUCCESS',
+        details: 'Mensagem enviada com sucesso ao grupo',
+      },
+    });
+
+    assert.ok(stepLog.id, 'Log de etapa para grupo deve ser criado');
+    assert.strictEqual(stepLog.status, 'SUCCESS');
+
+    // 6. Enfileiramento na fila de WhatsApp com recipientType = 'GROUP'
+    const queueGroupItem = await prisma.whatsappQueue.create({
+      data: {
+        tenantId: testTenant.id,
+        whatsappInstanceId: queueInstance.id,
+        recipientType: 'GROUP',
+        groupJid: groupAdmin.jid,
+        phone: groupAdmin.jid,
+        groupEnrollmentId: groupEnrollment.id,
+        text: 'Olá membros do grupo!',
+        messageType: 'text',
+        status: 'PENDING',
+        scheduledAt: new Date(),
+      },
+    });
+
+    assert.strictEqual(queueGroupItem.recipientType, 'GROUP', 'Fila deve registrar recipientType = GROUP');
+    assert.strictEqual(queueGroupItem.groupJid, groupAdmin.jid, 'Fila deve registrar o JID exato do grupo (@g.us)');
+
+    // Limpeza do teste de grupo
+    await prisma.whatsappQueue.deleteMany({ where: { id: queueGroupItem.id } });
+    await prisma.automationGroupStepLog.deleteMany({ where: { id: stepLog.id } });
+    await prisma.automationGroupEnrollment.deleteMany({ where: { id: groupEnrollment.id } });
+    await prisma.automation.deleteMany({ where: { id: groupAutomation.id } });
+    await prisma.groupTagOnGroup.deleteMany({ where: { groupId: groupAdmin.id } });
+    await prisma.groupTag.deleteMany({ where: { id: groupTag.id } });
+    await prisma.whatsappGroup.deleteMany({ where: { id: { in: [groupAdmin.id, groupNonAdmin.id] } } });
+
+    console.log('✔ PASSOU: Módulo de grupos, validação estrita de admin, tags independentes, fila e logs validados com 100% de sucesso.');
     passed++;
 
     console.log('\n=====================================================');

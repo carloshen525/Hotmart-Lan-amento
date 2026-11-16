@@ -1,5 +1,6 @@
 import { prisma } from '@/lib/prisma';
 import { messageManager } from '@/services/messaging';
+import { whatsappGroupService } from '@/services/whatsapp/group.service';
 
 export interface EnqueueWhatsappOptions {
   tenantId: string;
@@ -7,6 +8,9 @@ export interface EnqueueWhatsappOptions {
   contactId?: string | null;
   phone: string;
   contactName?: string | null;
+  recipientType?: 'INDIVIDUAL' | 'GROUP';
+  groupJid?: string | null;
+  groupEnrollmentId?: string | null;
   messageType?: string;
   text?: string | null;
   mediaUrl?: string | null;
@@ -145,6 +149,9 @@ export class WhatsappQueueService {
       contactId,
       phone,
       contactName,
+      recipientType: rawRecipientType,
+      groupJid: rawGroupJid,
+      groupEnrollmentId = null,
       messageType = 'text',
       text,
       mediaUrl,
@@ -160,6 +167,9 @@ export class WhatsappQueueService {
       maxAttempts = 3,
       forceImmediate = false,
     } = options;
+
+    const recipientType = rawRecipientType || (rawGroupJid || phone.includes('@g.us') ? 'GROUP' : 'INDIVIDUAL');
+    const groupJid = rawGroupJid || (recipientType === 'GROUP' ? phone : null);
 
     if (!tenantId) {
       throw new Error('tenantId é obrigatório para enfileirar mensagem de WhatsApp.');
@@ -240,18 +250,27 @@ export class WhatsappQueueService {
         const lastScheduledTime = new Date(lastItem.scheduledAt || lastItem.scheduled_at).getTime();
         const baseTime = Math.max(nowTime, lastScheduledTime);
 
-        // Regra de Ouro: Delay é APENAS entre contatos diferentes!
+        // Regra de Ouro: Delay é entre destinatários diferentes (contatos ou grupos diferentes)
+        const isGroupItem = recipientType === 'GROUP' || (phone && phone.includes('@g.us'));
         const lastPhone = lastItem.phone;
         const lastContactId = lastItem.contactId || lastItem.contact_id;
-        const isSameContact =
-          (contactId && lastContactId && contactId === lastContactId) ||
-          (phone && lastPhone && phone.replace(/\D/g, '') === lastPhone.replace(/\D/g, ''));
+        const lastRecipientType = lastItem.recipientType || lastItem.recipient_type || (lastPhone && lastPhone.includes('@g.us') ? 'GROUP' : 'INDIVIDUAL');
+        const lastGroupJid = lastItem.groupJid || lastItem.group_jid || (lastRecipientType === 'GROUP' ? lastPhone : null);
 
-        if (isSameContact) {
-          // Mesmo contato dentro do mesmo disparo/fluxo: delay mínimo de segurança (1s)
+        let isSameDestination = false;
+        if (isGroupItem || lastRecipientType === 'GROUP') {
+          isSameDestination = Boolean(groupJid && lastGroupJid && groupJid === lastGroupJid);
+        } else {
+          isSameDestination =
+            (contactId && lastContactId && contactId === lastContactId) ||
+            (phone && lastPhone && phone.replace(/\D/g, '') === lastPhone.replace(/\D/g, ''));
+        }
+
+        if (isSameDestination) {
+          // Mesmo destino: delay mínimo de segurança (1s)
           scheduledAt = new Date(baseTime + 1000);
         } else {
-          // Contato diferente: aplica a cadência anti-bloqueio configurada!
+          // Destinatário diferente: aplica cadência anti-bloqueio configurada!
           let delaySeconds = fixedDelay;
           if (useRandom) {
             delaySeconds = Math.floor(Math.random() * (maxDelay - minDelay + 1)) + minDelay;
@@ -259,7 +278,7 @@ export class WhatsappQueueService {
           scheduledAt = new Date(baseTime + delaySeconds * 1000);
         }
       } else {
-        // Fila estava vazia: primeiro contato dispara imediatamente
+        // Fila estava vazia: primeiro disparo imediato
         scheduledAt = new Date(nowTime);
       }
     }
@@ -279,6 +298,9 @@ export class WhatsappQueueService {
             contactId: contactId || null,
             phone,
             contactName: contactName || null,
+            recipientType,
+            groupJid: groupJid || null,
+            groupEnrollmentId: groupEnrollmentId || null,
             messageType,
             text: text || null,
             mediaUrl: mediaUrl || null,
@@ -312,10 +334,11 @@ export class WhatsappQueueService {
       `
       INSERT INTO whatsapp_queue (
         id, tenant_id, whatsapp_instance_id, contact_id, phone, contact_name,
+        recipient_type, group_jid, group_enrollment_id,
         message_type, text, media_url, media_base64, media_mime_type, media_file_name,
         caption, blocks, variables, enrollment_id, node_id, automation_id,
         status, scheduled_at, attempts, max_attempts, created_at, updated_at
-      ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'PENDING', ?, 0, ?, CURRENT_TIMESTAMP, CURRENT_TIMESTAMP)
+      ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'PENDING', ?, 0, ?, CURRENT_TIMESTAMP, CURRENT_TIMESTAMP)
       `,
       id,
       tenantId,
@@ -323,6 +346,9 @@ export class WhatsappQueueService {
       contactId || null,
       phone,
       contactName || null,
+      recipientType,
+      groupJid || null,
+      groupEnrollmentId || null,
       messageType,
       text || null,
       mediaUrl || null,
@@ -466,6 +492,49 @@ export class WhatsappQueueService {
     const rawBlocks = item.blocks ? (typeof item.blocks === 'string' ? JSON.parse(item.blocks) : item.blocks) : null;
     const rawVars = item.variables ? (typeof item.variables === 'string' ? JSON.parse(item.variables) : item.variables) : {};
 
+    const isGroup = item.recipientType === 'GROUP' || (item.phone && item.phone.includes('@g.us'));
+    if (isGroup) {
+      const tenantId = item.tenantId || item.tenant_id;
+      const jid = item.groupJid || item.phone;
+      const instanceId = item.whatsappInstanceId || item.whatsapp_instance_id;
+
+      // Validação obrigatória e em tempo real de Administrador antes do envio
+      const check = await whatsappGroupService.verifyGroupEligibility(tenantId, jid, instanceId);
+      if (!check.eligible) {
+        const errorMsg = `Envio para grupo abortado: ${check.reason || 'Instância sem privilégios de administrador ou desconectada.'}`;
+        console.warn(`[WhatsappQueueService] ${errorMsg} (JID: ${jid})`);
+
+        await prisma.whatsappQueue.update({
+          where: { id: item.id },
+          data: {
+            status: 'FAILED',
+            errorMessage: errorMsg,
+            attempts: (item.attempts || 0) + 1,
+            updatedAt: new Date(),
+          },
+        }).catch(() => {});
+
+        const groupEnrollmentId = item.groupEnrollmentId || item.group_enrollment_id;
+        const nodeId = item.nodeId || item.node_id;
+        if (groupEnrollmentId && nodeId) {
+          await prisma.automationGroupStepLog.create({
+            data: {
+              enrollmentId: groupEnrollmentId,
+              groupId: check.group?.id || item.contactId || item.contact_id || item.id,
+              tenantId,
+              nodeId,
+              nodeType: 'whatsapp',
+              action: 'SEND_GROUP_WHATSAPP_FAILED',
+              status: 'FAILED',
+              details: JSON.stringify({ error: errorMsg, reason: check.reason }),
+            },
+          }).catch(() => {});
+        }
+
+        return; // Interrompe o envio para este grupo!
+      }
+    }
+
     let success = false;
     let errorMessage = '';
 
@@ -582,6 +651,33 @@ export class WhatsappQueueService {
           await automationEngine.advanceFromSubflowNode(enrollmentId, nodeId, tenantId, automationId);
         } catch (advErr: any) {
           console.error('[WhatsappQueueService] Erro ao avançar automação após envio:', advErr.message);
+        }
+      }
+
+      const groupEnrollmentId = item.groupEnrollmentId || item.group_enrollment_id;
+      if (nodeId && groupEnrollmentId) {
+        try {
+          await prisma.automationGroupStepLog.updateMany({
+            where: {
+              nodeId,
+              enrollmentId: groupEnrollmentId,
+              status: { in: ['QUEUED', 'PROCESSING'] },
+            },
+            data: {
+              status: 'SUCCESS',
+              details: JSON.stringify({
+                groupJid: item.phone,
+                sentAt: new Date().toISOString(),
+                queueItemId: item.id,
+              }),
+            },
+          });
+
+          // Avança dinamicamente para os próximos nós conectados no fluxo de grupo
+          const { automationEngine } = await import('@/services/automation/engine');
+          await automationEngine.advanceGroupNode(groupEnrollmentId, nodeId, tenantId, automationId);
+        } catch (advErr: any) {
+          console.error('[WhatsappQueueService] Erro ao avançar automação de grupo após envio:', advErr.message);
         }
       }
     } else {

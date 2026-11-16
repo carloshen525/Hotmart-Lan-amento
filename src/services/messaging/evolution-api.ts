@@ -1153,7 +1153,8 @@ export class EvolutionApiService {
     }
 
     try {
-      const cleanPhone = params.phone.replace(/\D/g, '');
+      const isGroup = (params.phone || '').includes('@g.us');
+      const cleanPhone = isGroup ? params.phone.trim() : params.phone.replace(/\D/g, '');
 
       // Substituição de variáveis
       let messageText = params.text || '';

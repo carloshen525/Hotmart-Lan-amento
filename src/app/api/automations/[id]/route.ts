@@ -380,6 +380,24 @@ export async function GET(request: Request, { params }: { params: { id: string }
       }
     }
 
+    if (automation.targetType === 'GROUP') {
+      const groupStats = await automationEngine.getGroupAutomationStats(params.id, tenantId);
+      return NextResponse.json({
+        automation: {
+          ...automation,
+          nodes: parsedNodes,
+          edges: parsedEdges,
+        },
+        stats: {
+          totalLeads: groupStats.totalGroups,
+          activeInSequence: groupStats.pendingCount + groupStats.processingCount,
+          exitedFromSequence: groupStats.completedCount + groupStats.failedCount,
+          nodeStats,
+          groupStats,
+        },
+      });
+    }
+
     return NextResponse.json({
       automation: {
         ...automation,
@@ -428,11 +446,16 @@ function stripMediaBase64FromNodes(nodes: any[]): any[] {
 // Helper para interpretar data/hora considerando o fuso horário de Brasília (UTC-3)
 function parseTargetDate(dateStr: string): number {
   if (!dateStr) return NaN;
-  if (/^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}(:\d{2})?$/.test(dateStr)) {
-    const withOffset = new Date(`${dateStr}-03:00`).getTime();
+  const clean = dateStr.trim();
+  if (/[Z+-]\d{2}(:?\d{2})?$/.test(clean) || clean.endsWith('Z')) {
+    return new Date(clean).getTime();
+  }
+  if (/^\d{4}-\d{2}-\d{2}[T ]\d{2}:\d{2}(:\d{2})?(\.\d+)?$/.test(clean)) {
+    const isoWithT = clean.replace(' ', 'T');
+    const withOffset = new Date(`${isoWithT}-03:00`).getTime();
     if (!isNaN(withOffset)) return withOffset;
   }
-  return new Date(dateStr).getTime();
+  return new Date(clean).getTime();
 }
 
 // Validação de segurança para temporizadores de data específica
@@ -445,7 +468,8 @@ function validateTimerNodes(nodes: any[]): string | null {
         return '❌ A data e hora selecionadas já passaram. Escolha um horário futuro.';
       }
       const targetTime = parseTargetDate(cfg.specificDate);
-      if (isNaN(targetTime) || targetTime <= Date.now()) {
+      // Tolerância de 60 segundos para evitar falsos-positivos na edição no mesmo minuto
+      if (isNaN(targetTime) || targetTime <= Date.now() - 60000) {
         return '❌ A data e hora selecionadas já passaram. Escolha um horário futuro.';
       }
     }
@@ -510,7 +534,7 @@ export async function PUT(request: Request, { params }: { params: { id: string }
           if (cfg.timerType === 'SPECIFIC_DATE' || cfg.delayType === 'specific_date' || cfg.specificDate) {
             if (cfg.specificDate) {
               const t = parseTargetDate(cfg.specificDate);
-              if (!isNaN(t) && t <= now) {
+              if (!isNaN(t) && t <= now - 60000) {
                 throw new Error('Existe um timer configurado para uma data/hora que já passou. Escolha um horário futuro antes de ativar.');
               }
             }
@@ -606,6 +630,19 @@ export async function PUT(request: Request, { params }: { params: { id: string }
       }
       updateData.triggerConfig = JSON.stringify(currentTrigger);
     }
+    if (body.targetType !== undefined) updateData.targetType = body.targetType;
+    if (body.targetGroupTags !== undefined) {
+      updateData.targetGroupTags = typeof body.targetGroupTags === 'string' ? body.targetGroupTags : JSON.stringify(body.targetGroupTags);
+    }
+    if (body.targetGroupIds !== undefined) {
+      updateData.targetGroupIds = typeof body.targetGroupIds === 'string' ? body.targetGroupIds : JSON.stringify(body.targetGroupIds);
+    }
+    if (body.whatsappInstanceId !== undefined) updateData.whatsappInstanceId = body.whatsappInstanceId;
+    if (body.delayBetweenGroups !== undefined) updateData.delayBetweenGroups = Number(body.delayBetweenGroups) || 30;
+    if (body.useRandomDelay !== undefined) updateData.useRandomDelay = Boolean(body.useRandomDelay);
+    if (body.minDelaySeconds !== undefined) updateData.minDelaySeconds = Number(body.minDelaySeconds) || 20;
+    if (body.maxDelaySeconds !== undefined) updateData.maxDelaySeconds = Number(body.maxDelaySeconds) || 45;
+
     if (body.nodes !== undefined) {
       updateData.nodes = JSON.stringify(stripMediaBase64FromNodes(body.nodes));
     }
@@ -617,11 +654,17 @@ export async function PUT(request: Request, { params }: { params: { id: string }
     });
 
     if (automation.status === 'ACTIVE') {
-      // Dispara a sincronização e avanço de leads em background de forma assíncrona,
-      // respondendo imediatamente para que a ativação seja instantânea (< 50ms)
-      automationEngine.syncExistingLeadsForAutomation(params.id, tenantId).catch((err) => {
-        console.error('[Automation Engine] Background sync error:', err);
-      });
+      if (automation.targetType === 'GROUP') {
+        automationEngine.enrollGroupsByAutomation(params.id).catch((err) => {
+          console.error('[Automation Engine] Background group enrollment error:', err);
+        });
+      } else {
+        // Dispara a sincronização e avanço de leads em background de forma assíncrona,
+        // respondendo imediatamente para que a ativação seja instantânea (< 50ms)
+        automationEngine.syncExistingLeadsForAutomation(params.id, tenantId).catch((err) => {
+          console.error('[Automation Engine] Background sync error:', err);
+        });
+      }
     }
 
     return NextResponse.json({ success: true, automation });

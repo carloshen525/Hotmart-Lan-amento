@@ -20,12 +20,19 @@ export async function GET() {
         description: true,
         status: true,
         triggerType: true,
+        targetType: true,
+        targetGroupTags: true,
+        targetGroupIds: true,
+        whatsappInstanceId: true,
+        delayBetweenGroups: true,
+        useRandomDelay: true,
         updatedAt: true,
         createdAt: true,
         nodes: true,
         _count: {
           select: {
             enrollments: true,
+            groupEnrollments: true,
             scheduledJobs: true,
           },
         },
@@ -71,6 +78,12 @@ export async function GET() {
         description: a.description,
         status: a.status,
         triggerType: a.triggerType,
+        targetType: a.targetType || 'INDIVIDUAL',
+        targetGroupTags: a.targetGroupTags,
+        targetGroupIds: a.targetGroupIds,
+        whatsappInstanceId: a.whatsappInstanceId,
+        delayBetweenGroups: a.delayBetweenGroups,
+        useRandomDelay: a.useRandomDelay,
         updatedAt: a.updatedAt,
         createdAt: a.createdAt,
         stagesCount,
@@ -89,7 +102,19 @@ export async function POST(request: Request) {
   try {
     const tenantId = await getActiveTenantId();
     const body = await request.json();
-    const { name, description, shareCode } = body;
+    const {
+      name,
+      description,
+      shareCode,
+      targetType = 'INDIVIDUAL',
+      targetGroupTags,
+      targetGroupIds,
+      whatsappInstanceId,
+      delayBetweenGroups = 30,
+      useRandomDelay = true,
+      minDelaySeconds = 20,
+      maxDelaySeconds = 45,
+    } = body;
     let { triggerType, triggerConfig, nodes, edges } = body;
 
     if (!name) {
@@ -120,7 +145,7 @@ export async function POST(request: Request) {
       }
     }
 
-    const defaultNodes = [
+    const defaultIndividualNodes = [
       {
         id: 'node_1',
         type: 'trigger',
@@ -148,6 +173,35 @@ export async function POST(request: Request) {
       },
     ];
 
+    const defaultGroupNodes = [
+      {
+        id: 'node_1',
+        type: 'trigger',
+        position: { x: 250, y: 50 },
+        data: {
+          label: 'Gatilho: Grupos Selecionados',
+          type: 'trigger',
+          subtype: 'GROUP_TRIGGER',
+          config: triggerConfig || { targetTags: targetGroupTags || [] },
+        },
+      },
+      {
+        id: 'node_2',
+        type: 'whatsapp',
+        position: { x: 250, y: 180 },
+        data: {
+          label: 'Disparo de WhatsApp no Grupo',
+          type: 'whatsapp',
+          subtype: 'SEND_GROUP_WHATSAPP',
+          config: {
+            text: 'Olá pessoal! Comunicado importante no grupo.',
+            messageType: 'text',
+          },
+        },
+      },
+    ];
+
+    const chosenDefaultNodes = targetType === 'GROUP' ? defaultGroupNodes : defaultIndividualNodes;
     const defaultEdges = [{ id: 'e1-2', source: 'node_1', target: 'node_2' }];
 
     const automation = await prisma.automation.create({
@@ -156,9 +210,17 @@ export async function POST(request: Request) {
         name,
         description,
         status: 'DRAFT',
-        triggerType: triggerType || 'TAG_ADDED',
+        triggerType: triggerType || (targetType === 'GROUP' ? 'GROUP_TRIGGER' : 'TAG_ADDED'),
         triggerConfig: JSON.stringify(triggerConfig || {}),
-        nodes: JSON.stringify(nodes || defaultNodes),
+        targetType,
+        targetGroupTags: targetGroupTags ? JSON.stringify(targetGroupTags) : null,
+        targetGroupIds: targetGroupIds ? JSON.stringify(targetGroupIds) : null,
+        whatsappInstanceId: whatsappInstanceId || null,
+        delayBetweenGroups: Number(delayBetweenGroups) || 30,
+        useRandomDelay: Boolean(useRandomDelay),
+        minDelaySeconds: Number(minDelaySeconds) || 20,
+        maxDelaySeconds: Number(maxDelaySeconds) || 45,
+        nodes: JSON.stringify(nodes || chosenDefaultNodes),
         edges: JSON.stringify(edges || defaultEdges),
       },
     });

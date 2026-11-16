@@ -1,16 +1,22 @@
 import { prisma } from '@/lib/prisma';
 import { messageManager } from '../messaging';
 import { WhatsappQueueService } from '@/services/whatsapp/queue.service';
+import { whatsappGroupService } from '@/services/whatsapp/group.service';
 import { WorkflowNode, WorkflowEdge } from './types';
 
 // Helper para interpretar data/hora considerando o fuso horário de Brasília (UTC-3)
 function parseTargetDate(dateStr: string): number {
   if (!dateStr) return NaN;
-  if (/^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}(:\d{2})?$/.test(dateStr)) {
-    const withOffset = new Date(`${dateStr}-03:00`).getTime();
+  const clean = dateStr.trim();
+  if (/[Z+-]\d{2}(:?\d{2})?$/.test(clean) || clean.endsWith('Z')) {
+    return new Date(clean).getTime();
+  }
+  if (/^\d{4}-\d{2}-\d{2}[T ]\d{2}:\d{2}(:\d{2})?(\.\d+)?$/.test(clean)) {
+    const isoWithT = clean.replace(' ', 'T');
+    const withOffset = new Date(`${isoWithT}-03:00`).getTime();
     if (!isNaN(withOffset)) return withOffset;
   }
-  return new Date(dateStr).getTime();
+  return new Date(clean).getTime();
 }
 
 export class AutomationEngine {
@@ -1512,6 +1518,504 @@ export class AutomationEngine {
     });
 
     return result.count;
+  }
+
+  /**
+   * Sincroniza e inscreve todos os grupos elegíveis configurados para uma automação de grupos
+   */
+  async enrollGroupsByAutomation(automationId: string): Promise<{ totalGroups: number; enrolledCount: number }> {
+    const automation = await prisma.automation.findUnique({
+      where: { id: automationId },
+    });
+
+    if (!automation || automation.status !== 'ACTIVE' || (automation as any).targetType !== 'GROUP') {
+      return { totalGroups: 0, enrolledCount: 0 };
+    }
+
+    const tenantId = automation.tenantId;
+
+    // 1. Grupos elegíveis para este tenant (onde a instância conectada é administradora confirmada)
+    const where: any = {
+      tenantId,
+      isEligible: true, // REGRA FUNDAMENTAL: Apenas grupos onde é admin confirmado!
+      status: 'ACTIVE',
+    };
+
+    if ((automation as any).whatsappInstanceId) {
+      where.whatsappInstanceId = (automation as any).whatsappInstanceId;
+    }
+
+    // 2. Filtro por Tags de Grupos
+    let targetTags: string[] = [];
+    try {
+      if ((automation as any).targetGroupTags) {
+        targetTags = JSON.parse((automation as any).targetGroupTags);
+      }
+    } catch {}
+
+    // 3. Filtro por Seleção Manual de Grupos
+    let manualGroupIds: string[] = [];
+    try {
+      if ((automation as any).targetGroupIds) {
+        manualGroupIds = JSON.parse((automation as any).targetGroupIds);
+      }
+    } catch {}
+
+    // Aplica filtros combinados
+    if (targetTags.length > 0) {
+      where.tags = {
+        some: {
+          tag: {
+            OR: [
+              { id: { in: targetTags } },
+              { name: { in: targetTags } },
+            ],
+          },
+        },
+      };
+    }
+
+    if (manualGroupIds.length > 0) {
+      where.OR = [
+        { id: { in: manualGroupIds } },
+        { jid: { in: manualGroupIds } },
+      ];
+    }
+
+    const eligibleGroups = await prisma.whatsappGroup.findMany({
+      where,
+      include: {
+        whatsappInstance: true,
+        tags: { include: { tag: true } },
+      },
+    });
+
+    let enrolledCount = 0;
+
+    for (const group of eligibleGroups) {
+      try {
+        const res = await this.enrollGroup(automationId, group.id);
+        if (res && (res.started || res.alreadyEnrolled)) {
+          enrolledCount++;
+        }
+      } catch (err: any) {
+        console.error(`[AutomationEngine] Erro ao inscrever grupo ${group.name} (${group.jid}):`, err.message);
+      }
+    }
+
+    return {
+      totalGroups: eligibleGroups.length,
+      enrolledCount,
+    };
+  }
+
+  /**
+   * Inscreve um grupo individual em um fluxo de automação de grupos
+   */
+  async enrollGroup(automationId: string, groupId: string, metadata: Record<string, any> = {}) {
+    const automation = await prisma.automation.findUnique({
+      where: { id: automationId },
+    });
+
+    if (!automation) throw new Error('Automação não encontrada');
+    if (automation.status !== 'ACTIVE') {
+      return { skipped: true, reason: 'Automação não está ativa' };
+    }
+
+    const group = await prisma.whatsappGroup.findUnique({
+      where: { id: groupId },
+      include: { whatsappInstance: true },
+    });
+
+    if (!group) throw new Error('Grupo não encontrado');
+    if (!group.isEligible || group.status !== 'ACTIVE') {
+      return { skipped: true, reason: 'Grupo não é elegível (instância não é administradora ou saiu do grupo)' };
+    }
+
+    // Regra: Não duplicar execuções para o mesmo grupo no mesmo fluxo
+    const existingEnrollment = await prisma.automationGroupEnrollment.findUnique({
+      where: {
+        automationId_groupId: {
+          automationId,
+          groupId,
+        },
+      },
+    });
+
+    if (existingEnrollment) {
+      // Se já estava concluído, verifica se foram adicionadas novas etapas ao fluxo!
+      await this.checkAndAdvanceNewGroupNodes(existingEnrollment.id, automation);
+      return { enrollmentId: existingEnrollment.id, alreadyEnrolled: true };
+    }
+
+    // Cria a inscrição do grupo
+    const enrollment = await prisma.automationGroupEnrollment.create({
+      data: {
+        automationId,
+        groupId,
+        tenantId: automation.tenantId,
+        status: 'ACTIVE',
+        metadata: JSON.stringify(metadata),
+      },
+    });
+
+    // Encontra nós do fluxo
+    const nodes: WorkflowNode[] = JSON.parse(automation.nodes || '[]');
+    const edges: WorkflowEdge[] = JSON.parse(automation.edges || '[]');
+
+    const triggerNode = nodes.find((n) => n.data?.type === 'trigger') || nodes[0];
+    if (!triggerNode) {
+      await prisma.automationGroupEnrollment.update({
+        where: { id: enrollment.id },
+        data: { status: 'COMPLETED', completedAt: new Date() },
+      });
+      return { enrollmentId: enrollment.id, completed: true };
+    }
+
+    // Registra log do gatilho para o grupo
+    await prisma.automationGroupStepLog.create({
+      data: {
+        enrollmentId: enrollment.id,
+        groupId,
+        tenantId: automation.tenantId,
+        nodeId: triggerNode.id,
+        nodeType: 'trigger',
+        action: triggerNode.data?.subtype || 'TRIGGER_GROUP_FIRED',
+        status: 'SUCCESS',
+        details: JSON.stringify({ trigger: triggerNode.data?.label || 'Gatilho de Grupo' }),
+      },
+    });
+
+    // Percorre os nós conectados ao gatilho
+    const outgoingEdges = edges.filter((e) => e.source === triggerNode.id);
+    for (const edge of outgoingEdges) {
+      await this.executeGroupNode(enrollment.id, edge.target, automation.tenantId);
+    }
+
+    return { enrollmentId: enrollment.id, started: true };
+  }
+
+  /**
+   * Executa um nó da automação para o grupo inscrito
+   */
+  async executeGroupNode(enrollmentId: string, nodeId: string, tenantId: string): Promise<void> {
+    const enrollment = await prisma.automationGroupEnrollment.findUnique({
+      where: { id: enrollmentId },
+      include: {
+        automation: true,
+        group: {
+          include: { whatsappInstance: true },
+        },
+      },
+    });
+
+    if (!enrollment || enrollment.status === 'CANCELLED' || enrollment.status === 'COMPLETED') {
+      return;
+    }
+
+    const { automation, group } = enrollment;
+    const nodes: WorkflowNode[] = JSON.parse(automation.nodes || '[]');
+    const edges: WorkflowEdge[] = JSON.parse(automation.edges || '[]');
+
+    const node = nodes.find((n) => n.id === nodeId);
+    if (!node) return;
+
+    // Regra: Evita reexecução do mesmo nó que já foi executado com sucesso para este grupo
+    const alreadyLogged = await prisma.automationGroupStepLog.findFirst({
+      where: {
+        enrollmentId,
+        nodeId,
+        status: 'SUCCESS',
+      },
+    });
+
+    if (alreadyLogged) {
+      // Já foi concluído: avança diretamente para as próximas etapas
+      const outgoingEdges = edges.filter((e) => e.source === nodeId);
+      for (const edge of outgoingEdges) {
+        await this.executeGroupNode(enrollmentId, edge.target, tenantId);
+      }
+      return;
+    }
+
+    // Atualiza o nó atual do grupo
+    await prisma.automationGroupEnrollment.update({
+      where: { id: enrollmentId },
+      data: { currentNodeId: nodeId },
+    });
+
+    const nodeType = node.data?.type || node.type;
+
+    // 1. Nó do tipo TIMER
+    if (nodeType === 'timer' || nodeType === 'delay') {
+      const config = node.data?.config || {};
+      const targetTimeStr = config.targetDate || config.targetTime;
+      const targetTimestamp = parseTargetDate(targetTimeStr);
+      const now = Date.now();
+
+      if (targetTimestamp && !isNaN(targetTimestamp) && targetTimestamp > now) {
+        // Horário futuro: grupo entra em WAITING até que o timer seja atingido
+        await prisma.automationGroupEnrollment.update({
+          where: { id: enrollmentId },
+          data: { status: 'WAITING', currentNodeId: nodeId },
+        });
+
+        await prisma.automationGroupStepLog.create({
+          data: {
+            enrollmentId,
+            groupId: group.id,
+            tenantId,
+            nodeId,
+            nodeType: 'timer',
+            action: 'WAIT_TIMER',
+            status: 'SUCCESS',
+            details: JSON.stringify({ targetDate: targetTimeStr, scheduledFor: new Date(targetTimestamp).toISOString() }),
+          },
+        });
+        return; // Aguarda o horário
+      }
+
+      // Se o horário já chegou ou é atraso curto:
+      await prisma.automationGroupStepLog.create({
+        data: {
+          enrollmentId,
+          groupId: group.id,
+          tenantId,
+          nodeId,
+          nodeType: 'timer',
+          action: 'TIMER_PASSED',
+          status: 'SUCCESS',
+          details: JSON.stringify({ passedAt: new Date().toISOString() }),
+        },
+      });
+
+      const outgoingEdges = edges.filter((e) => e.source === nodeId);
+      for (const edge of outgoingEdges) {
+        await this.executeGroupNode(enrollmentId, edge.target, tenantId);
+      }
+      return;
+    }
+
+    // 2. Nó de Envio de WHATSAPP no Grupo
+    if (nodeType === 'whatsapp') {
+      const config = node.data?.config || {};
+
+      // Validação obrigatória de administrador antes de enfileirar
+      const check = await whatsappGroupService.verifyGroupEligibility(
+        tenantId,
+        group.jid,
+        (automation as any).whatsappInstanceId || group.whatsappInstanceId
+      );
+
+      if (!check.eligible) {
+        await prisma.automationGroupStepLog.create({
+          data: {
+            enrollmentId,
+            groupId: group.id,
+            tenantId,
+            nodeId,
+            nodeType: 'whatsapp',
+            action: 'SEND_GROUP_WHATSAPP_ABORTED',
+            status: 'FAILED',
+            details: JSON.stringify({ error: check.reason || 'Instância não é administradora do grupo' }),
+          },
+        });
+
+        await prisma.automationGroupEnrollment.update({
+          where: { id: enrollmentId },
+          data: { status: 'FAILED' },
+        });
+        return;
+      }
+
+      // Cria log em status QUEUED
+      await prisma.automationGroupStepLog.create({
+        data: {
+          enrollmentId,
+          groupId: group.id,
+          tenantId,
+          nodeId,
+          nodeType: 'whatsapp',
+          action: 'QUEUE_GROUP_WHATSAPP',
+          status: 'QUEUED',
+          details: JSON.stringify({
+            groupJid: group.jid,
+            text: (config.text || config.caption || '').slice(0, 100),
+          }),
+        },
+      });
+
+      // Enfileira mensagem para o grupo na fila persistente com delay entre grupos
+      await WhatsappQueueService.enqueue({
+        tenantId,
+        whatsappInstanceId: (automation as any).whatsappInstanceId || group.whatsappInstanceId,
+        phone: group.jid, // JID do grupo
+        contactName: group.name,
+        recipientType: 'GROUP',
+        groupJid: group.jid,
+        groupEnrollmentId: enrollmentId,
+        nodeId,
+        automationId: automation.id,
+        text: config.text || config.caption || '',
+        messageType: config.mediaUrl ? (config.messageType || 'image') : 'text',
+        mediaUrl: config.mediaUrl,
+        mediaFileName: config.mediaFileName,
+        caption: config.caption,
+        blocks: config.blocks,
+        fixedDelaySeconds: (automation as any).delayBetweenGroups ?? 30,
+        useRandomDelay: (automation as any).useRandomDelay ?? true,
+        minDelaySeconds: (automation as any).minDelaySeconds ?? 20,
+        maxDelaySeconds: (automation as any).maxDelaySeconds ?? 45,
+      });
+
+      return; // A conclusão e avanço acontecem quando a mensagem é enviada pela fila
+    }
+
+    // 3. Outros nós (Ações, Tags de Grupos, etc.)
+    await prisma.automationGroupStepLog.create({
+      data: {
+        enrollmentId,
+        groupId: group.id,
+        tenantId,
+        nodeId,
+        nodeType,
+        action: node.data?.subtype || 'STEP_EXECUTED',
+        status: 'SUCCESS',
+        details: JSON.stringify({ label: node.data?.label || nodeType }),
+      },
+    });
+
+    const outgoingEdges = edges.filter((e) => e.source === nodeId);
+    if (outgoingEdges.length === 0) {
+      await prisma.automationGroupEnrollment.update({
+        where: { id: enrollmentId },
+        data: { status: 'COMPLETED', completedAt: new Date() },
+      });
+      return;
+    }
+
+    for (const edge of outgoingEdges) {
+      await this.executeGroupNode(enrollmentId, edge.target, tenantId);
+    }
+  }
+
+  /**
+   * Avança a inscrição do grupo após a conclusão de um nó
+   */
+  async advanceGroupNode(enrollmentId: string, currentNodeId: string, tenantId: string, automationId?: string): Promise<void> {
+    const enrollment = await prisma.automationGroupEnrollment.findUnique({
+      where: { id: enrollmentId },
+      include: { automation: true },
+    });
+
+    if (!enrollment || enrollment.status === 'CANCELLED') return;
+
+    const automation = enrollment.automation;
+    const edges: WorkflowEdge[] = JSON.parse(automation.edges || '[]');
+
+    const outgoingEdges = edges.filter((e) => e.source === currentNodeId);
+
+    if (outgoingEdges.length === 0) {
+      await prisma.automationGroupEnrollment.update({
+        where: { id: enrollmentId },
+        data: { status: 'COMPLETED', completedAt: new Date(), currentNodeId: null },
+      });
+      return;
+    }
+
+    for (const edge of outgoingEdges) {
+      await this.executeGroupNode(enrollmentId, edge.target, tenantId);
+    }
+  }
+
+  /**
+   * Se novas etapas foram adicionadas ao fluxo de grupos, retoma a execução apenas para os novos nós
+   */
+  async checkAndAdvanceNewGroupNodes(enrollmentId: string, automation: any): Promise<void> {
+    const executedLogs = await prisma.automationGroupStepLog.findMany({
+      where: { enrollmentId, status: 'SUCCESS' },
+      select: { nodeId: true },
+    });
+
+    const executedNodeIds = new Set(executedLogs.map((l) => l.nodeId));
+    const nodes: WorkflowNode[] = JSON.parse(automation.nodes || '[]');
+    const edges: WorkflowEdge[] = JSON.parse(automation.edges || '[]');
+
+    const unexecutedConnectedNodes: string[] = [];
+
+    for (const edge of edges) {
+      if (executedNodeIds.has(edge.source) && !executedNodeIds.has(edge.target)) {
+        unexecutedConnectedNodes.push(edge.target);
+      }
+    }
+
+    if (unexecutedConnectedNodes.length > 0) {
+      await prisma.automationGroupEnrollment.update({
+        where: { id: enrollmentId },
+        data: { status: 'ACTIVE', completedAt: null },
+      });
+
+      for (const targetId of unexecutedConnectedNodes) {
+        await this.executeGroupNode(enrollmentId, targetId, automation.tenantId);
+      }
+    }
+  }
+
+  /**
+   * Retorna estatísticas detalhadas de execução para o painel de acompanhamento de automação em grupos
+   */
+  async getGroupAutomationStats(automationId: string, tenantId: string) {
+    const enrollments = await prisma.automationGroupEnrollment.findMany({
+      where: { automationId, tenantId },
+      include: {
+        group: {
+          select: {
+            id: true,
+            name: true,
+            jid: true,
+            pictureUrl: true,
+            participantsCount: true,
+            isAdmin: true,
+            adminRole: true,
+            status: true,
+          },
+        },
+        stepLogs: {
+          orderBy: { executedAt: 'desc' },
+          take: 1,
+        },
+      },
+    });
+
+    const total = enrollments.length;
+    let pending = 0;
+    let processing = 0;
+    let completed = 0;
+    let failed = 0;
+
+    for (const e of enrollments) {
+      if (e.status === 'COMPLETED') completed++;
+      else if (e.status === 'FAILED') failed++;
+      else if (e.status === 'WAITING' || e.status === 'PENDING') pending++;
+      else processing++;
+    }
+
+    return {
+      totalGroups: total,
+      pendingCount: pending,
+      processingCount: processing,
+      completedCount: completed,
+      failedCount: failed,
+      enrollments: enrollments.map((e) => ({
+        id: e.id,
+        group: e.group,
+        status: e.status,
+        currentNodeId: e.currentNodeId,
+        enteredAt: e.enteredAt,
+        completedAt: e.completedAt,
+        lastStep: e.stepLogs[0] || null,
+      })),
+    };
   }
 }
 

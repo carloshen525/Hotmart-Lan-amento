@@ -34,11 +34,15 @@ interface Automation {
   status: string;
   triggerType: string;
   triggerConfig?: string;
+  targetType?: 'INDIVIDUAL' | 'GROUP';
+  targetGroupTags?: string;
+  targetGroupIds?: string;
   stagesCount?: number;
   mediaCount?: number;
   updatedAt: string;
   _count: {
     enrollments: number;
+    groupEnrollments?: number;
     scheduledJobs: number;
   };
 }
@@ -65,6 +69,19 @@ export default function AutomationsListPage() {
   const [selectedTemplate, setSelectedTemplate] = useState<AutomationTemplate | null>(null);
   const [creating, setCreating] = useState(false);
   const [copiedCodeId, setCopiedCodeId] = useState<string | null>(null);
+  const [filterType, setFilterType] = useState<'ALL' | 'INDIVIDUAL' | 'GROUP'>('ALL');
+  const [modalTargetType, setModalTargetType] = useState<'INDIVIDUAL' | 'GROUP'>('INDIVIDUAL');
+  const [availableGroupTags, setAvailableGroupTags] = useState<{ id: string; name: string; color: string }[]>([]);
+  const [selectedGroupTags, setSelectedGroupTags] = useState<string[]>([]);
+
+  useEffect(() => {
+    fetch('/api/groups/tags')
+      .then((res) => res.json())
+      .then((data) => {
+        if (data.tags) setAvailableGroupTags(data.tags);
+      })
+      .catch(() => {});
+  }, []);
 
   const fetchAutomations = () => {
     setLoading(true);
@@ -150,6 +167,8 @@ export default function AutomationsListPage() {
     try {
       let bodyData: any = {
         name: flowName.trim(),
+        targetType: modalTargetType,
+        targetGroupTags: modalTargetType === 'GROUP' && selectedGroupTags.length > 0 ? JSON.stringify(selectedGroupTags) : undefined,
       };
 
       if (modalTab === 'TEMPLATES' && selectedTemplate) {
@@ -255,16 +274,54 @@ export default function AutomationsListPage() {
         </button>
       </div>
 
+      {/* Filtros por Modalidade */}
+      <div className="flex items-center gap-2 border-b border-slate-200 pb-3">
+        <button
+          onClick={() => setFilterType('ALL')}
+          className={`px-3 py-1.5 rounded-lg text-xs font-semibold transition-colors cursor-pointer ${
+            filterType === 'ALL'
+              ? 'bg-slate-900 text-white'
+              : 'bg-slate-100 text-slate-600 hover:bg-slate-200'
+          }`}
+        >
+          Todas ({automations.length})
+        </button>
+        <button
+          onClick={() => setFilterType('INDIVIDUAL')}
+          className={`px-3 py-1.5 rounded-lg text-xs font-semibold transition-colors cursor-pointer ${
+            filterType === 'INDIVIDUAL'
+              ? 'bg-indigo-600 text-white'
+              : 'bg-slate-100 text-slate-600 hover:bg-slate-200'
+          }`}
+        >
+          👤 Individuais ({automations.filter((a) => a.targetType !== 'GROUP').length})
+        </button>
+        <button
+          onClick={() => setFilterType('GROUP')}
+          className={`px-3 py-1.5 rounded-lg text-xs font-semibold transition-colors cursor-pointer ${
+            filterType === 'GROUP'
+              ? 'bg-purple-600 text-white'
+              : 'bg-slate-100 text-slate-600 hover:bg-slate-200'
+          }`}
+        >
+          👥 Grupos ({automations.filter((a) => a.targetType === 'GROUP').length})
+        </button>
+      </div>
+
       {/* Lista de Automações */}
       <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-6">
         {loading ? (
           <div className="col-span-full py-12 text-center text-slate-400 text-xs">
             Carregando fluxos de automação...
           </div>
-        ) : automations.length === 0 ? (
+        ) : automations.filter((a) => {
+            if (filterType === 'INDIVIDUAL') return a.targetType !== 'GROUP';
+            if (filterType === 'GROUP') return a.targetType === 'GROUP';
+            return true;
+          }).length === 0 ? (
           <div className="col-span-full py-16 text-center bg-white rounded-xl border border-slate-200 p-8">
             <Workflow className="w-10 h-10 text-slate-300 mx-auto mb-3" />
-            <h3 className="text-sm font-semibold text-slate-800">Nenhuma automação cadastrada</h3>
+            <h3 className="text-sm font-semibold text-slate-800">Nenhuma automação cadastrada nesta modalidade</h3>
             <p className="text-xs text-slate-500 mt-1 mb-4">
               Crie seu primeiro funil visual com disparos de WhatsApp e E-mail.
             </p>
@@ -281,24 +338,41 @@ export default function AutomationsListPage() {
             </button>
           </div>
         ) : (
-          automations.map((a) => (
+          automations
+            .filter((a) => {
+              if (filterType === 'INDIVIDUAL') return a.targetType !== 'GROUP';
+              if (filterType === 'GROUP') return a.targetType === 'GROUP';
+              return true;
+            })
+            .map((a) => (
             <div
               key={a.id}
               className="bg-white rounded-xl border border-slate-200 p-6 shadow-sm hover:shadow-md transition-shadow flex flex-col justify-between"
             >
               <div>
                 <div className="flex items-center justify-between mb-3">
-                  <span
-                    className={`px-2.5 py-0.5 rounded-full text-[10px] font-semibold uppercase tracking-wider ${
-                      a.status === 'ACTIVE'
-                        ? 'bg-emerald-50 text-emerald-700 border border-emerald-200'
-                        : a.status === 'PAUSED'
-                        ? 'bg-amber-50 text-amber-700 border border-amber-200'
-                        : 'bg-slate-100 text-slate-600'
-                    }`}
-                  >
-                    {a.status === 'ACTIVE' ? 'Ativa' : a.status === 'PAUSED' ? 'Pausada' : 'Rascunho'}
-                  </span>
+                  <div className="flex items-center gap-1.5">
+                    <span
+                      className={`px-2.5 py-0.5 rounded-full text-[10px] font-semibold uppercase tracking-wider ${
+                        a.status === 'ACTIVE'
+                          ? 'bg-emerald-50 text-emerald-700 border border-emerald-200'
+                          : a.status === 'PAUSED'
+                          ? 'bg-amber-50 text-amber-700 border border-amber-200'
+                          : 'bg-slate-100 text-slate-600'
+                      }`}
+                    >
+                      {a.status === 'ACTIVE' ? 'Ativa' : a.status === 'PAUSED' ? 'Pausada' : 'Rascunho'}
+                    </span>
+                    {a.targetType === 'GROUP' ? (
+                      <span className="px-2 py-0.5 rounded-full text-[10px] font-semibold bg-purple-50 text-purple-700 border border-purple-200 flex items-center gap-1">
+                        <Users className="w-3 h-3" /> Grupos
+                      </span>
+                    ) : (
+                      <span className="px-2 py-0.5 rounded-full text-[10px] font-semibold bg-slate-50 text-slate-700 border border-slate-200">
+                        Individual
+                      </span>
+                    )}
+                  </div>
 
                   <button
                     onClick={() => toggleStatus(a.id, a.status)}
@@ -327,10 +401,10 @@ export default function AutomationsListPage() {
 
                 <h3 className="font-bold text-slate-900 text-base leading-snug">{a.name}</h3>
                 <p className="text-xs text-slate-500 mt-1 line-clamp-2">
-                  {a.description || 'Automação para captura, engajamento e vendas de lançamentos.'}
+                  {a.description || (a.targetType === 'GROUP' ? 'Automação para disparo de mensagens e etapas em grupos do WhatsApp.' : 'Automação para captura, engajamento e vendas de lançamentos.')}
                 </p>
 
-                {/* Métricas resumidas de etapas, mídias e leads (Regra 1 e 6) */}
+                {/* Métricas resumidas de etapas, mídias e leads/grupos */}
                 <div className="flex items-center gap-4 mt-4 pt-3 border-t border-slate-100 text-xs text-slate-500 flex-wrap">
                   <div className="flex items-center gap-1.5" title="Quantidade de etapas configuradas">
                     <Layers className="w-3.5 h-3.5 text-indigo-500" />
@@ -342,10 +416,17 @@ export default function AutomationsListPage() {
                       <span>{a.mediaCount} mídia{a.mediaCount === 1 ? '' : 's'}</span>
                     </div>
                   )}
-                  <div className="flex items-center gap-1.5" title="Leads participantes do fluxo">
-                    <Users className="w-3.5 h-3.5 text-emerald-600" />
-                    <span>{a._count?.enrollments || 0} leads</span>
-                  </div>
+                  {a.targetType === 'GROUP' ? (
+                    <div className="flex items-center gap-1.5" title="Grupos participantes do fluxo">
+                      <Users className="w-3.5 h-3.5 text-purple-600" />
+                      <span>{a._count?.groupEnrollments || 0} grupos</span>
+                    </div>
+                  ) : (
+                    <div className="flex items-center gap-1.5" title="Leads participantes do fluxo">
+                      <Users className="w-3.5 h-3.5 text-emerald-600" />
+                      <span>{a._count?.enrollments || 0} leads</span>
+                    </div>
+                  )}
                 </div>
               </div>
 
@@ -462,6 +543,92 @@ export default function AutomationsListPage() {
                     )}
                   </button>
                 </div>
+              </div>
+
+              {/* Modalidade da Automação */}
+              <div className="space-y-2">
+                <label className="block text-xs font-bold text-slate-300">
+                  Modalidade do Fluxo
+                </label>
+                <div className="grid grid-cols-2 gap-3">
+                  <div
+                    onClick={() => setModalTargetType('INDIVIDUAL')}
+                    className={`p-3 rounded-xl cursor-pointer transition-all border ${
+                      modalTargetType === 'INDIVIDUAL'
+                        ? 'bg-indigo-950/60 border-indigo-500 text-white shadow-md'
+                        : 'bg-[#181c25] border-slate-800 text-slate-400 hover:border-slate-700'
+                    }`}
+                  >
+                    <div className="flex items-center gap-2 mb-1">
+                      <span className="text-base">👤</span>
+                      <h4 className="font-bold text-xs text-white">Automação Individual</h4>
+                    </div>
+                    <p className="text-[11px] text-slate-400 leading-tight">
+                      Disparo para contatos privados e leads individuais.
+                    </p>
+                  </div>
+
+                  <div
+                    onClick={() => setModalTargetType('GROUP')}
+                    className={`p-3 rounded-xl cursor-pointer transition-all border ${
+                      modalTargetType === 'GROUP'
+                        ? 'bg-purple-950/60 border-purple-500 text-white shadow-md'
+                        : 'bg-[#181c25] border-slate-800 text-slate-400 hover:border-slate-700'
+                    }`}
+                  >
+                    <div className="flex items-center gap-2 mb-1">
+                      <span className="text-base">👥</span>
+                      <h4 className="font-bold text-xs text-white">Automação em Grupos</h4>
+                    </div>
+                    <p className="text-[11px] text-slate-400 leading-tight">
+                      Disparo em grupos do WhatsApp onde o número é Admin.
+                    </p>
+                  </div>
+                </div>
+
+                {modalTargetType === 'GROUP' && (
+                  <div className="p-3 bg-purple-950/30 border border-purple-800/40 rounded-xl space-y-2 animate-in fade-in">
+                    <div className="flex items-center justify-between">
+                      <span className="text-[11px] font-semibold text-purple-300">
+                        Filtrar Grupos por Tags (Opcional):
+                      </span>
+                      <span className="text-[10px] text-purple-400">
+                        {selectedGroupTags.length === 0 ? 'Disparar em todos os grupos elegíveis' : `${selectedGroupTags.length} tag(s) selecionada(s)`}
+                      </span>
+                    </div>
+                    {availableGroupTags.length > 0 ? (
+                      <div className="flex flex-wrap gap-1.5 pt-1">
+                        {availableGroupTags.map((gt) => {
+                          const isSel = selectedGroupTags.includes(gt.name);
+                          return (
+                            <button
+                              key={gt.id}
+                              type="button"
+                              onClick={() => {
+                                if (isSel) {
+                                  setSelectedGroupTags(selectedGroupTags.filter((t) => t !== gt.name));
+                                } else {
+                                  setSelectedGroupTags([...selectedGroupTags, gt.name]);
+                                }
+                              }}
+                              className={`px-2.5 py-1 rounded-full text-[10px] font-semibold border transition-all cursor-pointer ${
+                                isSel
+                                  ? 'bg-purple-600 border-purple-400 text-white'
+                                  : 'bg-slate-900 border-slate-700 text-slate-400 hover:text-slate-200'
+                              }`}
+                            >
+                              {gt.name}
+                            </button>
+                          );
+                        })}
+                      </div>
+                    ) : (
+                      <p className="text-[10px] text-slate-500 italic">
+                        Nenhuma tag de grupo cadastrada ainda. O fluxo será enviado para todos os grupos onde o número é Administrador.
+                      </p>
+                    )}
+                  </div>
+                )}
               </div>
 
               {/* Conteúdo da Aba 'Criar campanha' */}

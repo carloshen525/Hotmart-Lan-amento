@@ -238,6 +238,9 @@ async function migrateWhatsappMultiTenant() {
         "media_file_name" TEXT,
         "media_size" INTEGER,
         "caption" TEXT,
+        "recipient_type" TEXT NOT NULL DEFAULT 'INDIVIDUAL',
+        "group_jid" TEXT,
+        "group_enrollment_id" TEXT,
         "status" TEXT NOT NULL DEFAULT 'PENDING',
         "attempts" INTEGER NOT NULL DEFAULT 0,
         "max_attempts" INTEGER NOT NULL DEFAULT 3,
@@ -256,6 +259,162 @@ async function migrateWhatsappMultiTenant() {
     );
     await prisma.$executeRawUnsafe(
       'CREATE INDEX IF NOT EXISTS "idx_whatsapp_queue_inst_status" ON "whatsapp_queue"("whatsapp_instance_id", "status");'
+    );
+
+    // 4.1. Garante novas colunas em whatsapp_queue se a tabela já existia
+    try {
+      const qCols = await prisma.$queryRawUnsafe('PRAGMA table_info("whatsapp_queue");');
+      const qColNames = new Set((qCols || []).map((c) => c.name));
+      if (!qColNames.has('recipient_type')) {
+        await prisma.$executeRawUnsafe('ALTER TABLE "whatsapp_queue" ADD COLUMN "recipient_type" TEXT NOT NULL DEFAULT \'INDIVIDUAL\';');
+      }
+      if (!qColNames.has('group_jid')) {
+        await prisma.$executeRawUnsafe('ALTER TABLE "whatsapp_queue" ADD COLUMN "group_jid" TEXT;');
+      }
+      if (!qColNames.has('group_enrollment_id')) {
+        await prisma.$executeRawUnsafe('ALTER TABLE "whatsapp_queue" ADD COLUMN "group_enrollment_id" TEXT;');
+      }
+    } catch {}
+
+    // 4.2. Garante novas colunas em Automation se a tabela já existia
+    try {
+      const aCols = await prisma.$queryRawUnsafe('PRAGMA table_info("Automation");');
+      const aColNames = new Set((aCols || []).map((c) => c.name));
+      if (!aColNames.has('targetType')) {
+        await prisma.$executeRawUnsafe('ALTER TABLE "Automation" ADD COLUMN "targetType" TEXT NOT NULL DEFAULT \'INDIVIDUAL\';');
+      }
+      if (!aColNames.has('targetGroupTags')) {
+        await prisma.$executeRawUnsafe('ALTER TABLE "Automation" ADD COLUMN "targetGroupTags" TEXT;');
+      }
+      if (!aColNames.has('targetGroupIds')) {
+        await prisma.$executeRawUnsafe('ALTER TABLE "Automation" ADD COLUMN "targetGroupIds" TEXT;');
+      }
+      if (!aColNames.has('whatsappInstanceId')) {
+        await prisma.$executeRawUnsafe('ALTER TABLE "Automation" ADD COLUMN "whatsappInstanceId" TEXT;');
+      }
+      if (!aColNames.has('delayBetweenGroups')) {
+        await prisma.$executeRawUnsafe('ALTER TABLE "Automation" ADD COLUMN "delayBetweenGroups" INTEGER NOT NULL DEFAULT 30;');
+      }
+      if (!aColNames.has('useRandomDelay')) {
+        await prisma.$executeRawUnsafe('ALTER TABLE "Automation" ADD COLUMN "useRandomDelay" BOOLEAN NOT NULL DEFAULT 1;');
+      }
+      if (!aColNames.has('minDelaySeconds')) {
+        await prisma.$executeRawUnsafe('ALTER TABLE "Automation" ADD COLUMN "minDelaySeconds" INTEGER NOT NULL DEFAULT 20;');
+      }
+      if (!aColNames.has('maxDelaySeconds')) {
+        await prisma.$executeRawUnsafe('ALTER TABLE "Automation" ADD COLUMN "maxDelaySeconds" INTEGER NOT NULL DEFAULT 45;');
+      }
+    } catch {}
+
+    // 5. whatsapp_groups
+    await prisma.$executeRawUnsafe(`
+      CREATE TABLE IF NOT EXISTS "whatsapp_groups" (
+        "id" TEXT NOT NULL PRIMARY KEY,
+        "tenant_id" TEXT NOT NULL,
+        "whatsapp_instance_id" TEXT NOT NULL,
+        "jid" TEXT NOT NULL,
+        "name" TEXT NOT NULL,
+        "picture_url" TEXT,
+        "participants_count" INTEGER NOT NULL DEFAULT 0,
+        "is_admin" BOOLEAN NOT NULL DEFAULT 0,
+        "admin_role" TEXT,
+        "status" TEXT NOT NULL DEFAULT 'ACTIVE',
+        "is_eligible" BOOLEAN NOT NULL DEFAULT 0,
+        "metadata" TEXT,
+        "last_synced_at" DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
+        "created_at" DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
+        "updated_at" DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
+        CONSTRAINT "whatsapp_groups_tenant_id_fkey" FOREIGN KEY ("tenant_id") REFERENCES "Tenant" ("id") ON DELETE CASCADE ON UPDATE CASCADE,
+        CONSTRAINT "whatsapp_groups_whatsapp_instance_id_fkey" FOREIGN KEY ("whatsapp_instance_id") REFERENCES "WhatsappInstance" ("id") ON DELETE CASCADE ON UPDATE CASCADE
+      );
+    `);
+    await prisma.$executeRawUnsafe(
+      'CREATE UNIQUE INDEX IF NOT EXISTS "whatsapp_groups_whatsapp_instance_id_jid_key" ON "whatsapp_groups"("whatsapp_instance_id", "jid");'
+    );
+    await prisma.$executeRawUnsafe(
+      'CREATE INDEX IF NOT EXISTS "whatsapp_groups_tenant_id_is_eligible_idx" ON "whatsapp_groups"("tenant_id", "is_eligible");'
+    );
+    await prisma.$executeRawUnsafe(
+      'CREATE INDEX IF NOT EXISTS "whatsapp_groups_tenant_id_status_idx" ON "whatsapp_groups"("tenant_id", "status");'
+    );
+
+    // 6. group_tags
+    await prisma.$executeRawUnsafe(`
+      CREATE TABLE IF NOT EXISTS "group_tags" (
+        "id" TEXT NOT NULL PRIMARY KEY,
+        "tenant_id" TEXT NOT NULL,
+        "name" TEXT NOT NULL,
+        "color" TEXT NOT NULL DEFAULT '#10b981',
+        "description" TEXT,
+        "created_at" DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
+        CONSTRAINT "group_tags_tenant_id_fkey" FOREIGN KEY ("tenant_id") REFERENCES "Tenant" ("id") ON DELETE CASCADE ON UPDATE CASCADE
+      );
+    `);
+    await prisma.$executeRawUnsafe(
+      'CREATE UNIQUE INDEX IF NOT EXISTS "group_tags_tenant_id_name_key" ON "group_tags"("tenant_id", "name");'
+    );
+
+    // 7. group_tag_on_groups
+    await prisma.$executeRawUnsafe(`
+      CREATE TABLE IF NOT EXISTS "group_tag_on_groups" (
+        "id" TEXT NOT NULL PRIMARY KEY,
+        "group_id" TEXT NOT NULL,
+        "tag_id" TEXT NOT NULL,
+        "added_at" DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
+        CONSTRAINT "group_tag_on_groups_group_id_fkey" FOREIGN KEY ("group_id") REFERENCES "whatsapp_groups" ("id") ON DELETE CASCADE ON UPDATE CASCADE,
+        CONSTRAINT "group_tag_on_groups_tag_id_fkey" FOREIGN KEY ("tag_id") REFERENCES "group_tags" ("id") ON DELETE CASCADE ON UPDATE CASCADE
+      );
+    `);
+    await prisma.$executeRawUnsafe(
+      'CREATE UNIQUE INDEX IF NOT EXISTS "group_tag_on_groups_group_id_tag_id_key" ON "group_tag_on_groups"("group_id", "tag_id");'
+    );
+
+    // 8. automation_group_enrollments
+    await prisma.$executeRawUnsafe(`
+      CREATE TABLE IF NOT EXISTS "automation_group_enrollments" (
+        "id" TEXT NOT NULL PRIMARY KEY,
+        "automation_id" TEXT NOT NULL,
+        "group_id" TEXT NOT NULL,
+        "tenant_id" TEXT NOT NULL,
+        "current_node_id" TEXT,
+        "status" TEXT NOT NULL DEFAULT 'ACTIVE',
+        "entered_at" DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
+        "completed_at" DATETIME,
+        "metadata" TEXT,
+        CONSTRAINT "automation_group_enrollments_automation_id_fkey" FOREIGN KEY ("automation_id") REFERENCES "Automation" ("id") ON DELETE CASCADE ON UPDATE CASCADE,
+        CONSTRAINT "automation_group_enrollments_group_id_fkey" FOREIGN KEY ("group_id") REFERENCES "whatsapp_groups" ("id") ON DELETE CASCADE ON UPDATE CASCADE,
+        CONSTRAINT "automation_group_enrollments_tenant_id_fkey" FOREIGN KEY ("tenant_id") REFERENCES "Tenant" ("id") ON DELETE CASCADE ON UPDATE CASCADE
+      );
+    `);
+    await prisma.$executeRawUnsafe(
+      'CREATE UNIQUE INDEX IF NOT EXISTS "automation_group_enrollments_automation_id_group_id_key" ON "automation_group_enrollments"("automation_id", "group_id");'
+    );
+    await prisma.$executeRawUnsafe(
+      'CREATE INDEX IF NOT EXISTS "automation_group_enrollments_tenant_id_status_idx" ON "automation_group_enrollments"("tenant_id", "status");'
+    );
+
+    // 9. automation_group_step_logs
+    await prisma.$executeRawUnsafe(`
+      CREATE TABLE IF NOT EXISTS "automation_group_step_logs" (
+        "id" TEXT NOT NULL PRIMARY KEY,
+        "enrollment_id" TEXT NOT NULL,
+        "group_id" TEXT NOT NULL,
+        "tenant_id" TEXT NOT NULL,
+        "node_id" TEXT NOT NULL,
+        "node_type" TEXT NOT NULL,
+        "action" TEXT NOT NULL,
+        "status" TEXT NOT NULL DEFAULT 'SUCCESS',
+        "details" TEXT,
+        "executed_at" DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
+        CONSTRAINT "automation_group_step_logs_enrollment_id_fkey" FOREIGN KEY ("enrollment_id") REFERENCES "automation_group_enrollments" ("id") ON DELETE CASCADE ON UPDATE CASCADE,
+        CONSTRAINT "automation_group_step_logs_group_id_fkey" FOREIGN KEY ("group_id") REFERENCES "whatsapp_groups" ("id") ON DELETE CASCADE ON UPDATE CASCADE
+      );
+    `);
+    await prisma.$executeRawUnsafe(
+      'CREATE INDEX IF NOT EXISTS "automation_group_step_logs_enrollment_id_idx" ON "automation_group_step_logs"("enrollment_id");'
+    );
+    await prisma.$executeRawUnsafe(
+      'CREATE INDEX IF NOT EXISTS "automation_group_step_logs_group_id_idx" ON "automation_group_step_logs"("group_id");'
     );
 
     console.log('[MIGRATION] Verificação de integridade e auto-healing concluídos com sucesso.');

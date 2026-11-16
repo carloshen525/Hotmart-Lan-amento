@@ -47,6 +47,9 @@ model Tenant {
   auditLogs          AuditLog[]
   whatsappInstances  WhatsappInstance[]
   whatsappQueue      WhatsappQueue[]
+  whatsappGroups     WhatsappGroup[]
+  groupTags          GroupTag[]
+  automationGroupEnrollments AutomationGroupEnrollment[]
   emailSettings      EmailSettings?
   emailLogs          EmailLog[]
   emailQueue         EmailQueue[]
@@ -143,6 +146,14 @@ model Automation {
   status      String                 @default("DRAFT") // DRAFT, ACTIVE, PAUSED
   triggerType String                 @default("TAG_ADDED") // CONTACT_CREATED, TAG_ADDED, HOTMART_EVENT, WEBHOOK, MANUAL
   triggerConfig String?              // JSON com detalhes do gatilho
+  targetType  String                 @default("INDIVIDUAL") // INDIVIDUAL (contatos privados), GROUP (grupos WhatsApp)
+  targetGroupTags String?            // JSON Array com nomes/IDs de tags de grupos
+  targetGroupIds  String?            // JSON Array com JIDs/IDs de grupos selecionados manualmente
+  whatsappInstanceId String?         // Instância de WhatsApp responsável pelos disparos do fluxo
+  delayBetweenGroups Int             @default(30) // Delay entre envios para grupos diferentes
+  useRandomDelay     Boolean         @default(true) // Se usa delay aleatório anti-bloqueio entre grupos
+  minDelaySeconds    Int             @default(20)
+  maxDelaySeconds    Int             @default(45)
   nodes       String                 @default("[]") // JSON do React Flow (nós, coordenadas, configurações)
   edges       String                 @default("[]") // JSON do React Flow (conexões)
   createdAt   DateTime               @default(now())
@@ -150,6 +161,7 @@ model Automation {
 
   tenant      Tenant                 @relation(fields: [tenantId], references: [id], onDelete: Cascade)
   enrollments AutomationEnrollment[]
+  groupEnrollments AutomationGroupEnrollment[]
   scheduledJobs ScheduledJob[]
 }
 
@@ -345,6 +357,7 @@ model WhatsappInstance {
 
   tenant          Tenant    @relation(fields: [tenantId], references: [id], onDelete: Cascade)
   whatsappQueue   WhatsappQueue[]
+  whatsappGroups  WhatsappGroup[]
   @@index([tenantId])
 }
 
@@ -367,6 +380,9 @@ model WhatsappQueue {
   caption            String?
   blocks             String?   // JSON com blocos de mensagens/mídias em sequência
   variables          String?   // JSON com variáveis de substituição
+  recipientType      String    @default("INDIVIDUAL") @map("recipient_type") // INDIVIDUAL | GROUP
+  groupJid           String?   @map("group_jid")
+  groupEnrollmentId  String?   @map("group_enrollment_id")
   enrollmentId       String?   @map("enrollment_id")
   nodeId             String?   @map("node_id")
   automationId       String?   @map("automation_id")
@@ -625,4 +641,110 @@ model FormWebhookEvent {
   @@map("form_webhook_events")
   @@index([tenantId, createdAt])
   @@index([integrationId, status])
+}
+
+// -------------------------------------------------------------
+// 8.2. GRUPOS DO WHATSAPP E AUTOMAÇÃO EM GRUPOS
+// -------------------------------------------------------------
+model WhatsappGroup {
+  id                 String                     @id @default(cuid())
+  tenantId           String                     @map("tenant_id")
+  whatsappInstanceId String                     @map("whatsapp_instance_id")
+  jid                String                     // Ex: "120363408925008004@g.us"
+  name               String                     // Nome do grupo
+  pictureUrl         String?                    @map("picture_url")
+  participantsCount  Int                        @default(0) @map("participants_count")
+  isAdmin            Boolean                    @default(false) @map("is_admin")
+  adminRole          String?                    @map("admin_role") // 'admin', 'superadmin', 'none', 'unverified'
+  status             String                     @default("ACTIVE") // 'ACTIVE', 'LEFT', 'UNVERIFIED', 'NOT_ADMIN'
+  isEligible         Boolean                    @default(false) @map("is_eligible") // REGRA FUNDAMENTAL: true ONLY if connected AND confirmed real admin
+  metadata           String?                    // JSON com dados adicionais (proprietário, comunidade, etc.)
+  lastSyncedAt       DateTime                   @default(now()) @map("last_synced_at")
+  createdAt          DateTime                   @default(now()) @map("created_at")
+  updatedAt          DateTime                   @updatedAt @map("updated_at")
+
+  tenant             Tenant                     @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+  whatsappInstance   WhatsappInstance           @relation(fields: [whatsappInstanceId], references: [id], onDelete: Cascade)
+  tags               GroupTagOnGroup[]
+  enrollments        AutomationGroupEnrollment[]
+  stepLogs           AutomationGroupStepLog[]
+
+  @@unique([whatsappInstanceId, jid])
+  @@index([tenantId, isEligible])
+  @@index([tenantId, status])
+  @@map("whatsapp_groups")
+}
+
+model GroupTag {
+  id          String            @id @default(cuid())
+  tenantId    String            @map("tenant_id")
+  name        String
+  color       String            @default("#10b981")
+  description String?
+  createdAt   DateTime          @default(now()) @map("created_at")
+
+  tenant      Tenant            @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+  groups      GroupTagOnGroup[]
+
+  @@unique([tenantId, name])
+  @@index([tenantId])
+  @@map("group_tags")
+}
+
+model GroupTagOnGroup {
+  id        String        @id @default(cuid())
+  groupId   String        @map("group_id")
+  tagId     String        @map("tag_id")
+  addedAt   DateTime      @default(now()) @map("added_at")
+
+  group     WhatsappGroup @relation(fields: [groupId], references: [id], onDelete: Cascade)
+  tag       GroupTag      @relation(fields: [tagId], references: [id], onDelete: Cascade)
+
+  @@unique([groupId, tagId])
+  @@index([groupId])
+  @@index([tagId])
+  @@map("group_tag_on_groups")
+}
+
+model AutomationGroupEnrollment {
+  id            String                   @id @default(cuid())
+  automationId  String                   @map("automation_id")
+  groupId       String                   @map("group_id")
+  tenantId      String                   @map("tenant_id")
+  currentNodeId String?                  @map("current_node_id")
+  status        String                   @default("ACTIVE") // ACTIVE, WAITING, COMPLETED, CANCELLED, FAILED
+  enteredAt     DateTime                 @default(now()) @map("entered_at")
+  completedAt   DateTime?                @map("completed_at")
+  metadata      String?                  // JSON
+
+  automation    Automation               @relation(fields: [automationId], references: [id], onDelete: Cascade)
+  group         WhatsappGroup            @relation(fields: [groupId], references: [id], onDelete: Cascade)
+  tenant        Tenant                   @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+  stepLogs      AutomationGroupStepLog[]
+
+  @@unique([automationId, groupId])
+  @@index([tenantId, status])
+  @@index([automationId, status])
+  @@map("automation_group_enrollments")
+}
+
+model AutomationGroupStepLog {
+  id           String                    @id @default(cuid())
+  enrollmentId String                    @map("enrollment_id")
+  groupId      String                    @map("group_id")
+  tenantId     String                    @map("tenant_id")
+  nodeId       String                    @map("node_id")
+  nodeType     String                    @map("node_type")
+  action       String
+  status       String                    @default("SUCCESS") // SUCCESS, SKIPPED, FAILED
+  details      String?                   // JSON
+  executedAt   DateTime                  @default(now()) @map("executed_at")
+
+  enrollment   AutomationGroupEnrollment @relation(fields: [enrollmentId], references: [id], onDelete: Cascade)
+  group        WhatsappGroup             @relation(fields: [groupId], references: [id], onDelete: Cascade)
+
+  @@index([enrollmentId])
+  @@index([groupId])
+  @@index([tenantId])
+  @@map("automation_group_step_logs")
 }

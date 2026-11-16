@@ -108,11 +108,27 @@ const getLocalDatetimeString = (date: Date = new Date()) => {
 // Helper para interpretar data/hora considerando o fuso horário de Brasília (UTC-3)
 function parseTargetDate(dateStr: string): number {
   if (!dateStr) return NaN;
-  if (/^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}(:\d{2})?$/.test(dateStr)) {
-    const withOffset = new Date(`${dateStr}-03:00`).getTime();
+  const clean = dateStr.trim();
+  if (/[Z+-]\d{2}(:?\d{2})?$/.test(clean) || clean.endsWith('Z')) {
+    return new Date(clean).getTime();
+  }
+  if (/^\d{4}-\d{2}-\d{2}[T ]\d{2}:\d{2}(:\d{2})?(\.\d+)?$/.test(clean)) {
+    const isoWithT = clean.replace(' ', 'T');
+    const withOffset = new Date(`${isoWithT}-03:00`).getTime();
     if (!isNaN(withOffset)) return withOffset;
   }
-  return new Date(dateStr).getTime();
+  return new Date(clean).getTime();
+}
+
+// Helper para evitar duplicação do telefone no rótulo da linha WhatsApp
+function formatWppInstanceLabel(inst: any): string {
+  if (!inst) return 'WhatsApp';
+  const name = (inst.name || 'WhatsApp').trim();
+  const phone = (inst.phone || '').trim();
+  if (phone && !name.includes(phone)) {
+    return `${name} (${phone})`;
+  }
+  return name;
 }
 
 export default function AutomationCanvasPage() {
@@ -197,6 +213,13 @@ export default function AutomationCanvasPage() {
   const [flowWhatsappInstanceId, setFlowWhatsappInstanceId] = useState<string>('');
   const [isFlowWppModalOpen, setIsFlowWppModalOpen] = useState(false);
   const [propagateWppToAllNodes, setPropagateWppToAllNodes] = useState(true);
+
+  // Modalidade de Automação (Individual vs Grupo) e Acompanhamento de Grupos
+  const [targetType, setTargetType] = useState<'INDIVIDUAL' | 'GROUP'>('INDIVIDUAL');
+  const [isGroupPanelOpen, setIsGroupPanelOpen] = useState(false);
+  const [groupStats, setGroupStats] = useState<any>(null);
+  const [loadingGroupStats, setLoadingGroupStats] = useState(false);
+  const [syncingGroups, setSyncingGroups] = useState(false);
 
   // Construtor Visual de E-mails
   const [isVisualEmailBuilderOpen, setIsVisualEmailBuilderOpen] = useState(false);
@@ -441,6 +464,7 @@ export default function AutomationCanvasPage() {
         if (data.automation) {
           setName(data.automation.name);
           setStatus(data.automation.status);
+          setTargetType(data.automation.targetType || 'INDIVIDUAL');
 
           let parsedTriggerConfig: any = {};
           try {
@@ -1031,7 +1055,7 @@ export default function AutomationCanvasPage() {
             pastTimerError = '⚠️ Existe um timer com data específica não configurada.';
           } else {
             const tDate = parseTargetDate(cfg.specificDate);
-            if (isNaN(tDate) || tDate <= nowTime) {
+            if (isNaN(tDate) || tDate <= nowTime - 60000) {
               hasPastTimer = true;
               pastTimerError = '❌ A data e hora selecionadas no timer já passaram. Escolha um horário futuro.';
             }
@@ -1331,6 +1355,39 @@ export default function AutomationCanvasPage() {
     } catch {}
 
     setIsFlowWppModalOpen(false);
+  };
+
+  // Funções para Painel de Acompanhamento de Grupos
+  const fetchGroupStats = async () => {
+    setLoadingGroupStats(true);
+    try {
+      const res = await fetch(`/api/automations/${automationId}/groups`);
+      const data = await res.json();
+      if (res.ok) {
+        setGroupStats(data);
+      }
+    } catch {}
+    setLoadingGroupStats(false);
+  };
+
+  const handleSyncAndEnrollGroups = async () => {
+    setSyncingGroups(true);
+    try {
+      const res = await fetch(`/api/automations/${automationId}/groups`, { method: 'POST' });
+      const data = await res.json();
+      if (res.ok) {
+        setSaveNotice(data.message || 'Grupos sincronizados e inscritos no fluxo!');
+        setTimeout(() => setSaveNotice(null), 4000);
+        await fetchGroupStats();
+      } else {
+        setSaveNotice(data.error || 'Erro ao sincronizar grupos');
+        setTimeout(() => setSaveNotice(null), 4000);
+      }
+    } catch {
+      setSaveNotice('Erro de conexão ao sincronizar grupos');
+      setTimeout(() => setSaveNotice(null), 4000);
+    }
+    setSyncingGroups(false);
   };
 
   // Aquecimento Modal Handler
@@ -2220,6 +2277,29 @@ export default function AutomationCanvasPage() {
             </span>
           )}
 
+          {/* Indicador de Modalidade de Grupos e Botão do Painel de Grupos */}
+          {targetType === 'GROUP' && (
+            <>
+              <span className="flex items-center gap-1.5 px-3 py-1.5 rounded-xl border border-purple-500/50 bg-purple-950/60 text-purple-300 text-xs font-semibold">
+                <Users className="w-3.5 h-3.5 text-purple-400" />
+                <span>Automação em Grupos</span>
+              </span>
+
+              <button
+                type="button"
+                onClick={() => {
+                  setIsGroupPanelOpen(true);
+                  fetchGroupStats();
+                }}
+                className="flex items-center gap-1.5 px-3 py-1.5 rounded-xl border border-purple-500/60 bg-[#1e152e] hover:bg-[#281c3e] text-purple-200 text-xs font-semibold transition-all cursor-pointer shadow-md shadow-purple-950/30"
+                title="Abrir painel de acompanhamento dos grupos inscritos nesta automação"
+              >
+                <Layers className="w-3.5 h-3.5 text-purple-400" />
+                <span>Painel de Grupos</span>
+              </button>
+            </>
+          )}
+
           {/* Botão WhatsApp do Fluxo */}
           <button
             type="button"
@@ -2234,7 +2314,7 @@ export default function AutomationCanvasPage() {
             <Smartphone className="w-3.5 h-3.5 text-emerald-400" />
             <span>
               {flowWhatsappInstanceId
-                ? `WhatsApp: ${availableWppInstances.find((i) => i.id === flowWhatsappInstanceId)?.name || 'Configurado'}`
+                ? `WhatsApp: ${formatWppInstanceLabel(availableWppInstances.find((i) => i.id === flowWhatsappInstanceId))}`
                 : 'WhatsApp do Fluxo'}
             </span>
           </button>
@@ -2891,14 +2971,14 @@ export default function AutomationCanvasPage() {
                     >
                       <option value="">
                         {flowWhatsappInstanceId
-                          ? `Usar WhatsApp padrão do Fluxo (${availableWppInstances.find((i) => i.id === flowWhatsappInstanceId)?.name || 'Configurado'})`
+                          ? `Usar WhatsApp padrão do Fluxo (${formatWppInstanceLabel(availableWppInstances.find((i) => i.id === flowWhatsappInstanceId))})`
                           : '-- Selecione um número de WhatsApp (Obrigatório) --'}
                       </option>
                       {availableWppInstances.map((inst) => {
                         const isOnline = inst.connected || inst.status === 'CONNECTED';
                         return (
                           <option key={inst.id} value={inst.id}>
-                            {inst.name || 'WhatsApp'} {inst.phone ? `(${inst.phone})` : ''} - {isOnline ? '🟢 Operacional' : '🔴 Desconectado'} {inst.isDefault ? '★ [Principal]' : ''}
+                            {formatWppInstanceLabel(inst)} - {isOnline ? '🟢 Operacional' : '🔴 Desconectado'} {inst.isDefault ? '★ [Principal]' : ''}
                           </option>
                         );
                       })}
@@ -3957,7 +4037,7 @@ export default function AutomationCanvasPage() {
                 <option value="">-- Selecione uma linha de WhatsApp --</option>
                 {availableWppInstances.map((inst) => (
                   <option key={inst.id} value={inst.id}>
-                    {inst.name || 'WhatsApp'} {inst.phone ? `(${inst.phone})` : ''} - {inst.connected ? '🟢 Conectado / Operacional' : '🔴 Desconectado'}
+                    {formatWppInstanceLabel(inst)} - {inst.connected ? '🟢 Conectado / Operacional' : '🔴 Desconectado'}
                   </option>
                 ))}
               </select>
@@ -4000,6 +4080,227 @@ export default function AutomationCanvasPage() {
                 className="px-5 py-2 bg-emerald-600 hover:bg-emerald-500 text-white font-bold text-xs rounded-xl shadow-lg shadow-emerald-900/30 transition-all cursor-pointer"
               >
                 Salvar Configuração
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* Modal / Painel de Acompanhamento de Automação em Grupos (Requisito 11) */}
+      {isGroupPanelOpen && (
+        <div className="fixed inset-0 z-50 bg-black/80 backdrop-blur-sm flex items-center justify-center p-4 overflow-y-auto">
+          <div className="bg-[#12141a] border border-slate-800 rounded-2xl w-full max-w-4xl max-h-[90vh] flex flex-col shadow-2xl animate-in zoom-in-95 duration-150">
+            {/* Cabeçalho */}
+            <div className="p-5 border-b border-slate-800 flex items-center justify-between">
+              <div className="flex items-center gap-3">
+                <div className="w-10 h-10 rounded-xl bg-purple-600/20 border border-purple-500/30 flex items-center justify-center text-purple-400">
+                  <Users className="w-5 h-5" />
+                </div>
+                <div>
+                  <h3 className="font-bold text-white text-base flex items-center gap-2">
+                    Acompanhamento de Automação em Grupos
+                    <span className="text-[10px] bg-purple-950/80 text-purple-300 border border-purple-700/60 px-2 py-0.5 rounded-full font-semibold">
+                      WhatsApp Groups
+                    </span>
+                  </h3>
+                  <p className="text-xs text-slate-400">
+                    Métricas em tempo real, etapas e status de execução por grupo elegível.
+                  </p>
+                </div>
+              </div>
+
+              <div className="flex items-center gap-2">
+                <button
+                  type="button"
+                  onClick={handleSyncAndEnrollGroups}
+                  disabled={syncingGroups}
+                  className="flex items-center gap-1.5 px-3 py-1.5 rounded-xl bg-purple-600 hover:bg-purple-500 disabled:opacity-50 text-white text-xs font-semibold shadow-md transition-all cursor-pointer"
+                  title="Busca grupos elegíveis e inscreve no fluxo"
+                >
+                  <RefreshCw className={`w-3.5 h-3.5 ${syncingGroups ? 'animate-spin' : ''}`} />
+                  <span>{syncingGroups ? 'Sincronizando...' : 'Sincronizar Grupos Elegíveis'}</span>
+                </button>
+                <button
+                  type="button"
+                  onClick={() => setIsGroupPanelOpen(false)}
+                  className="p-1.5 text-slate-400 hover:text-white rounded-lg hover:bg-slate-800 transition-colors"
+                >
+                  <X className="w-5 h-5" />
+                </button>
+              </div>
+            </div>
+
+            {/* Conteúdo com Scroll */}
+            <div className="p-6 overflow-y-auto space-y-6">
+              {/* Cards de Métricas */}
+              <div className="grid grid-cols-2 sm:grid-cols-5 gap-3">
+                <div className="bg-[#181c25] border border-slate-800 p-3.5 rounded-xl">
+                  <span className="text-[11px] text-slate-400 font-medium block">Total Grupos</span>
+                  <span className="text-2xl font-bold text-white mt-1 block">
+                    {groupStats?.totalGroups ?? 0}
+                  </span>
+                </div>
+                <div className="bg-[#181c25] border border-slate-800 p-3.5 rounded-xl">
+                  <span className="text-[11px] text-amber-400 font-medium block">Pendentes</span>
+                  <span className="text-2xl font-bold text-amber-300 mt-1 block">
+                    {groupStats?.pendingCount ?? 0}
+                  </span>
+                </div>
+                <div className="bg-[#181c25] border border-slate-800 p-3.5 rounded-xl">
+                  <span className="text-[11px] text-sky-400 font-medium block">Processando</span>
+                  <span className="text-2xl font-bold text-sky-300 mt-1 block">
+                    {groupStats?.processingCount ?? 0}
+                  </span>
+                </div>
+                <div className="bg-[#181c25] border border-slate-800 p-3.5 rounded-xl">
+                  <span className="text-[11px] text-emerald-400 font-medium block">Enviados (Sucesso)</span>
+                  <span className="text-2xl font-bold text-emerald-300 mt-1 block">
+                    {groupStats?.completedCount ?? 0}
+                  </span>
+                </div>
+                <div className="bg-[#181c25] border border-slate-800 p-3.5 rounded-xl">
+                  <span className="text-[11px] text-rose-400 font-medium block">Falhas / Bloqueios</span>
+                  <span className="text-2xl font-bold text-rose-300 mt-1 block">
+                    {groupStats?.failedCount ?? 0}
+                  </span>
+                </div>
+              </div>
+
+              {/* Tabela de Grupos Inscritos */}
+              <div className="bg-[#181c25] border border-slate-800 rounded-xl overflow-hidden">
+                <div className="px-4 py-3 border-b border-slate-800 flex items-center justify-between">
+                  <span className="font-bold text-xs text-white uppercase tracking-wider">
+                    Grupos Inscritos nesta Automação ({groupStats?.enrollments?.length ?? 0})
+                  </span>
+                  <button
+                    type="button"
+                    onClick={fetchGroupStats}
+                    disabled={loadingGroupStats}
+                    className="text-xs text-slate-400 hover:text-white flex items-center gap-1 cursor-pointer"
+                  >
+                    <RefreshCw className={`w-3 h-3 ${loadingGroupStats ? 'animate-spin' : ''}`} />
+                    <span>Atualizar</span>
+                  </button>
+                </div>
+
+                {loadingGroupStats ? (
+                  <div className="p-8 text-center text-xs text-slate-400">
+                    Carregando dados dos grupos...
+                  </div>
+                ) : !groupStats?.enrollments || groupStats.enrollments.length === 0 ? (
+                  <div className="p-8 text-center space-y-2">
+                    <p className="text-xs text-slate-400">
+                      Nenhum grupo elegível inscrito nesta automação até o momento.
+                    </p>
+                    <p className="text-[11px] text-slate-500">
+                      Clique no botão acima para sincronizar e inscrever os grupos onde seu número é Administrador.
+                    </p>
+                  </div>
+                ) : (
+                  <div className="overflow-x-auto">
+                    <table className="w-full text-left text-xs">
+                      <thead className="bg-[#12141a] text-slate-400 border-b border-slate-800 text-[11px]">
+                        <tr>
+                          <th className="py-2.5 px-4 font-semibold">Grupo</th>
+                          <th className="py-2.5 px-4 font-semibold">Permissão</th>
+                          <th className="py-2.5 px-4 font-semibold">Etapa Atual</th>
+                          <th className="py-2.5 px-4 font-semibold">Status</th>
+                          <th className="py-2.5 px-4 font-semibold">Último Detalhe</th>
+                        </tr>
+                      </thead>
+                      <tbody className="divide-y divide-slate-800/60 text-slate-300">
+                        {groupStats.enrollments.map((enr: any) => (
+                          <tr key={enr.id} className="hover:bg-slate-800/30 transition-colors">
+                            <td className="py-3 px-4">
+                              <div className="flex items-center gap-2.5">
+                                {enr.group?.pictureUrl ? (
+                                  <img
+                                    src={enr.group.pictureUrl}
+                                    alt=""
+                                    className="w-8 h-8 rounded-full object-cover border border-slate-700 shrink-0"
+                                  />
+                                ) : (
+                                  <div className="w-8 h-8 rounded-full bg-purple-950/60 border border-purple-800/60 flex items-center justify-center text-purple-300 text-xs font-bold shrink-0">
+                                    {(enr.group?.name || 'G')[0]}
+                                  </div>
+                                )}
+                                <div>
+                                  <span className="font-semibold text-white block">
+                                    {enr.group?.name || 'Grupo sem nome'}
+                                  </span>
+                                  <span className="text-[10px] text-slate-400 font-mono block">
+                                    {enr.group?.participantsCount ?? 0} participantes • {enr.group?.jid}
+                                  </span>
+                                </div>
+                              </div>
+                            </td>
+                            <td className="py-3 px-4">
+                              {enr.group?.adminRole === 'superadmin' ? (
+                                <span className="inline-flex items-center gap-1 px-2 py-0.5 rounded-full text-[10px] font-bold bg-amber-950/60 text-amber-300 border border-amber-600/40">
+                                  🛡️ Super Admin
+                                </span>
+                              ) : enr.group?.isAdmin ? (
+                                <span className="inline-flex items-center gap-1 px-2 py-0.5 rounded-full text-[10px] font-bold bg-emerald-950/60 text-emerald-300 border border-emerald-600/40">
+                                  👑 Admin
+                                </span>
+                              ) : (
+                                <span className="inline-flex items-center gap-1 px-2 py-0.5 rounded-full text-[10px] font-semibold bg-rose-950/60 text-rose-300 border border-rose-600/40">
+                                  ⚠️ Não é Admin
+                                </span>
+                              )}
+                            </td>
+                            <td className="py-3 px-4">
+                              <span className="font-mono text-[11px] text-slate-300">
+                                {enr.currentNodeId || 'Início'}
+                              </span>
+                            </td>
+                            <td className="py-3 px-4">
+                              <span
+                                className={`inline-block px-2 py-0.5 rounded-full text-[10px] font-bold uppercase tracking-wider ${
+                                  enr.status === 'COMPLETED'
+                                    ? 'bg-emerald-950/60 text-emerald-300 border border-emerald-600/40'
+                                    : enr.status === 'FAILED'
+                                    ? 'bg-rose-950/60 text-rose-300 border border-rose-600/40'
+                                    : enr.status === 'WAITING' || enr.status === 'PENDING'
+                                    ? 'bg-amber-950/60 text-amber-300 border border-amber-600/40'
+                                    : 'bg-sky-950/60 text-sky-300 border border-sky-600/40'
+                                }`}
+                              >
+                                {enr.status === 'COMPLETED'
+                                  ? 'Concluído'
+                                  : enr.status === 'FAILED'
+                                  ? 'Falha'
+                                  : enr.status === 'WAITING'
+                                  ? 'Aguardando'
+                                  : 'Ativo'}
+                              </span>
+                            </td>
+                            <td className="py-3 px-4 text-[11px] text-slate-400 max-w-xs truncate">
+                              {enr.lastStep?.errorMessage ? (
+                                <span className="text-rose-400 font-medium">{enr.lastStep.errorMessage}</span>
+                              ) : enr.lastStep?.executedAt ? (
+                                <span>Último envio: {new Date(enr.lastStep.executedAt).toLocaleTimeString('pt-BR')}</span>
+                              ) : (
+                                <span className="text-slate-600">Nenhum evento registrado</span>
+                              )}
+                            </td>
+                          </tr>
+                        ))}
+                      </tbody>
+                    </table>
+                  </div>
+                )}
+              </div>
+            </div>
+
+            {/* Rodapé do Modal */}
+            <div className="p-4 border-t border-slate-800 flex items-center justify-end">
+              <button
+                type="button"
+                onClick={() => setIsGroupPanelOpen(false)}
+                className="px-4 py-2 bg-slate-800 hover:bg-slate-700 text-slate-300 text-xs font-semibold rounded-xl transition-colors cursor-pointer"
+              >
+                Fechar
               </button>
             </div>
           </div>
