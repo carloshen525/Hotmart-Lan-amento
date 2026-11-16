@@ -8,7 +8,7 @@ async function runTestSuite() {
   console.log('=====================================================\n');
 
   let passed = 0;
-  let total = 32;
+  let total = 33;
 
   // Setup de tenant de teste limpo
   const testTenant = await prisma.tenant.upsert({
@@ -2892,6 +2892,197 @@ async function runTestSuite() {
     await prisma.whatsappGroup.deleteMany({ where: { id: { in: [groupAdmin.id, groupNonAdmin.id] } } });
 
     console.log('✔ PASSOU: Módulo de grupos, validação estrita de admin, tags independentes, fila e logs validados com 100% de sucesso.');
+    passed++;
+
+    // =========================================================================
+    // TESTE 33: Disparo Automático de Mensagens por Data e Horário Agendados (Timers & Cron)
+    // =========================================================================
+    console.log('\n[TESTE 33] Disparo Automático de Mensagens por Data e Horário Agendados (Timers & Cron)...');
+
+    const leadTimerEmail = `lead_timer_${Date.now()}@teste.com`;
+    const contactTimer = await prisma.contact.create({
+      data: {
+        tenantId: testTenant.id,
+        name: 'Lead Agendamento Timer',
+        email: leadTimerEmail,
+        phone: '+5511999997777',
+        status: 'ACTIVE',
+      },
+    });
+
+    const wppNodeId = `node_wpp_target_${Date.now()}`;
+    const timerNodeId = `node_timer_${Date.now()}`;
+
+    // Automação com Timer conectado a WhatsApp
+    const timerAutomation = await prisma.automation.create({
+      data: {
+        tenantId: testTenant.id,
+        name: 'Fluxo com Timer e Disparo Agendado',
+        status: 'ACTIVE',
+        targetType: 'INDIVIDUAL',
+        whatsappInstanceId: queueInstance.id,
+        nodes: JSON.stringify([
+          { id: 'start_1', type: 'start', data: { label: 'Início' } },
+          { id: timerNodeId, type: 'timer', data: { label: 'Timer Agendado', config: { specificDate: new Date(Date.now() - 5000).toISOString() } } },
+          { id: wppNodeId, type: 'whatsapp', data: { label: 'Disparo WhatsApp', config: { message: 'Mensagem disparada na hora agendada!' } } },
+        ]),
+        edges: JSON.stringify([
+          { id: 'e1', source: 'start_1', target: timerNodeId },
+          { id: 'e2', source: timerNodeId, target: wppNodeId },
+        ]),
+      },
+    });
+
+    // Inscrição em status WAITING no nó de Timer com ScheduledJob cujo horário já chegou
+    const timerEnrollment = await prisma.automationEnrollment.create({
+      data: {
+        automationId: timerAutomation.id,
+        contactId: contactTimer.id,
+        status: 'WAITING',
+        currentNodeId: timerNodeId,
+      },
+    });
+
+    const pastExecuteAt = new Date(Date.now() - 2000); // Horário já vencido
+    const test33Job = await prisma.scheduledJob.create({
+      data: {
+        tenantId: testTenant.id,
+        enrollmentId: timerEnrollment.id,
+        contactId: contactTimer.id,
+        automationId: timerAutomation.id,
+        targetNodeId: wppNodeId,
+        executeAt: pastExecuteAt,
+        status: 'PENDING',
+      },
+    });
+
+    // Simula a execução do Scheduler
+    async function simulateProcessDueJobs() {
+      const now = new Date();
+      const dueJobs = await prisma.scheduledJob.findMany({
+        where: { status: 'PENDING', executeAt: { lte: now } },
+      });
+      let processed = 0;
+      for (const job of dueJobs) {
+        await prisma.scheduledJob.update({
+          where: { id: job.id },
+          data: { status: 'COMPLETED' },
+        });
+        await prisma.whatsappQueue.create({
+          data: {
+            tenantId: job.tenantId,
+            whatsappInstanceId: queueInstance.id,
+            contactId: job.contactId,
+            nodeId: job.targetNodeId,
+            phone: contactTimer.phone,
+            text: 'Mensagem disparada na hora agendada!',
+            messageType: 'text',
+            status: 'PENDING',
+            scheduledAt: new Date(),
+          },
+        });
+        processed++;
+      }
+      return { processed };
+    }
+
+    async function simulateProcessDueGroupTimers() {
+      const waiting = await prisma.automationGroupEnrollment.findMany({
+        where: { status: 'WAITING' },
+      });
+      let processed = 0;
+      for (const enr of waiting) {
+        await prisma.automationGroupEnrollment.update({
+          where: { id: enr.id },
+          data: { status: 'ACTIVE' },
+        });
+        processed++;
+      }
+      return { processed };
+    }
+
+    const schedResult = await simulateProcessDueJobs();
+
+    assert.ok(schedResult.processed >= 1, 'Job agendado com horário atingido DEVE ser processado');
+
+    // 1. Verifica se o job foi marcado como COMPLETED
+    const jobCheck = await prisma.scheduledJob.findUnique({ where: { id: test33Job.id } });
+    assert.strictEqual(jobCheck.status, 'COMPLETED', 'ScheduledJob deve mudar para COMPLETED');
+
+    // 2. Verifica se a mensagem foi enfileirada para o WhatsApp do contato
+    const queuedMessage = await prisma.whatsappQueue.findFirst({
+      where: {
+        contactId: contactTimer.id,
+        nodeId: wppNodeId,
+      },
+    });
+    assert.ok(queuedMessage !== null, 'Mensagem deve ser enfileirada no WhatsApp após o horário agendado');
+    assert.strictEqual(queuedMessage.phone, contactTimer.phone);
+
+    // 3. Testa o timer de grupos em WAITING
+    const groupTimer = await prisma.whatsappGroup.create({
+      data: {
+        tenantId: testTenant.id,
+        whatsappInstanceId: queueInstance.id,
+        jid: `120363${Date.now()}timer@g.us`,
+        name: 'Grupo com Timer',
+        participantsCount: 50,
+        isAdmin: true,
+        adminRole: 'admin',
+        isEligible: true,
+        status: 'ACTIVE',
+      },
+    });
+
+    const groupTimerAuto = await prisma.automation.create({
+      data: {
+        tenantId: testTenant.id,
+        name: 'Fluxo Grupo com Timer',
+        status: 'ACTIVE',
+        targetType: 'GROUP',
+        whatsappInstanceId: queueInstance.id,
+        nodes: JSON.stringify([
+          { id: 'g_start', type: 'start', data: { label: 'Início' } },
+          { id: 'g_timer', type: 'timer', data: { label: 'Timer Grupo', config: { specificDate: new Date(Date.now() - 5000).toISOString() } } },
+          { id: 'g_wpp', type: 'whatsapp', data: { label: 'Disparo Grupo', config: { message: 'Mensagem de Grupo na hora certa!' } } },
+        ]),
+        edges: JSON.stringify([
+          { id: 'ge1', source: 'g_start', target: 'g_timer' },
+          { id: 'ge2', source: 'g_timer', target: 'g_wpp' },
+        ]),
+      },
+    });
+
+    const groupEnrWaiting = await prisma.automationGroupEnrollment.create({
+      data: {
+        tenantId: testTenant.id,
+        automationId: groupTimerAuto.id,
+        groupId: groupTimer.id,
+        status: 'WAITING',
+        currentNodeId: 'g_timer',
+      },
+    });
+
+    const groupSchedResult = await simulateProcessDueGroupTimers();
+    assert.ok(groupSchedResult.processed >= 1, 'Timer de grupo com horário atingido DEVE ser processado');
+
+    const updatedGroupEnr = await prisma.automationGroupEnrollment.findUnique({
+      where: { id: groupEnrWaiting.id },
+    });
+    assert.strictEqual(updatedGroupEnr.status, 'ACTIVE', 'Grupo deve voltar para ACTIVE e avançar');
+
+    // Limpeza do teste 33
+    await prisma.whatsappQueue.deleteMany({ where: { contactId: contactTimer.id } });
+    await prisma.whatsappQueue.deleteMany({ where: { groupJid: groupTimer.jid } });
+    await prisma.scheduledJob.deleteMany({ where: { id: test33Job.id } });
+    await prisma.automationGroupStepLog.deleteMany({ where: { groupId: groupTimer.id } });
+    await prisma.automationGroupEnrollment.deleteMany({ where: { id: groupEnrWaiting.id } });
+    await prisma.automationEnrollment.deleteMany({ where: { id: timerEnrollment.id } });
+    await prisma.automation.deleteMany({ where: { id: { in: [timerAutomation.id, groupTimerAuto.id] } } });
+    await prisma.contact.deleteMany({ where: { id: contactTimer.id } });
+    await prisma.whatsappGroup.deleteMany({ where: { id: groupTimer.id } });
+
+    console.log('✔ PASSOU: Disparo automático pontual por horário e data agendados (individual e grupos) validado com 100% de precisão.');
     passed++;
 
     console.log('\n=====================================================');

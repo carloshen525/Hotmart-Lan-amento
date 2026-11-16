@@ -3,6 +3,7 @@ import { messageManager } from '../messaging';
 import { WhatsappQueueService } from '@/services/whatsapp/queue.service';
 import { whatsappGroupService } from '@/services/whatsapp/group.service';
 import { WorkflowNode, WorkflowEdge } from './types';
+import { BackgroundSchedulerRunner } from './background-runner';
 
 // Helper para interpretar data/hora considerando o fuso horário de Brasília (UTC-3)
 function parseTargetDate(dateStr: string): number {
@@ -455,6 +456,12 @@ export class AutomationEngine {
           stepDetails = { scheduledUntil: executeAt, summary: summaryText, cancelCondition: config.cancelCondition || 'PURCHASE_APPROVED' };
           shouldHaltExecution = true; // A execução pausa aqui até o job vencer
         }
+      } else if (nodeType === 'sequence_lead') {
+        // Quando a execução do fluxo macro atinge uma Sequência Lead (após um Timer, Tag ou nó macro):
+        await this.enrollInSequence(automation.id, node.id, contact.id, tenantId, {
+          source: 'FLOW_PROGRESSION',
+        });
+        return;
       }
     } catch (err: any) {
       stepStatus = 'FAILED';
@@ -1353,11 +1360,9 @@ export class AutomationEngine {
       if (tagList.length === 0) continue;
 
       const outgoingEdges = edges.filter((e) => e.source === tagNode.id);
-      const connectedSequences = nodes.filter(
-        (n) => n.type === 'sequence_lead' && outgoingEdges.some((edge) => edge.target === n.id)
-      );
+      const targetNodes = nodes.filter((n) => outgoingEdges.some((edge) => edge.target === n.id));
 
-      if (connectedSequences.length === 0) continue;
+      if (targetNodes.length === 0) continue;
 
       const contactsWithTag = await prisma.contact.findMany({
         where: {
@@ -1393,7 +1398,9 @@ export class AutomationEngine {
           if (!hasAll) continue;
         }
 
-        for (const seqNode of connectedSequences) {
+        for (const targetNode of targetNodes) {
+          const isSequence = targetNode.type === 'sequence_lead';
+
           // Verifica se já existe QUALQUER inscrição deste contato nesta automação (independente de status)
           const existingEnrollment = await prisma.automationEnrollment.findFirst({
             where: {
@@ -1404,14 +1411,41 @@ export class AutomationEngine {
           });
 
           if (!existingEnrollment) {
-            // Novo lead elegível que entrou na TAG: inscreve normalmente na primeira etapa
-            await this.enrollInSequence(automationId, seqNode.id, contact.id, tenantId, {
-              source: 'SYNC_ON_ACTIVATION',
-              tags: tagList.join(','),
-            });
+            // Novo lead elegível que entrou na TAG:
+            if (isSequence) {
+              await this.enrollInSequence(automationId, targetNode.id, contact.id, tenantId, {
+                source: 'SYNC_ON_ACTIVATION',
+                tags: tagList.join(','),
+              });
+            } else {
+              const newEnr = await prisma.automationEnrollment.create({
+                data: {
+                  automationId,
+                  contactId: contact.id,
+                  status: 'ACTIVE',
+                  metadata: JSON.stringify({ source: 'SYNC_ON_ACTIVATION', tags: tagList.join(',') }),
+                },
+              });
+              await this.executeNode(newEnr.id, targetNode.id, tenantId);
+            }
             totalEnrolled++;
           } else {
-            // Lead já cadastrado: NUNCA reiniciar, NUNCA reenfileirar, NUNCA reenviar mensagens
+            // Lead já cadastrado:
+            if (!isSequence) {
+              const successLog = await prisma.automationStepLog.findFirst({
+                where: { contactId: contact.id, nodeId: targetNode.id, status: 'SUCCESS', enrollment: { automationId } },
+              });
+              const pendingJob = await prisma.scheduledJob.findFirst({
+                where: { enrollmentId: existingEnrollment.id, status: 'PENDING' },
+              });
+              if (!successLog && !pendingJob) {
+                await this.executeNode(existingEnrollment.id, targetNode.id, tenantId);
+              }
+              continue;
+            }
+
+            // Para sequências internas: NUNCA reiniciar, NUNCA reenfileirar, NUNCA reenviar mensagens
+            const seqNode = targetNode;
             const subflow = (seqNode.data as any).subflow || {};
             const subNodes: WorkflowNode[] = subflow.nodes || [];
             const subEdges: WorkflowEdge[] = subflow.edges || [];
@@ -1749,7 +1783,7 @@ export class AutomationEngine {
     // 1. Nó do tipo TIMER
     if (nodeType === 'timer' || nodeType === 'delay') {
       const config = node.data?.config || {};
-      const targetTimeStr = config.targetDate || config.targetTime;
+      const targetTimeStr = config.specificDate || config.targetDate || config.targetTime;
       const targetTimestamp = parseTargetDate(targetTimeStr);
       const now = Date.now();
 

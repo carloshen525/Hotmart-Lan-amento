@@ -50,7 +50,18 @@ try {
   console.warn('[PROD START] Aviso na sincronização do WhatsApp (continuando inicialização):', err.message);
 }
 
-// 3. Inicia o servidor Next.js escutando obrigatoriamente em 0.0.0.0 (obrigatorio para Docker / Easypanel)
+// 5. Inicia o Cron Worker em background para disparo automático de timers e filas
+console.log('[PROD START] Iniciando Cron Worker em segundo plano para agendamentos...');
+const cronProc = spawn('node', ['scripts/cron-worker.js'], {
+  stdio: 'inherit',
+  shell: true,
+});
+
+cronProc.on('exit', (code) => {
+  console.warn(`[PROD START] Cron Worker encerrou com codigo ${code}`);
+});
+
+// 6. Inicia o servidor Next.js escutando obrigatoriamente em 0.0.0.0 (obrigatorio para Docker / Easypanel)
 const port = process.env.PORT || '3000';
 console.log(`[PROD START] Iniciando Next.js em 0.0.0.0:${port}...`);
 
@@ -61,12 +72,15 @@ const nextProc = spawn('npx', ['next', 'start', '-H', '0.0.0.0', '-p', String(po
 
 nextProc.on('exit', (code) => {
   console.log(`[PROD START] Next.js encerrou com codigo ${code}`);
+  cronProc.kill('SIGTERM');
   process.exit(code || 0);
 });
 
 process.on('SIGTERM', () => {
+  cronProc.kill('SIGTERM');
   nextProc.kill('SIGTERM');
 });
 process.on('SIGINT', () => {
+  cronProc.kill('SIGINT');
   nextProc.kill('SIGINT');
 });
