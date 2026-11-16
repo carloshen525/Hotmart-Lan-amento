@@ -553,12 +553,14 @@ export class WhatsappQueueService {
       const tenantId = item.tenantId || item.tenant_id;
       const automationId = item.automationId || item.automation_id;
 
-      if (enrollmentId && nodeId) {
+      const contactId = item.contactId || item.contact_id;
+
+      if (nodeId && (enrollmentId || contactId)) {
         try {
           await prisma.automationStepLog.updateMany({
             where: {
-              enrollmentId,
               nodeId,
+              ...(enrollmentId ? { enrollmentId } : { contactId }),
               status: { in: ['QUEUED', 'PROCESSING'] },
             },
             data: {
@@ -602,12 +604,13 @@ export class WhatsappQueueService {
         `, currentAttempts, errorMessage, item.id);
 
         const enrollmentId = item.enrollmentId || item.enrollment_id;
+        const contactId = item.contactId || item.contact_id;
         const nodeId = item.nodeId || item.node_id;
-        if (enrollmentId && nodeId) {
+        if (nodeId && (enrollmentId || contactId)) {
           await prisma.automationStepLog.updateMany({
             where: {
-              enrollmentId,
               nodeId,
+              ...(enrollmentId ? { enrollmentId } : { contactId }),
               status: { in: ['QUEUED', 'PROCESSING'] },
             },
             data: {

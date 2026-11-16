@@ -1136,15 +1136,22 @@ export class AutomationEngine {
       shouldHalt = true;
     }
 
-    // Atualiza o log da etapa do sub-fluxo com o status final
+    // Atualiza o log da etapa do sub-fluxo com o status final (sem sobrescrever se o worker da fila já concluiu com SUCCESS)
     if (stepLog) {
-      await prisma.automationStepLog.update({
+      const currentLog = await prisma.automationStepLog.findUnique({
         where: { id: stepLog.id },
-        data: {
-          status: stepStatus,
-          details: JSON.stringify(stepDetails),
-        },
+        select: { status: true },
       });
+
+      if (currentLog?.status !== 'SUCCESS') {
+        await prisma.automationStepLog.update({
+          where: { id: stepLog.id },
+          data: {
+            status: stepStatus,
+            details: JSON.stringify(stepDetails),
+          },
+        });
+      }
     }
 
     if (shouldHalt || stepStatus === 'FAILED') {

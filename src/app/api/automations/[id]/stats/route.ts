@@ -29,7 +29,7 @@ export async function GET(request: Request, { params }: { params: { id: string }
       parsedEdges = JSON.parse(automation.edges || '[]');
     } catch {}
 
-    const [allEnrollments, allStepLogs, pendingJobs] = await Promise.all([
+    const [allEnrollments, allStepLogs, allQueueItems, pendingJobs] = await Promise.all([
       prisma.automationEnrollment.findMany({
         where: {
           automationId: params.id,
@@ -76,6 +76,17 @@ export async function GET(request: Request, { params }: { params: { id: string }
           contactId: true,
         },
       }),
+      prisma.whatsappQueue.findMany({
+        where: {
+          automationId: params.id,
+        },
+        select: {
+          nodeId: true,
+          status: true,
+          contactId: true,
+          phone: true,
+        },
+      }),
       prisma.scheduledJob.findMany({
         where: {
           automationId: params.id,
@@ -102,28 +113,17 @@ export async function GET(request: Request, { params }: { params: { id: string }
       }
     }
 
-    // 2. Remove/higieniza inscrições órfãs (leads sem tag no CRM que não pertencem ao fluxo)
+    // 2. Filtra inscrições de leads para estatísticas sem deletar dados do banco
     let validEnrollments = allEnrollments;
     if (allAutoTagNames.size > 0) {
-      const orphanEnrollments = allEnrollments.filter((e) => {
-        const cTags = e.contact?.tags?.map((t: any) => t.tag?.name?.toLowerCase().trim()) || [];
-        return !cTags.some((ct: string) => allAutoTagNames.has(ct));
-      });
-
-      if (orphanEnrollments.length > 0) {
-        const orphanIds = orphanEnrollments.map((e) => e.id);
-        await prisma.automationEnrollment.deleteMany({
-          where: { id: { in: orphanIds } },
-        }).catch(() => {});
-        await prisma.scheduledJob.deleteMany({
-          where: { enrollmentId: { in: orphanIds } },
-        }).catch(() => {});
-      }
-
       validEnrollments = allEnrollments.filter((e) => {
         const cTags = e.contact?.tags?.map((t: any) => t.tag?.name?.toLowerCase().trim()) || [];
         return cTags.some((ct: string) => allAutoTagNames.has(ct));
       });
+      // Se todos foram filtrados por tags alteradas mas existem inscrições reais, preserva inscrições do fluxo
+      if (validEnrollments.length === 0 && allEnrollments.length > 0) {
+        validEnrollments = allEnrollments;
+      }
     }
 
     // 3. Deduplica enrollments por contactId único (garante conjunto único de leads válidos)
@@ -141,40 +141,74 @@ export async function GET(request: Request, { params }: { params: { id: string }
     }
     const distinctEnrollments = Array.from(enrollmentsByContact.values());
     const totalEnrollments = distinctEnrollments.length;
-    const validContactIds = new Set(distinctEnrollments.map((e) => e.contactId));
 
-    // 4. Mapeamento por nós com contatos únicos (Set<string>) restritos a leads válidos da tag
+    // 4. Mapeamento por nós com contatos únicos (Set<string>) combinando step logs e fila persistente do WhatsApp
     const nodeSuccessContacts = new Map<string, Set<string>>();
     const nodeWaitingContacts = new Map<string, Set<string>>();
     const nodeFailedContacts = new Map<string, Set<string>>();
 
+    // 4.1. Processa StepLogs
     for (const log of allStepLogs) {
       if (!log.nodeId || !log.contactId) continue;
-      if (allAutoTagNames.size > 0 && !validContactIds.has(log.contactId)) continue;
+      const key = log.contactId;
+
       if (log.status === 'SUCCESS') {
         if (!nodeSuccessContacts.has(log.nodeId)) nodeSuccessContacts.set(log.nodeId, new Set());
-        nodeSuccessContacts.get(log.nodeId)!.add(log.contactId);
+        nodeSuccessContacts.get(log.nodeId)!.add(key);
       } else if (log.status === 'FAILED') {
         if (!nodeFailedContacts.has(log.nodeId)) nodeFailedContacts.set(log.nodeId, new Set());
-        nodeFailedContacts.get(log.nodeId)!.add(log.contactId);
+        nodeFailedContacts.get(log.nodeId)!.add(key);
+      } else if (log.status === 'QUEUED' || log.status === 'PROCESSING') {
+        if (!nodeWaitingContacts.has(log.nodeId)) nodeWaitingContacts.set(log.nodeId, new Set());
+        nodeWaitingContacts.get(log.nodeId)!.add(key);
       }
     }
 
-    for (const job of pendingJobs) {
-      if (!job.targetNodeId || !job.contactId) continue;
-      if (allAutoTagNames.size > 0 && !validContactIds.has(job.contactId)) continue;
-      if (!nodeWaitingContacts.has(job.targetNodeId)) nodeWaitingContacts.set(job.targetNodeId, new Set());
-      nodeWaitingContacts.get(job.targetNodeId)!.add(job.contactId);
+    // 4.2. Processa Fila do WhatsApp (garante precisão absoluta das mensagens disparadas e na fila)
+    for (const item of allQueueItems) {
+      if (!item.nodeId) continue;
+      const key = item.contactId || item.phone;
+      if (!key) continue;
+
+      if (item.status === 'SENT') {
+        if (!nodeSuccessContacts.has(item.nodeId)) nodeSuccessContacts.set(item.nodeId, new Set());
+        nodeSuccessContacts.get(item.nodeId)!.add(key);
+        nodeWaitingContacts.get(item.nodeId)?.delete(key);
+      } else if (item.status === 'PENDING' || item.status === 'PROCESSING') {
+        if (!nodeSuccessContacts.get(item.nodeId)?.has(key)) {
+          if (!nodeWaitingContacts.has(item.nodeId)) nodeWaitingContacts.set(item.nodeId, new Set());
+          nodeWaitingContacts.get(item.nodeId)!.add(key);
+        }
+      } else if (item.status === 'FAILED') {
+        if (!nodeSuccessContacts.get(item.nodeId)?.has(key)) {
+          if (!nodeFailedContacts.has(item.nodeId)) nodeFailedContacts.set(item.nodeId, new Set());
+          nodeFailedContacts.get(item.nodeId)!.add(key);
+        }
+      }
     }
 
+    // 4.3. Processa agendamentos de jobs pendentes (timers)
+    for (const job of pendingJobs) {
+      if (!job.targetNodeId || !job.contactId) continue;
+      if (!nodeSuccessContacts.get(job.targetNodeId)?.has(job.contactId)) {
+        if (!nodeWaitingContacts.has(job.targetNodeId)) nodeWaitingContacts.set(job.targetNodeId, new Set());
+        nodeWaitingContacts.get(job.targetNodeId)!.add(job.contactId);
+      }
+    }
+
+    // 4.4. Processa status dos enrollments
     for (const enr of distinctEnrollments) {
       if (!enr.currentNodeId) continue;
       if (enr.status === 'WAITING') {
-        if (!nodeWaitingContacts.has(enr.currentNodeId)) nodeWaitingContacts.set(enr.currentNodeId, new Set());
-        nodeWaitingContacts.get(enr.currentNodeId)!.add(enr.contactId);
+        if (!nodeSuccessContacts.get(enr.currentNodeId)?.has(enr.contactId)) {
+          if (!nodeWaitingContacts.has(enr.currentNodeId)) nodeWaitingContacts.set(enr.currentNodeId, new Set());
+          nodeWaitingContacts.get(enr.currentNodeId)!.add(enr.contactId);
+        }
       } else if (enr.status === 'FAILED') {
-        if (!nodeFailedContacts.has(enr.currentNodeId)) nodeFailedContacts.set(enr.currentNodeId, new Set());
-        nodeFailedContacts.get(enr.currentNodeId)!.add(enr.contactId);
+        if (!nodeSuccessContacts.get(enr.currentNodeId)?.has(enr.contactId)) {
+          if (!nodeFailedContacts.has(enr.currentNodeId)) nodeFailedContacts.set(enr.currentNodeId, new Set());
+          nodeFailedContacts.get(enr.currentNodeId)!.add(enr.contactId);
+        }
       }
     }
 
@@ -318,17 +352,25 @@ export async function GET(request: Request, { params }: { params: { id: string }
             subStat.waitingCount = 0;
             subStat.failedCount = 0;
           } else {
-            // Nenhum nó interno da sequência pode ultrapassar a quantidade de leads elegíveis
-            if (subStat.leadsCount > computedCount) subStat.leadsCount = computedCount;
-            if (subStat.successCount > computedCount) subStat.successCount = computedCount;
-            if (subStat.waitingCount > computedCount) subStat.waitingCount = computedCount;
-            if (subStat.failedCount > computedCount) subStat.failedCount = computedCount;
+            // Garante que o nó da etapa reflita fielmente os disparos reais efetuados
+            const realTotal = subStat.successCount + subStat.waitingCount + subStat.failedCount;
+            if (realTotal > 0) {
+              subStat.leadsCount = realTotal;
+            } else if (subStat.leadsCount > computedCount) {
+              subStat.leadsCount = computedCount;
+            }
           }
         }
 
+        const maxSubLeadCount = Math.max(0, ...subNodes.map((sn) => getNodeStat(sn.id).leadsCount));
+        if (maxSubLeadCount > seqStat.leadsCount) {
+          seqStat.leadsCount = maxSubLeadCount;
+          startStat.leadsCount = maxSubLeadCount;
+        }
+
         // Garante que o seq_start padrão reflita a contagem da sequência
-        startStat.leadsCount = computedCount;
-        startStat.successCount = computedCount;
+        startStat.leadsCount = seqStat.leadsCount;
+        startStat.successCount = seqStat.leadsCount;
       }
     }
 
