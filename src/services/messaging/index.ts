@@ -10,8 +10,34 @@ export class MessageManager {
   private metaWhatsApp = new MetaWhatsAppService();
   public evolutionApi = new EvolutionApiService();
   private emailProvider = new EmailProviderService();
+  private recentSends = new Map<string, number>();
 
   async sendWhatsApp(params: SendWhatsAppParams): Promise<SendResult> {
+    // Guarda de Desduplicação Estrita: impede envio da mesma mensagem para o mesmo telefone em menos de 10 segundos
+    const cleanPhone = (params.phone || '').replace(/\D/g, '');
+    const cleanText = (params.text || params.caption || '').trim().slice(0, 100);
+    const dedupKey = `${params.tenantId || ''}_${cleanPhone}_${cleanText}`;
+
+    const now = Date.now();
+    const lastSent = this.recentSends.get(dedupKey);
+    if (lastSent && now - lastSent < 10000) {
+      console.warn(`[MessageManager] Prevenção de duplicidade: mensagem idêntica para ${cleanPhone} ignorada (${now - lastSent}ms atrás)`);
+      return {
+        success: true,
+        messageId: 'dedup_guard_skipped',
+        provider: 'DEDUP_GUARD',
+        status: 'SENT',
+      };
+    }
+    this.recentSends.set(dedupKey, now);
+
+    // Limpa entradas antigas (> 60 segundos)
+    if (this.recentSends.size > 500) {
+      for (const [k, time] of this.recentSends.entries()) {
+        if (now - time > 60000) this.recentSends.delete(k);
+      }
+    }
+
     const mode = process.env.WHATSAPP_PROVIDER_MODE;
 
     // 1. Prioriza Evolution API se o modo for EVOLUTION_API

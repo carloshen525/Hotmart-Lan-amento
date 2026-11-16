@@ -3,6 +3,9 @@ import { messageManager } from '../messaging';
 import { WorkflowNode, WorkflowEdge } from './types';
 
 export class AutomationEngine {
+  private runningSyncs = new Set<string>(); // automationId
+  private executingNodes = new Set<string>(); // `${contactId}_${nodeId}`
+
   /**
    * Inscreve um contato em um fluxo de automação
    */
@@ -140,18 +143,24 @@ export class AutomationEngine {
       data: { currentNodeId: nodeId },
     });
 
+    const execKey = `${contact.id}_${node.id}`;
+    if (this.executingNodes.has(execKey)) {
+      return;
+    }
+
     // Regra de Idempotência: Se este nó de ação já foi executado com SUCESSO para este lead, nunca repete
     if (node.data.type === 'action') {
       const alreadySuccess = await prisma.automationStepLog.findFirst({
         where: {
           contactId: contact.id,
           nodeId: node.id,
-          status: 'SUCCESS',
+          status: { in: ['SUCCESS', 'PROCESSING'] },
           enrollment: { automationId: automation.id },
         },
       });
 
       if (alreadySuccess) {
+        if (alreadySuccess.status === 'PROCESSING') return;
         const nextEdges = edges.filter((e) => e.source === node.id);
         if (nextEdges.length === 0) {
           await prisma.automationEnrollment.update({
@@ -833,17 +842,26 @@ export class AutomationEngine {
       autoId = enr?.automationId || '';
     }
 
-    // 1. Regra de Idempotência: Se este nó já foi executado com SUCESSO para este lead neste fluxo, NUNCA executa novamente.
+    const execKey = `${contact.id}_${node.id}`;
+    if (this.executingNodes.has(execKey)) {
+      return; // Prevenção de concorrência: nó já em execução ativa para este contato
+    }
+
+    // 1. Regra de Idempotência: Se este nó já foi executado com SUCESSO ou está em PROCESSING para este lead neste fluxo, NUNCA executa novamente.
     const alreadySuccess = await prisma.automationStepLog.findFirst({
       where: {
         contactId: contact.id,
         nodeId: node.id,
-        status: 'SUCCESS',
+        status: { in: ['SUCCESS', 'PROCESSING'] },
         enrollment: autoId ? { automationId: autoId } : undefined,
       },
     });
 
     if (alreadySuccess) {
+      if (alreadySuccess.status === 'PROCESSING') {
+        // Já em processamento ativo por outra thread
+        return;
+      }
       // Já executou com sucesso! Pula a etapa e avança diretamente para os próximos nós conectados
       // Carrega a versão mais recente da estrutura do fluxo diretamente do banco
       let currentSubEdges = subEdges;
@@ -894,11 +912,33 @@ export class AutomationEngine {
       return;
     }
 
-    // Atualiza o nó onde o lead se encontra agora
-    await prisma.automationEnrollment.update({
-      where: { id: enrollmentId },
-      data: { currentNodeId: node.id },
-    });
+    this.executingNodes.add(execKey);
+
+    // Registra imediatamente o log em estado 'PROCESSING' para bloquear chamadas simultâneas
+    let stepLog: any = null;
+    try {
+      stepLog = await prisma.automationStepLog.create({
+        data: {
+          enrollmentId,
+          contactId: contact.id,
+          nodeId: node.id,
+          nodeType: node.type,
+          action: node.type.toUpperCase(),
+          status: 'PROCESSING',
+          details: JSON.stringify({ inProgress: true, startedAt: new Date().toISOString() }),
+        },
+      });
+    } catch {
+      this.executingNodes.delete(execKey);
+      return;
+    }
+
+    try {
+      // Atualiza o nó onde o lead se encontra agora
+      await prisma.automationEnrollment.update({
+        where: { id: enrollmentId },
+        data: { currentNodeId: node.id },
+      });
 
     const cfg = node.data.config || {};
     let shouldHalt = false;
@@ -1132,18 +1172,16 @@ export class AutomationEngine {
       shouldHalt = true;
     }
 
-    // Registra o log da etapa do sub-fluxo
-    await prisma.automationStepLog.create({
-      data: {
-        enrollmentId,
-        contactId: contact.id,
-        nodeId: node.id,
-        nodeType: node.type,
-        action: node.type.toUpperCase(),
-        status: stepStatus,
-        details: JSON.stringify(stepDetails),
-      },
-    });
+    // Atualiza o log da etapa do sub-fluxo com o status final
+    if (stepLog) {
+      await prisma.automationStepLog.update({
+        where: { id: stepLog.id },
+        data: {
+          status: stepStatus,
+          details: JSON.stringify(stepDetails),
+        },
+      });
+    }
 
     if (shouldHalt || stepStatus === 'FAILED') {
       if (stepStatus === 'FAILED') {
@@ -1198,16 +1236,25 @@ export class AutomationEngine {
         );
       }
     }
+    } finally {
+      this.executingNodes.delete(execKey);
+    }
   }
 
   /**
    * Sincroniza e inscreve leads existentes que já possuem as tags de entrada quando o fluxo é ativado
    */
   async syncExistingLeadsForAutomation(automationId: string, tenantId: string): Promise<number> {
-    const automation = await prisma.automation.findFirst({
-      where: { id: automationId, tenantId },
-    });
-    if (!automation || automation.status !== 'ACTIVE') return 0;
+    if (this.runningSyncs.has(automationId)) {
+      return 0; // Prevenção de concorrência: já existe sincronização ativa para esta automação
+    }
+    this.runningSyncs.add(automationId);
+
+    try {
+      const automation = await prisma.automation.findFirst({
+        where: { id: automationId, tenantId },
+      });
+      if (!automation || automation.status !== 'ACTIVE') return 0;
 
     const nodes: WorkflowNode[] = JSON.parse(automation.nodes || '[]');
     const edges: WorkflowEdge[] = JSON.parse(automation.edges || '[]');
@@ -1370,6 +1417,9 @@ export class AutomationEngine {
     }
 
     return totalEnrolled;
+    } finally {
+      this.runningSyncs.delete(automationId);
+    }
   }
 
   /**

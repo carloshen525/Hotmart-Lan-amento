@@ -18,12 +18,8 @@ export async function GET(request: Request, { params }: { params: { id: string }
       return NextResponse.json({ error: 'Automação não encontrada' }, { status: 404 });
     }
 
-    // Se o fluxo estiver ativo, sincroniza novos nós ou novas conexões para garantir que os leads avancem
-    if (automation.status === 'ACTIVE') {
-      await automationEngine.syncExistingLeadsForAutomation(params.id, tenantId).catch((err) => {
-        console.error('[Automation Stats Sync Error]:', err);
-      });
-    }
+    // Endpoint de estatísticas é estritamente de LEITURA (read-only).
+    // Nunca dispara envio de mensagens ou sincronização com efeito colateral.
 
     // Nós e Conexões Macro
     let parsedNodes: any[] = [];
