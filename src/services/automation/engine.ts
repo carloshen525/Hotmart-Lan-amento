@@ -845,7 +845,30 @@ export class AutomationEngine {
 
     if (alreadySuccess) {
       // Já executou com sucesso! Pula a etapa e avança diretamente para os próximos nós conectados
-      const nextOutgoing = subEdges.filter((e) => e.source === node.id);
+      // Carrega a versão mais recente da estrutura do fluxo diretamente do banco
+      let currentSubEdges = subEdges;
+      let currentSubNodes = subNodes;
+      if (autoId) {
+        try {
+          const freshAuto = await prisma.automation.findUnique({
+            where: { id: autoId },
+            select: { nodes: true },
+          });
+          if (freshAuto?.nodes) {
+            const freshMacroNodes: WorkflowNode[] = JSON.parse(freshAuto.nodes || '[]');
+            for (const mn of freshMacroNodes) {
+              const sub = (mn.data as any)?.subflow;
+              if (sub && Array.isArray(sub.nodes) && sub.nodes.some((sn: any) => sn.id === node.id)) {
+                currentSubNodes = sub.nodes;
+                currentSubEdges = sub.edges || [];
+                break;
+              }
+            }
+          }
+        } catch {}
+      }
+
+      const nextOutgoing = currentSubEdges.filter((e) => e.source === node.id);
       if (nextOutgoing.length === 0) {
         await prisma.automationEnrollment.update({
           where: { id: enrollmentId },
@@ -856,8 +879,8 @@ export class AutomationEngine {
           await this.executeSubflowNode(
             enrollmentId,
             edge.target,
-            subNodes,
-            subEdges,
+            currentSubNodes,
+            currentSubEdges,
             tenantId,
             contact,
             autoId
@@ -1128,8 +1151,30 @@ export class AutomationEngine {
       return;
     }
 
-    // Próximos nós conectados internamente
-    const nextOutgoing = subEdges.filter((e) => e.source === node.id);
+    // Próximos nós conectados internamente usando a estrutura dinâmica mais recente
+    let currentSubEdges = subEdges;
+    let currentSubNodes = subNodes;
+    if (autoId) {
+      try {
+        const freshAuto = await prisma.automation.findUnique({
+          where: { id: autoId },
+          select: { nodes: true },
+        });
+        if (freshAuto?.nodes) {
+          const freshMacroNodes: WorkflowNode[] = JSON.parse(freshAuto.nodes || '[]');
+          for (const mn of freshMacroNodes) {
+            const sub = (mn.data as any)?.subflow;
+            if (sub && Array.isArray(sub.nodes) && sub.nodes.some((sn: any) => sn.id === node.id)) {
+              currentSubNodes = sub.nodes;
+              currentSubEdges = sub.edges || [];
+              break;
+            }
+          }
+        }
+      } catch {}
+    }
+
+    const nextOutgoing = currentSubEdges.filter((e) => e.source === node.id);
     if (nextOutgoing.length === 0) {
       // Chegou ao fim do fluxo da sequência!
       await prisma.automationEnrollment.update({
@@ -1141,8 +1186,8 @@ export class AutomationEngine {
         await this.executeSubflowNode(
           enrollmentId,
           edge.target,
-          subNodes,
-          subEdges,
+          currentSubNodes,
+          currentSubEdges,
           tenantId,
           contact,
           autoId
@@ -1241,28 +1286,44 @@ export class AutomationEngine {
             totalEnrolled++;
           } else {
             // Lead já cadastrado: NUNCA reiniciar, NUNCA reenfileirar, NUNCA reenviar mensagens
-            // Se o lead concluiu etapas anteriores e novas etapas foram conectadas, avança para as novas
             const subflow = (seqNode.data as any).subflow || {};
             const subNodes: WorkflowNode[] = subflow.nodes || [];
             const subEdges: WorkflowEdge[] = subflow.edges || [];
 
-            if (existingEnrollment.status === 'COMPLETED' && existingEnrollment.currentNodeId) {
-              const outgoingFromCurrent = subEdges.filter((e) => e.source === existingEnrollment.currentNodeId);
-              if (outgoingFromCurrent.length > 0) {
-                await prisma.automationEnrollment.update({
-                  where: { id: existingEnrollment.id },
-                  data: { status: 'ACTIVE', completedAt: null },
-                });
+            // Se o lead está ATIVO e seu currentNodeId já teve sucesso mas possui novas etapas conectadas a ele:
+            if (existingEnrollment.status === 'ACTIVE' && existingEnrollment.currentNodeId) {
+              const alreadySuccess = await prisma.automationStepLog.findFirst({
+                where: {
+                  contactId: contact.id,
+                  nodeId: existingEnrollment.currentNodeId,
+                  status: 'SUCCESS',
+                  enrollment: { automationId },
+                },
+              });
+
+              if (alreadySuccess) {
+                const outgoingFromCurrent = subEdges.filter((e) => e.source === existingEnrollment.currentNodeId);
                 for (const edge of outgoingFromCurrent) {
-                  await this.executeSubflowNode(
-                    existingEnrollment.id,
-                    edge.target,
-                    subNodes,
-                    subEdges,
-                    tenantId,
-                    contact,
-                    automationId
-                  );
+                  const nextAlreadySuccess = await prisma.automationStepLog.findFirst({
+                    where: {
+                      contactId: contact.id,
+                      nodeId: edge.target,
+                      status: 'SUCCESS',
+                      enrollment: { automationId },
+                    },
+                  });
+
+                  if (!nextAlreadySuccess) {
+                    await this.executeSubflowNode(
+                      existingEnrollment.id,
+                      edge.target,
+                      subNodes,
+                      subEdges,
+                      tenantId,
+                      contact,
+                      automationId
+                    );
+                  }
                 }
               }
             }

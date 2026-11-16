@@ -296,10 +296,13 @@ export async function PUT(request: Request, { params }: { params: { id: string }
       body.triggerConfig !== undefined ||
       body.triggerType !== undefined;
 
-    // Regra: Toda edição dentro do fluxo só pode ser feita com ele pausado/desativado.
-    // Se a automação estiver ATIVA no banco e o usuário enviar edições na estrutura sem pausar:
     const targetStatus = body.status !== undefined ? body.status : existing.status;
-    if (existing.status === 'ACTIVE' && isStructuralEdit && targetStatus === 'ACTIVE') {
+    const isActivating = body.status === 'ACTIVE' || body.forceActivate === true;
+
+    // Regra: Toda edição dentro do fluxo só pode ser feita com ele pausado/desativado.
+    // Se a automação estiver ATIVA no banco e o usuário tentar salvar alterações estruturais sem pausar:
+    // (A menos que a requisição seja explicitamente uma ATIVAÇÃO do fluxo)
+    if (existing.status === 'ACTIVE' && isStructuralEdit && !isActivating && targetStatus === 'ACTIVE') {
       return NextResponse.json(
         {
           error: 'Toda edição no fluxo só pode ser feita com ele pausado/desativado. Pause a automação antes de salvar alterações.',
@@ -307,6 +310,32 @@ export async function PUT(request: Request, { params }: { params: { id: string }
         },
         { status: 400 }
       );
+    }
+
+    // Validação preventiva ao ativar: impedir ativação com datas no passado
+    if (targetStatus === 'ACTIVE') {
+      const nodesToCheck: any[] = body.nodes ? body.nodes : JSON.parse(existing.nodes || '[]');
+      const now = Date.now();
+      const checkTimerValidity = (node: any) => {
+        if (node.type === 'timer' || node.type === 'delay') {
+          const cfg = node.data?.config || {};
+          if (cfg.timerType === 'SPECIFIC_DATE' || cfg.delayType === 'specific_date' || cfg.specificDate) {
+            if (cfg.specificDate) {
+              const t = new Date(cfg.specificDate).getTime();
+              if (!isNaN(t) && t <= now) {
+                throw new Error('Existe um timer configurado para uma data/hora que já passou. Escolha um horário futuro antes de ativar.');
+              }
+            }
+          }
+        }
+      };
+
+      for (const n of nodesToCheck) {
+        checkTimerValidity(n);
+        if (n.data?.subflow?.nodes && Array.isArray(n.data.subflow.nodes)) {
+          n.data.subflow.nodes.forEach(checkTimerValidity);
+        }
+      }
     }
 
     const updateData: any = {};

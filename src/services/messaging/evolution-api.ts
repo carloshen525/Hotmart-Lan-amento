@@ -757,7 +757,7 @@ export class EvolutionApiService {
       });
     }
 
-    // 4. Se a Evolution API tiver instâncias ABERTAS que ainda não estão no banco deste tenant,
+    // 4. Se a Evolution API tiver instâncias que ainda não estão no banco deste tenant,
     // insere no banco e adiciona na lista automaticamente!
     const evoEntries = Array.from(evoMap.entries());
     for (let i = 0; i < evoEntries.length; i++) {
@@ -771,11 +771,12 @@ export class EvolutionApiService {
         ''
       ).toLowerCase();
       const isOpen = evoState === 'open' || evoState === 'connected';
+      const finalStatus = isOpen ? 'CONNECTED' : (evoState === 'connecting' ? 'CONNECTING' : 'DISCONNECTED');
 
-      if (isOpen && !processedNames.has(nameLower)) {
+      if (!processedNames.has(nameLower)) {
         const rawPhone = evo.ownerJid ? evo.ownerJid.replace(/@.*$/, '') : '';
         const phone = rawPhone ? (rawPhone.startsWith('+') ? rawPhone : '+' + rawPhone) : null;
-        const profileName = evo.profileName || 'WhatsApp Conectado';
+        const profileName = evo.profileName || (isOpen ? 'WhatsApp Conectado' : 'WhatsApp');
         const evoRealName = evo.name || evo.instanceName || nameLower;
 
         let createdInst: any = null;
@@ -789,11 +790,11 @@ export class EvolutionApiService {
               where: { id: existing.id },
               data: {
                 tenantId,
-                status: 'CONNECTED',
+                status: finalStatus,
                 phone: phone || existing.phone,
                 profileName: profileName || existing.profileName,
-                lastConnectedAt: new Date(),
-                qrcode: null,
+                lastConnectedAt: isOpen ? new Date() : existing.lastConnectedAt,
+                qrcode: isOpen ? null : existing.qrcode,
               },
             });
           } else {
@@ -803,11 +804,11 @@ export class EvolutionApiService {
                 name: profileName + (phone ? ` (${phone})` : ''),
                 instanceName: evoRealName,
                 instanceToken: evo.token || crypto.randomUUID(),
-                status: 'CONNECTED',
+                status: finalStatus,
                 phone,
                 profileName,
                 isDefault: syncedInstances.length === 0,
-                lastConnectedAt: new Date(),
+                lastConnectedAt: isOpen ? new Date() : null,
                 qrcode: null,
               },
             });
@@ -819,12 +820,12 @@ export class EvolutionApiService {
           id: createdInst?.id || evoRealName,
           name: createdInst?.name || profileName + (phone ? ` (${phone})` : ''),
           instanceName: evoRealName,
-          connected: true,
-          status: 'CONNECTED',
+          connected: isOpen,
+          status: finalStatus,
           phone,
           profileName,
           isDefault: syncedInstances.length === 0,
-          lastConnectedAt: new Date(),
+          lastConnectedAt: isOpen ? new Date() : null,
           qrcode: null,
         });
       }

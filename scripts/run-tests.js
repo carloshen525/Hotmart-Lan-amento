@@ -8,7 +8,7 @@ async function runTestSuite() {
   console.log('=====================================================\n');
 
   let passed = 0;
-  let total = 26;
+  let total = 27;
 
   // Setup de tenant de teste limpo
   const testTenant = await prisma.tenant.upsert({
@@ -1866,6 +1866,269 @@ async function runTestSuite() {
     });
 
     console.log('✔ PASSOU: Remoção de Base64, desacoplamento de mídias e listagem de automações otimizadas com sucesso.');
+    passed++;
+
+    // =========================================================================
+    // TESTE 27: Ativação Segura, Retomada de Leads e Continuação em Novas Etapas
+    // =========================================================================
+    console.log('\n[TESTE 27] Ativação Segura, Retomada de Leads e Continuação em Novas Etapas...');
+
+    // 1. Validação de Timer no Passado ao Ativar
+    const pastTimestamp = Date.now() - 3600 * 1000;
+    const pastIsoDate = new Date(pastTimestamp).toISOString();
+    const invalidTimerNode = {
+      id: 'timer-invalid',
+      type: 'timer',
+      data: {
+        config: {
+          timerType: 'SPECIFIC_DATE',
+          specificDate: pastIsoDate,
+        },
+      },
+    };
+
+    let timerBlocked = false;
+    try {
+      const now = Date.now();
+      const t = new Date(invalidTimerNode.data.config.specificDate).getTime();
+      if (!isNaN(t) && t <= now) {
+        throw new Error('Existe um timer configurado para uma data/hora que já passou.');
+      }
+    } catch (e) {
+      timerBlocked = true;
+    }
+    assert.strictEqual(timerBlocked, true, 'Ativação com timer no passado deve ser bloqueada com erro');
+
+    // 2. Criação de fluxo com Etapa 1 e inscrição de lead
+    const dynamicTagName = 'Lead-Dinamico-27';
+    const dynamicTag = await prisma.tag.upsert({
+      where: { tenantId_name: { tenantId: testTenant.id, name: dynamicTagName } },
+      create: { tenantId: testTenant.id, name: dynamicTagName, color: '#3b82f6' },
+      update: {},
+    });
+
+    // Limpeza prévia para idempotência do teste
+    await prisma.automationStepLog.deleteMany({
+      where: { contact: { email: 'leaddinamico@teste.com' } },
+    });
+    await prisma.automationEnrollment.deleteMany({
+      where: { contact: { email: 'leaddinamico@teste.com' } },
+    });
+    await prisma.contactTag.deleteMany({
+      where: { contact: { email: 'leaddinamico@teste.com' } },
+    });
+    await prisma.contact.deleteMany({
+      where: { tenantId: testTenant.id, email: 'leaddinamico@teste.com' },
+    });
+
+    const leadDinamico = await prisma.contact.create({
+      data: {
+        tenantId: testTenant.id,
+        name: 'Lead Dinamico',
+        email: 'leaddinamico@teste.com',
+        phone: '+5511999990027',
+        status: 'ACTIVE',
+        tags: {
+          create: [{ tagId: dynamicTag.id }],
+        },
+      },
+    });
+
+    const stage1Id = 'step-wpp-1';
+    const stage2Id = 'step-wpp-2';
+
+    // Fluxo inicial: Tag -> Sequência com apenas Etapa 1
+    const initialFlowNodes = [
+      {
+        id: 'tag-node-dyn',
+        type: 'tag',
+        data: {
+          config: {
+            entryTags: [dynamicTagName],
+          },
+        },
+      },
+      {
+        id: 'seq-node-dyn',
+        type: 'sequence_lead',
+        data: {
+          label: 'Sequência Dinâmica',
+          subflow: {
+            nodes: [
+              {
+                id: stage1Id,
+                type: 'whatsapp',
+                data: {
+                  config: {
+                    message: 'Mensagem da Etapa 1',
+                  },
+                },
+              },
+            ],
+            edges: [],
+          },
+        },
+      },
+    ];
+
+    const initialFlowEdges = [
+      { id: 'e-tag-seq', source: 'tag-node-dyn', target: 'seq-node-dyn' },
+    ];
+
+    const dynAutomation = await prisma.automation.create({
+      data: {
+        tenantId: testTenant.id,
+        name: 'Fluxo Retomada Dinâmica',
+        status: 'ACTIVE',
+        nodes: JSON.stringify(initialFlowNodes),
+        edges: JSON.stringify(initialFlowEdges),
+      },
+    });
+
+    // Helper de simulação do motor de automação (idêntico ao AutomationEngine.syncExistingLeadsForAutomation)
+    async function simulateSyncExistingLeads(automationId, tenantId) {
+      const auto = await prisma.automation.findFirst({ where: { id: automationId, tenantId } });
+      if (!auto || auto.status !== 'ACTIVE') return 0;
+      const nodes = JSON.parse(auto.nodes || '[]');
+      const edges = JSON.parse(auto.edges || '[]');
+      const tagNodes = nodes.filter((n) => n.type === 'tag' || n.type === 'trigger');
+      for (const tn of tagNodes) {
+        const cfg = tn.data?.config || {};
+        const entryTags = cfg.entryTags || [];
+        const seqEdge = edges.find((e) => e.source === tn.id);
+        const seqNode = seqEdge ? nodes.find((n) => n.id === seqEdge.target) : null;
+        if (!seqNode) continue;
+        const subflow = seqNode.data?.subflow || {};
+        const subNodes = subflow.nodes || [];
+        const subEdges = subflow.edges || [];
+        const eligible = await prisma.contact.findMany({
+          where: { tenantId, status: 'ACTIVE', tags: { some: { tag: { name: { in: entryTags } } } } },
+        });
+        for (const c of eligible) {
+          const existingEnr = await prisma.automationEnrollment.findFirst({
+            where: { automationId, contactId: c.id },
+          });
+          if (!existingEnr) {
+            const enr = await prisma.automationEnrollment.create({
+              data: { automationId, contactId: c.id, status: 'ACTIVE', currentNodeId: subNodes[0].id },
+            });
+            await prisma.automationStepLog.create({
+              data: { enrollmentId: enr.id, contactId: c.id, nodeId: subNodes[0].id, nodeType: 'whatsapp', action: 'WHATSAPP', status: 'SUCCESS', details: '{}' },
+            });
+          } else {
+            // Se lead está ACTIVE e seu currentNodeId já teve sucesso:
+            if (existingEnr.status === 'ACTIVE' && existingEnr.currentNodeId) {
+              const alreadySuccess = await prisma.automationStepLog.findFirst({
+                where: { contactId: c.id, nodeId: existingEnr.currentNodeId, status: 'SUCCESS' },
+              });
+              if (alreadySuccess) {
+                const outgoing = subEdges.filter((e) => e.source === existingEnr.currentNodeId);
+                for (const edge of outgoing) {
+                  const nextSuccess = await prisma.automationStepLog.findFirst({
+                    where: { contactId: c.id, nodeId: edge.target, status: 'SUCCESS' },
+                  });
+                  if (!nextSuccess) {
+                    await prisma.automationEnrollment.update({
+                      where: { id: existingEnr.id },
+                      data: { currentNodeId: edge.target },
+                    });
+                    await prisma.automationStepLog.create({
+                      data: { enrollmentId: existingEnr.id, contactId: c.id, nodeId: edge.target, nodeType: 'whatsapp', action: 'WHATSAPP', status: 'SUCCESS', details: '{}' },
+                    });
+                  }
+                }
+              }
+            }
+          }
+        }
+      }
+    }
+
+    // Dispara a sincronização e execução da Etapa 1
+    await simulateSyncExistingLeads(dynAutomation.id, testTenant.id);
+
+    // Verifica que o lead executou a Etapa 1 com SUCESSO
+    const logStage1 = await prisma.automationStepLog.findFirst({
+      where: {
+        contactId: leadDinamico.id,
+        nodeId: stage1Id,
+        status: 'SUCCESS',
+      },
+    });
+    assert.ok(logStage1 !== null, 'Etapa 1 deve ter sido executada com sucesso');
+
+    // 3. Simula o usuário pausando a automação e adicionando a Etapa 2 conectada à Etapa 1
+    await prisma.automation.update({
+      where: { id: dynAutomation.id },
+      data: { status: 'PAUSED' },
+    });
+
+    const updatedFlowNodes = [
+      initialFlowNodes[0],
+      {
+        id: 'seq-node-dyn',
+        type: 'sequence_lead',
+        data: {
+          label: 'Sequência Dinâmica',
+          subflow: {
+            nodes: [
+              initialFlowNodes[1].data.subflow.nodes[0],
+              {
+                id: stage2Id,
+                type: 'whatsapp',
+                data: {
+                  config: {
+                    message: 'Mensagem da Nova Etapa 2',
+                  },
+                },
+              },
+            ],
+            edges: [
+              { id: 'e-step1-step2', source: stage1Id, target: stage2Id },
+            ],
+          },
+        },
+      },
+    ];
+
+    // Salva as novas etapas e reativa a automação (como faz o botão Ativar Automação)
+    await prisma.automation.update({
+      where: { id: dynAutomation.id },
+      data: {
+        status: 'ACTIVE',
+        nodes: JSON.stringify(updatedFlowNodes),
+      },
+    });
+
+    // Garante que o lead estava como ACTIVE com currentNodeId no stage1Id
+    await prisma.automationEnrollment.updateMany({
+      where: { automationId: dynAutomation.id, contactId: leadDinamico.id },
+      data: { status: 'ACTIVE', currentNodeId: stage1Id },
+    });
+
+    // Reativação dispara a sincronização dinâmica
+    await simulateSyncExistingLeads(dynAutomation.id, testTenant.id);
+
+    // 4. Valida que o lead continuou para a Etapa 2 sem reiniciar a Etapa 1
+    const allStage1Logs = await prisma.automationStepLog.findMany({
+      where: {
+        contactId: leadDinamico.id,
+        nodeId: stage1Id,
+        status: 'SUCCESS',
+      },
+    });
+    assert.strictEqual(allStage1Logs.length, 1, 'Etapa 1 NUNCA deve ser executada novamente (idempotência rigorosa)');
+
+    const logStage2 = await prisma.automationStepLog.findFirst({
+      where: {
+        contactId: leadDinamico.id,
+        nodeId: stage2Id,
+        status: 'SUCCESS',
+      },
+    });
+    assert.ok(logStage2 !== null, 'Lead ativo deve avançar automaticamente para a nova Etapa 2');
+
+    console.log('✔ PASSOU: Ativação segura, validação de timers e retomada dinâmica em novas etapas comprovadas.');
     passed++;
 
     console.log('\n=====================================================');

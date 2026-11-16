@@ -902,12 +902,174 @@ export default function AutomationCanvasPage() {
     }
   };
 
+  // Ativação Segura da Automação com Validações Completas de Aptidão
+  const handleActivateAutomation = async () => {
+    if (saving || isActivating) return;
+
+    // 1. Validação de Aptidão para Execução
+    // 1.1 Nome do fluxo
+    if (!name || !name.trim()) {
+      setSaveNotice('⚠️ Dê um nome para a automação antes de ativar.');
+      setTimeout(() => setSaveNotice(null), 5000);
+      return;
+    }
+
+    // Obter os nós mais recentes (considerando se está editando subflow de sequência)
+    let currentMacroNodes = [...macroNodes];
+    if (viewMode === 'SEQUENCE' && activeSequenceNode) {
+      currentMacroNodes = currentMacroNodes.map((n) =>
+        n.id === activeSequenceNode.id
+          ? {
+              ...n,
+              data: {
+                ...n.data,
+                label: sequenceName || n.data.label,
+                subflow: { nodes: sequenceNodes, edges: sequenceEdges },
+              },
+            }
+          : n
+      );
+    }
+
+    // 1.2 Pelo menos uma Tag / Gatilho de entrada configurado
+    const tagNodes = currentMacroNodes.filter((n) => n.type === 'tag' || n.type === 'trigger');
+    if (tagNodes.length === 0) {
+      setSaveNotice('⚠️ Adicione ao menos um nó de Tag de Entrada no fluxo.');
+      setTimeout(() => setSaveNotice(null), 5000);
+      return;
+    }
+
+    const hasConfiguredTag = tagNodes.some((tn) => {
+      const cfg: any = tn.data?.config || {};
+      const tags =
+        cfg.entryTags && Array.isArray(cfg.entryTags) && cfg.entryTags.length > 0
+          ? cfg.entryTags
+          : cfg.tagNames && Array.isArray(cfg.tagNames) && cfg.tagNames.length > 0
+          ? cfg.tagNames
+          : cfg.tagName
+          ? [cfg.tagName]
+          : (tn.data as any)?.tagName
+          ? [(tn.data as any).tagName]
+          : [];
+      return tags.length > 0;
+    });
+
+    if (!hasConfiguredTag) {
+      setSaveNotice('⚠️ Configure ao menos uma tag de entrada no nó de Tag.');
+      setTimeout(() => setSaveNotice(null), 5000);
+      return;
+    }
+
+    // 1.3 Pelo menos uma sequência de mensagens conectada ou presente
+    const sequenceOrActionNodes = currentMacroNodes.filter(
+      (n) => n.type === 'sequence_lead' || n.type === 'whatsapp' || n.type === 'email'
+    );
+    if (sequenceOrActionNodes.length === 0) {
+      setSaveNotice('⚠️ Adicione ao menos uma Sequência de Mensagens no fluxo.');
+      setTimeout(() => setSaveNotice(null), 5000);
+      return;
+    }
+
+    // 1.4 Validação de Timers com data específica no passado
+    const nowTime = Date.now();
+    let hasPastTimer = false;
+    let pastTimerError = '';
+
+    const checkNodeTimer = (node: any) => {
+      if (node.type === 'timer' || node.type === 'delay') {
+        const cfg: any = node.data?.config || {};
+        if (cfg.timerType === 'SPECIFIC_DATE' || cfg.delayType === 'specific_date' || cfg.specificDate) {
+          if (!cfg.specificDate) {
+            hasPastTimer = true;
+            pastTimerError = '⚠️ Existe um timer com data específica não configurada.';
+          } else {
+            const tDate = new Date(cfg.specificDate).getTime();
+            if (isNaN(tDate) || tDate <= nowTime) {
+              hasPastTimer = true;
+              pastTimerError = '❌ A data e hora selecionadas no timer já passaram. Escolha um horário futuro.';
+            }
+          }
+        }
+      }
+    };
+
+    currentMacroNodes.forEach((mn) => {
+      checkNodeTimer(mn);
+      const subflowNodes = (mn.data as any)?.subflow?.nodes;
+      if (subflowNodes && Array.isArray(subflowNodes)) {
+        subflowNodes.forEach(checkNodeTimer);
+      }
+    });
+
+    if (hasPastTimer) {
+      setSaveNotice(pastTimerError);
+      setTimeout(() => setSaveNotice(null), 6000);
+      return;
+    }
+
+    // 2. Transição visual imediata para "Ativando..."
+    setIsActivating(true);
+    setSaving(true);
+    setSaveNotice('Ativando automação...');
+
+    try {
+      const res = await fetch(`/api/automations/${automationId}`, {
+        method: 'PUT',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          name,
+          status: 'ACTIVE',
+          forceActivate: true,
+          nodes: currentMacroNodes,
+          edges: macroEdges,
+        }),
+      });
+
+      const data = await res.json();
+
+      if (!res.ok || !data.success) {
+        throw new Error(data.error || 'Falha ao ativar a automação no servidor.');
+      }
+
+      // 3. Atualiza o status para Ativa sem recarregar a página!
+      setStatus('ACTIVE');
+      setSaveNotice('Automação Ativa com Sucesso!');
+
+      // Atualiza cache de sessão
+      const cacheKey = `flow_cache_${automationId}`;
+      try {
+        sessionStorage.setItem(
+          cacheKey,
+          JSON.stringify({
+            name,
+            status: 'ACTIVE',
+            nodes: currentMacroNodes,
+            edges: macroEdges,
+            cachedAt: Date.now(),
+          })
+        );
+      } catch {}
+
+      // Atualiza estatísticas em tempo real
+      fetchRealtimeStats();
+    } catch (err: any) {
+      // Caso ocorra algum erro: manter pausada e exibir motivo
+      setStatus('PAUSED');
+      setSaveNotice(`❌ ${err.message || 'Erro ao ativar automação'}`);
+    } finally {
+      setIsActivating(false);
+      setSaving(false);
+      setTimeout(() => {
+        setSaveNotice((prev) => (prev?.includes('Ativa com Sucesso') ? null : prev));
+      }, 4000);
+    }
+  };
+
   // Salvar no Banco de Dados
   const handleSave = async (publishStatus?: string) => {
     if (saving || isActivating) return; // Impede requisições simultâneas
-    const isActivatingAction = publishStatus === 'ACTIVE';
-    if (isActivatingAction) {
-      setIsActivating(true);
+    if (publishStatus === 'ACTIVE') {
+      return handleActivateAutomation();
     }
     setSaving(true);
     setSaveNotice(null);
@@ -1968,7 +2130,7 @@ export default function AutomationCanvasPage() {
           </div>
           <button
             type="button"
-            onClick={() => handleSave('ACTIVE')}
+            onClick={handleActivateAutomation}
             disabled={saving || isActivating}
             className="flex items-center gap-2 px-3.5 py-1 bg-emerald-600 hover:bg-emerald-500 text-white rounded-lg font-semibold transition-all cursor-pointer shadow-md shadow-emerald-600/30 active:scale-95 disabled:opacity-50 disabled:cursor-not-allowed"
             title="Ativar o fluxo para processar os leads normalmente"
