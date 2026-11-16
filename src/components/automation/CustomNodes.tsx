@@ -375,9 +375,13 @@ export const WhatsAppNode = memo(({ data, selected }: any) => {
           WhatsApp | {count} lead{count === 1 ? '' : 's'}
         </span>
 
-        {Boolean(data.config?.whatsappInstanceName || data.config?.whatsappPhone) && (
+        {Boolean(data.config?.whatsappInstanceName || data.config?.whatsappPhone) ? (
           <span className="text-[10px] text-emerald-400 font-medium block truncate max-w-[130px] mx-auto">
             📱 {data.config.whatsappInstanceName || data.config.whatsappPhone}
+          </span>
+        ) : (
+          <span className="text-[10px] text-amber-400 font-semibold block truncate max-w-[130px] mx-auto bg-amber-950/60 px-1.5 py-0.5 rounded border border-amber-500/30 mt-0.5">
+            ⚠️ WhatsApp Obrigatório
           </span>
         )}
 

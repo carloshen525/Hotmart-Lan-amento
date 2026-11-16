@@ -1078,8 +1078,9 @@ export default function AutomationCanvasPage() {
           setIsFlowWppModalOpen(true);
           return;
         }
-        if (!foundInst.connected) {
-          setSaveNotice(`🔴 O WhatsApp "${foundInst.name || foundInst.phone || 'Linha'}" está desconectado. Conecte antes de ativar.`);
+        const isOnline = Boolean(foundInst && (foundInst.connected === true || foundInst.status === 'CONNECTED'));
+        if (!isOnline) {
+          setSaveNotice(`🔴 O WhatsApp "${foundInst?.name || foundInst?.phone || 'Linha'}" está desconectado. Conecte antes de ativar.`);
           setIsFlowWppModalOpen(true);
           return;
         }
@@ -2864,6 +2865,9 @@ export default function AutomationCanvasPage() {
                       <label className="text-slate-200 font-bold text-xs flex items-center gap-1.5">
                         <Smartphone className="w-4 h-4 text-emerald-400" />
                         <span>Número de Envio do WhatsApp</span>
+                        <span className="text-rose-400 font-semibold text-[10px] bg-rose-950/60 px-1.5 py-0.5 rounded border border-rose-500/30">
+                          Obrigatório
+                        </span>
                       </label>
                       <a
                         href="/whatsapp"
@@ -2879,42 +2883,50 @@ export default function AutomationCanvasPage() {
                     <select
                       value={selectedWppInstanceId}
                       onChange={(e) => setSelectedWppInstanceId(e.target.value)}
-                      className="w-full bg-[#181c25] border border-slate-700/80 rounded-lg px-3 py-2 text-xs text-white focus:outline-none focus:border-emerald-500 font-medium cursor-pointer"
+                      className={`w-full bg-[#181c25] border rounded-lg px-3 py-2 text-xs text-white focus:outline-none font-medium cursor-pointer transition-colors ${
+                        !selectedWppInstanceId && !flowWhatsappInstanceId
+                          ? 'border-rose-500/80 ring-1 ring-rose-500/40 bg-rose-950/10'
+                          : 'border-slate-700/80 focus:border-emerald-500'
+                      }`}
                     >
                       <option value="">
                         {flowWhatsappInstanceId
-                          ? `Usar WhatsApp do Fluxo (${availableWppInstances.find((i) => i.id === flowWhatsappInstanceId)?.name || 'Configurado'})`
-                          : 'Usar WhatsApp padrão do Fluxo (Não definido)'}
+                          ? `Usar WhatsApp padrão do Fluxo (${availableWppInstances.find((i) => i.id === flowWhatsappInstanceId)?.name || 'Configurado'})`
+                          : '-- Selecione um número de WhatsApp (Obrigatório) --'}
                       </option>
-                      {availableWppInstances.map((inst) => (
-                        <option key={inst.id} value={inst.id}>
-                          {inst.name || 'WhatsApp'} {inst.phone ? `(${inst.phone})` : ''} - {inst.connected ? '🟢 Operacional' : '🔴 Desconectado'} {inst.isDefault ? '★ [Principal]' : ''}
-                        </option>
-                      ))}
+                      {availableWppInstances.map((inst) => {
+                        const isOnline = inst.connected || inst.status === 'CONNECTED';
+                        return (
+                          <option key={inst.id} value={inst.id}>
+                            {inst.name || 'WhatsApp'} {inst.phone ? `(${inst.phone})` : ''} - {isOnline ? '🟢 Operacional' : '🔴 Desconectado'} {inst.isDefault ? '★ [Principal]' : ''}
+                          </option>
+                        );
+                      })}
                     </select>
 
                     {!selectedWppInstanceId && !flowWhatsappInstanceId && (
-                      <p className="text-[11px] text-amber-400 font-medium flex items-center gap-1.5 pt-1">
-                        <AlertCircle className="w-3.5 h-3.5 shrink-0" />
-                        <span>Obrigatório: selecione um número neste bloco ou configure o WhatsApp padrão do Fluxo antes de ativar.</span>
-                      </p>
+                      <div className="p-2.5 rounded-lg bg-rose-950/40 border border-rose-500/40 flex items-center gap-2 text-rose-300 text-[11px] font-medium animate-in fade-in">
+                        <AlertCircle className="w-4 h-4 shrink-0 text-rose-400" />
+                        <span>É obrigatório selecionar um WhatsApp conectado para este bloco ou definir o WhatsApp do fluxo antes de ativar a automação.</span>
+                      </div>
                     )}
                     {(selectedWppInstanceId || flowWhatsappInstanceId) && (() => {
                       const effectiveId = selectedWppInstanceId || flowWhatsappInstanceId;
                       const inst = availableWppInstances.find((i) => i.id === effectiveId);
-                      if (inst && !inst.connected) {
+                      const isOnline = inst && (inst.connected || inst.status === 'CONNECTED');
+                      if (inst && !isOnline) {
                         return (
-                          <p className="text-[11px] text-red-400 font-medium flex items-center gap-1.5 pt-1">
-                            <AlertCircle className="w-3.5 h-3.5 shrink-0" />
-                            <span>Atenção: A linha selecionada está desconectada. Conecte-a para poder ativar o fluxo.</span>
-                          </p>
+                          <div className="p-2.5 rounded-lg bg-red-950/40 border border-red-500/40 flex items-center gap-2 text-red-300 text-[11px] font-medium animate-in fade-in">
+                            <AlertCircle className="w-4 h-4 shrink-0 text-red-400" />
+                            <span>Atenção: A linha selecionada está desconectada. Você não conseguirá ativar o fluxo até reconectar este número.</span>
+                          </div>
                         );
                       }
                       return null;
                     })()}
 
                     <p className="text-[10px] text-slate-400">
-                      Escolha qual número cadastrado fará o disparo desta mensagem. Se deixar automático, utilizará o WhatsApp padrão configurado para o fluxo.
+                      Escolha qual número fará o disparo desta mensagem. Se deixar automático, utilizará o WhatsApp padrão configurado para o fluxo.
                     </p>
                   </div>
 
