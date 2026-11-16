@@ -25,6 +25,14 @@ export async function GET(request: Request, { params }: { params: { id: string }
       });
     }
 
+    // Nós e Conexões Macro
+    let parsedNodes: any[] = [];
+    let parsedEdges: any[] = [];
+    try {
+      parsedNodes = JSON.parse(automation.nodes || '[]');
+      parsedEdges = JSON.parse(automation.edges || '[]');
+    } catch {}
+
     const [allEnrollments, allStepLogs, pendingJobs] = await Promise.all([
       prisma.automationEnrollment.findMany({
         where: {
@@ -87,9 +95,44 @@ export async function GET(request: Request, { params }: { params: { id: string }
       }),
     ]);
 
-    // 1. Deduplica enrollments por contactId único (garante conjunto único de leads)
+    // 1. Identifica todas as tags de entrada válidas configuradas no fluxo
+    const allAutoTagNames = new Set<string>();
+    for (const pn of parsedNodes) {
+      if (pn.type === 'tag' || pn.type === 'trigger') {
+        const cfg = pn.data?.config || {};
+        const tList: string[] =
+          cfg.entryTags || cfg.tagNames || (cfg.tagName ? [cfg.tagName] : (pn.data as any)?.tagName ? [(pn.data as any).tagName] : []) || [];
+        tList.forEach((t) => allAutoTagNames.add(t.toLowerCase().trim()));
+      }
+    }
+
+    // 2. Remove/higieniza inscrições órfãs (leads sem tag no CRM que não pertencem ao fluxo)
+    let validEnrollments = allEnrollments;
+    if (allAutoTagNames.size > 0) {
+      const orphanEnrollments = allEnrollments.filter((e) => {
+        const cTags = e.contact?.tags?.map((t: any) => t.tag?.name?.toLowerCase().trim()) || [];
+        return !cTags.some((ct: string) => allAutoTagNames.has(ct));
+      });
+
+      if (orphanEnrollments.length > 0) {
+        const orphanIds = orphanEnrollments.map((e) => e.id);
+        await prisma.automationEnrollment.deleteMany({
+          where: { id: { in: orphanIds } },
+        }).catch(() => {});
+        await prisma.scheduledJob.deleteMany({
+          where: { enrollmentId: { in: orphanIds } },
+        }).catch(() => {});
+      }
+
+      validEnrollments = allEnrollments.filter((e) => {
+        const cTags = e.contact?.tags?.map((t: any) => t.tag?.name?.toLowerCase().trim()) || [];
+        return cTags.some((ct: string) => allAutoTagNames.has(ct));
+      });
+    }
+
+    // 3. Deduplica enrollments por contactId único (garante conjunto único de leads válidos)
     const enrollmentsByContact = new Map<string, (typeof allEnrollments)[0]>();
-    for (const enr of allEnrollments) {
+    for (const enr of validEnrollments) {
       const existing = enrollmentsByContact.get(enr.contactId);
       if (!existing) {
         enrollmentsByContact.set(enr.contactId, enr);
@@ -102,14 +145,16 @@ export async function GET(request: Request, { params }: { params: { id: string }
     }
     const distinctEnrollments = Array.from(enrollmentsByContact.values());
     const totalEnrollments = distinctEnrollments.length;
+    const validContactIds = new Set(distinctEnrollments.map((e) => e.contactId));
 
-    // 2. Mapeamento por nós com contatos únicos (Set<string>)
+    // 4. Mapeamento por nós com contatos únicos (Set<string>) restritos a leads válidos da tag
     const nodeSuccessContacts = new Map<string, Set<string>>();
     const nodeWaitingContacts = new Map<string, Set<string>>();
     const nodeFailedContacts = new Map<string, Set<string>>();
 
     for (const log of allStepLogs) {
       if (!log.nodeId || !log.contactId) continue;
+      if (allAutoTagNames.size > 0 && !validContactIds.has(log.contactId)) continue;
       if (log.status === 'SUCCESS') {
         if (!nodeSuccessContacts.has(log.nodeId)) nodeSuccessContacts.set(log.nodeId, new Set());
         nodeSuccessContacts.get(log.nodeId)!.add(log.contactId);
@@ -121,6 +166,7 @@ export async function GET(request: Request, { params }: { params: { id: string }
 
     for (const job of pendingJobs) {
       if (!job.targetNodeId || !job.contactId) continue;
+      if (allAutoTagNames.size > 0 && !validContactIds.has(job.contactId)) continue;
       if (!nodeWaitingContacts.has(job.targetNodeId)) nodeWaitingContacts.set(job.targetNodeId, new Set());
       nodeWaitingContacts.get(job.targetNodeId)!.add(job.contactId);
     }
@@ -173,10 +219,12 @@ export async function GET(request: Request, { params }: { params: { id: string }
       return nodeStats[nodeId];
     };
 
-    // Nó inicial seq_start registra todos os contatos únicos inscritos
+    // Nó inicial padrão seq_start alinhado ao total de leads válidos
     const startStat = getNodeStat('seq_start');
-    startStat.successCount = Math.max(startStat.successCount, totalEnrollments);
+    startStat.successCount = totalEnrollments;
     startStat.leadsCount = totalEnrollments;
+    startStat.waitingCount = 0;
+    startStat.failedCount = 0;
 
     const activeInSequence = distinctEnrollments.filter(
       (e) => e.status === 'ACTIVE' || e.status === 'WAITING'
@@ -185,15 +233,7 @@ export async function GET(request: Request, { params }: { params: { id: string }
       (e) => e.status === 'COMPLETED' || e.status === 'CANCELLED' || e.status === 'FAILED'
     ).length;
 
-    // Nós e Conexões Macro
-    let parsedNodes: any[] = [];
-    let parsedEdges: any[] = [];
-    try {
-      parsedNodes = JSON.parse(automation.nodes || '[]');
-      parsedEdges = JSON.parse(automation.edges || '[]');
-    } catch {}
-
-    // 1. Calcula primeiro as estatísticas de cada nó de Tag (fonte da verdade de leads elegíveis)
+    // 5. Calcula primeiro as estatísticas de cada nó de Tag (fonte da verdade de leads elegíveis)
     for (const n of parsedNodes) {
       if (n.type === 'tag' || n.type === 'trigger') {
         const tagStat = getNodeStat(n.id);
@@ -219,38 +259,7 @@ export async function GET(request: Request, { params }: { params: { id: string }
       }
     }
 
-    // 2. Higieniza preventivamente inscrições órfãs (leads desmarcados/sem tag no CRM)
-    const allAutoTagNames = new Set<string>();
-    for (const pn of parsedNodes) {
-      if (pn.type === 'tag' || pn.type === 'trigger') {
-        const cfg = pn.data?.config || {};
-        const tList: string[] =
-          cfg.entryTags || cfg.tagNames || (cfg.tagName ? [cfg.tagName] : (pn.data as any)?.tagName ? [(pn.data as any).tagName] : []) || [];
-        tList.forEach((t) => allAutoTagNames.add(t.toLowerCase().trim()));
-      }
-    }
-
-    if (allAutoTagNames.size > 0) {
-      const untaggedActive = allEnrollments.filter((e) => {
-        if (e.status !== 'ACTIVE' && e.status !== 'WAITING') return false;
-        const cTags = e.contact?.tags?.map((t: any) => t.tag?.name?.toLowerCase().trim()) || [];
-        return !cTags.some((ct: string) => allAutoTagNames.has(ct));
-      });
-
-      if (untaggedActive.length > 0) {
-        const untaggedIds = untaggedActive.map((e) => e.id);
-        await prisma.automationEnrollment.updateMany({
-          where: { id: { in: untaggedIds } },
-          data: { status: 'CANCELLED' },
-        }).catch(() => {});
-        await prisma.scheduledJob.updateMany({
-          where: { enrollmentId: { in: untaggedIds }, status: 'PENDING' },
-          data: { status: 'CANCELLED' },
-        }).catch(() => {});
-      }
-    }
-
-    // 3. Calcula as estatísticas de cada Sequência de acordo estrito com a Tag conectada
+    // 6. Calcula as estatísticas de cada Sequência e seus nós internos (Start, WhatsApp, etc) de acordo com a Tag conectada
     for (const n of parsedNodes) {
       if (n.type === 'sequence_lead') {
         const seqStat = getNodeStat(n.id);
@@ -301,6 +310,29 @@ export async function GET(request: Request, { params }: { params: { id: string }
           if (seqStat.waitingCount > computedCount) seqStat.waitingCount = computedCount;
           seqStat.successCount = Math.max(0, computedCount - seqStat.waitingCount - seqStat.failedCount);
         }
+
+        // Harmoniza rigorosamente o nó Start e nós internos do subfluxo da sequência
+        const subflow = (n.data as any)?.subflow || {};
+        const subNodes: any[] = subflow.nodes || [];
+        for (const sn of subNodes) {
+          const subStat = getNodeStat(sn.id);
+          if (sn.type === 'start' || sn.id === 'seq_start') {
+            subStat.leadsCount = computedCount;
+            subStat.successCount = computedCount;
+            subStat.waitingCount = 0;
+            subStat.failedCount = 0;
+          } else {
+            // Nenhum nó interno da sequência pode ultrapassar a quantidade de leads elegíveis
+            if (subStat.leadsCount > computedCount) subStat.leadsCount = computedCount;
+            if (subStat.successCount > computedCount) subStat.successCount = computedCount;
+            if (subStat.waitingCount > computedCount) subStat.waitingCount = computedCount;
+            if (subStat.failedCount > computedCount) subStat.failedCount = computedCount;
+          }
+        }
+
+        // Garante que o seq_start padrão reflita a contagem da sequência
+        startStat.leadsCount = computedCount;
+        startStat.successCount = computedCount;
       }
     }
 

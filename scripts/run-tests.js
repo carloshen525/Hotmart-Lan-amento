@@ -2272,7 +2272,11 @@ async function runTestSuite() {
       'Lead órfão sem a tag NÃO pode constar na sequência'
     );
 
-    console.log('✔ PASSOU: Coerência estrita de contagem entre Tag (2 leads) e Sequência (2 leads) validada com sucesso.');
+    // 3. Contagem do nó Start do subfluxo da Sequência
+    const startNodeStatLeads = seqEnrollments.length;
+    assert.strictEqual(startNodeStatLeads, 2, 'Nó Start do subfluxo DEVE conter exatamente 2 leads (nunca 3)');
+
+    console.log('✔ PASSOU: Coerência estrita de contagem entre Tag (2 leads), Sequência (2 leads) e Start (2 leads) validada com sucesso.');
     passed++;
 
     // -------------------------------------------------------------

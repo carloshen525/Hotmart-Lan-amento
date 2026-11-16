@@ -282,24 +282,28 @@ export default function AutomationCanvasPage() {
       if (!statsMap || Object.keys(statsMap).length === 0) return nodesList;
 
       return nodesList.map((node): Node => {
-        const s = statsMap[node.id] || {
-          leadsCount: 0,
-          waitingCount: 0,
-          successCount: 0,
-          failedCount: 0,
-        };
+        const s =
+          statsMap[node.id] ||
+          (node.type === 'start' ? statsMap['seq_start'] : null) || {
+            leadsCount: 0,
+            waitingCount: 0,
+            successCount: 0,
+            failedCount: 0,
+          };
 
         let updatedSubflow = node.data?.subflow as any;
         if (updatedSubflow && Array.isArray(updatedSubflow.nodes)) {
           updatedSubflow = {
             ...updatedSubflow,
             nodes: updatedSubflow.nodes.map((subNode: Node): Node => {
-              const subS = statsMap[subNode.id] || {
-                leadsCount: 0,
-                waitingCount: 0,
-                successCount: 0,
-                failedCount: 0,
-              };
+              const subS =
+                statsMap[subNode.id] ||
+                (subNode.type === 'start' ? statsMap['seq_start'] : null) || {
+                  leadsCount: 0,
+                  waitingCount: 0,
+                  successCount: 0,
+                  failedCount: 0,
+                };
               return {
                 ...subNode,
                 data: {
