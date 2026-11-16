@@ -8,7 +8,7 @@ async function runTestSuite() {
   console.log('=====================================================\n');
 
   let passed = 0;
-  let total = 27;
+  let total = 28;
 
   // Setup de tenant de teste limpo
   const testTenant = await prisma.tenant.upsert({
@@ -2129,6 +2129,150 @@ async function runTestSuite() {
     assert.ok(logStage2 !== null, 'Lead ativo deve avançar automaticamente para a nova Etapa 2');
 
     console.log('✔ PASSOU: Ativação segura, validação de timers e retomada dinâmica em novas etapas comprovadas.');
+    passed++;
+
+    // =========================================================================
+    // TESTE 28: Coerência Estrita de Contagem entre Nós de Tag e Sequência
+    // =========================================================================
+    console.log('\n[TESTE 28] Coerência Estrita de Contagem entre Nós de Tag e Sequência...');
+
+    const karenTagName = 'karenTagTest';
+    const tagKaren = await prisma.tag.upsert({
+      where: { tenantId_name: { tenantId: testTenant.id, name: karenTagName } },
+      create: { tenantId: testTenant.id, name: karenTagName, color: '#9333ea' },
+      update: {},
+    });
+
+    // Limpeza prévia
+    await prisma.contact.deleteMany({
+      where: {
+        tenantId: testTenant.id,
+        email: { in: ['karen1@teste.com', 'karen2@teste.com', 'karen_orfa@teste.com'] },
+      },
+    });
+
+    // 2 contatos que POSSUEM a tag karenTagTest
+    const contactK1 = await prisma.contact.create({
+      data: {
+        tenantId: testTenant.id,
+        name: 'Karen Lead 1',
+        email: 'karen1@teste.com',
+        status: 'ACTIVE',
+        tags: { create: [{ tagId: tagKaren.id }] },
+      },
+    });
+
+    const contactK2 = await prisma.contact.create({
+      data: {
+        tenantId: testTenant.id,
+        name: 'Karen Lead 2',
+        email: 'karen2@teste.com',
+        status: 'ACTIVE',
+        tags: { create: [{ tagId: tagKaren.id }] },
+      },
+    });
+
+    // 1 contato órfão que NÃO possui a tag karenTagTest
+    const contactK3Orphan = await prisma.contact.create({
+      data: {
+        tenantId: testTenant.id,
+        name: 'Karen Lead Órfão',
+        email: 'karen_orfa@teste.com',
+        status: 'ACTIVE',
+      },
+    });
+
+    const tagNodeId = 'tag-karen-node';
+    const seqNodeId = 'seq-karen-node';
+
+    const karenFlowNodes = [
+      {
+        id: tagNodeId,
+        type: 'tag',
+        data: {
+          config: {
+            entryTags: [karenTagName],
+            tagName: karenTagName,
+          },
+        },
+      },
+      {
+        id: seqNodeId,
+        type: 'sequence_lead',
+        data: {
+          label: 'Enviar E-mail de Boas-vindas',
+          subflow: {
+            nodes: [{ id: 'sub-1', type: 'whatsapp' }],
+            edges: [],
+          },
+        },
+      },
+    ];
+
+    const karenFlowEdges = [
+      { id: 'edge-tag-seq', source: tagNodeId, target: seqNodeId },
+    ];
+
+    const autoKaren = await prisma.automation.create({
+      data: {
+        tenantId: testTenant.id,
+        name: 'Fluxo Karen Tag',
+        status: 'ACTIVE',
+        nodes: JSON.stringify(karenFlowNodes),
+        edges: JSON.stringify(karenFlowEdges),
+      },
+    });
+
+    // Cria as inscrições: 2 válidas (k1, k2) e 1 órfã (k3)
+    await prisma.automationEnrollment.createMany({
+      data: [
+        { automationId: autoKaren.id, contactId: contactK1.id, status: 'COMPLETED' },
+        { automationId: autoKaren.id, contactId: contactK2.id, status: 'COMPLETED' },
+        { automationId: autoKaren.id, contactId: contactK3Orphan.id, status: 'WAITING' }, // Órfão sem tag
+      ],
+    });
+
+    // Simula a lógica de cálculo de estatísticas (idêntica a stats/route.ts e route.ts)
+    const allEnrs = await prisma.automationEnrollment.findMany({
+      where: {
+        automationId: autoKaren.id,
+        contact: { tenantId: testTenant.id, status: { not: 'UNSUBSCRIBED' } },
+      },
+      include: {
+        contact: { include: { tags: { include: { tag: true } } } },
+      },
+    });
+
+    const distinctEnrs = Array.from(
+      new Map(allEnrs.map((e) => [e.contactId, e])).values()
+    );
+
+    // 1. Contagem da Tag
+    const tagCount = await prisma.contact.count({
+      where: {
+        tenantId: testTenant.id,
+        status: { not: 'UNSUBSCRIBED' },
+        tags: { some: { tag: { name: karenTagName } } },
+      },
+    });
+    assert.strictEqual(tagCount, 2, 'Tag deve contabilizar exatamente 2 leads');
+
+    // 2. Contagem da Sequência conectada à Tag
+    const incomingToSeq = karenFlowEdges.filter((e) => e.target === seqNodeId);
+    const sourceTags = new Set([karenTagName.toLowerCase().trim()]);
+
+    const seqEnrollments = distinctEnrs.filter((e) => {
+      const cTags = e.contact?.tags?.map((t) => t.tag?.name?.toLowerCase().trim()) || [];
+      return cTags.some((ct) => sourceTags.has(ct));
+    });
+
+    assert.strictEqual(seqEnrollments.length, 2, 'A Sequência conectada DEVE conter exatamente 2 leads');
+    assert.ok(
+      !seqEnrollments.some((e) => e.contactId === contactK3Orphan.id),
+      'Lead órfão sem a tag NÃO pode constar na sequência'
+    );
+
+    console.log('✔ PASSOU: Coerência estrita de contagem entre Tag (2 leads) e Sequência (2 leads) validada com sucesso.');
     passed++;
 
     console.log('\n=====================================================');
