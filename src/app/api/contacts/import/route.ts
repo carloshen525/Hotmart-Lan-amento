@@ -29,6 +29,33 @@ function parseCSVLine(line: string, delimiter: string): string[] {
   return result;
 }
 
+// Utilitário para limpar strings, remover aspas soltas e tratar valores vazios como (none) ou null
+function cleanValue(val?: string): string {
+  if (!val) return '';
+  const trimmed = val.replace(/^["'\s]+|["'\s]+$/g, '').trim();
+  const lower = trimmed.toLowerCase();
+  if (lower === '(none)' || lower === 'none' || lower === 'null' || lower === 'undefined' || lower === '-') {
+    return '';
+  }
+  return trimmed;
+}
+
+// Utilitário para sanitizar nome do comprador com fallback elegante
+function cleanName(val?: string, email?: string): string {
+  const cleaned = cleanValue(val);
+  if (cleaned) return cleaned;
+  if (email && email.includes('@')) {
+    const prefix = email.split('@')[0].replace(/[._-]+/g, ' ').trim();
+    const formatted = prefix
+      .split(' ')
+      .filter(Boolean)
+      .map((w) => w.charAt(0).toUpperCase() + w.slice(1).toLowerCase())
+      .join(' ');
+    if (formatted) return formatted;
+  }
+  return 'Contato';
+}
+
 // Utilitário para limpar e formatar telefone internacional
 function formatPhone(ddd?: string, tel?: string, country?: string): string | null {
   const rawDdd = (ddd || '').replace(/\D/g, '');
@@ -129,48 +156,156 @@ export async function POST(request: Request) {
     const findExact = (names: string[]) =>
       headers.findIndex((h) => names.some((n) => h === n));
 
-    // Coluna do comprador: primeiro busca exato 'nome' ou 'nome do comprador' ou 'cliente'
-    let idxName = findExact(['nome', 'nome do comprador', 'cliente', 'name']);
+    // 1. Coluna do Comprador / Lead: prioriza comprador/cliente específico
+    let idxName = headers.findIndex((h) => 
+      (h.includes('comprador') || h.includes('cliente')) && h.includes('nome')
+    );
     if (idxName === -1) {
-      idxName = headers.findIndex((h) => h.includes('nome') && !h.includes('produto') && !h.includes('produtor') && !h.includes('afiliado'));
+      idxName = findExact([
+        'nome comprador(a)',
+        'nome comprador',
+        'nome do comprador',
+        'nome cliente',
+        'nome do cliente',
+        'nome completo',
+        'nome',
+        'name',
+        'full name',
+        'first name',
+        'comprador(a)',
+        'comprador',
+        'cliente',
+      ]);
+    }
+    if (idxName === -1) {
+      // Fallback: qualquer coluna com 'nome' ou 'name' que NÃO seja de produto, produtor, afiliado, preço, oferta, cupom, taxa
+      idxName = headers.findIndex((h) => 
+        (h.includes('nome') || h.includes('name')) &&
+        !h.includes('produto') &&
+        !h.includes('produtor') &&
+        !h.includes('afiliado') &&
+        !h.includes('preço') &&
+        !h.includes('preco') &&
+        !h.includes('oferta') &&
+        !h.includes('cupom') &&
+        !h.includes('taxa')
+      );
     }
 
-    let idxDoc = findExact(['documento', 'cpf', 'cnpj', 'documento do comprador']);
+    // 2. Documento do Comprador
+    let idxDoc = headers.findIndex((h) => 
+      (h.includes('comprador') || h.includes('cliente')) && 
+      (h.includes('documento') || h.includes('cpf') || h.includes('cnpj'))
+    );
     if (idxDoc === -1) {
-      idxDoc = headers.findIndex((h) => (h.includes('documento') || h.includes('cpf')) && !h.includes('produtor'));
+      idxDoc = findExact(['documento', 'cpf', 'cnpj', 'documento do comprador', 'cpf/cnpj']);
+    }
+    if (idxDoc === -1) {
+      idxDoc = headers.findIndex((h) => 
+        (h.includes('documento') || h.includes('cpf') || h.includes('cnpj')) &&
+        !h.includes('produtor') &&
+        !h.includes('afiliado')
+      );
     }
 
-    const idxEmail = findExact(['email', 'e-mail', 'e-mail do comprador']) !== -1
-      ? findExact(['email', 'e-mail', 'e-mail do comprador'])
-      : headers.findIndex((h) => h.includes('email') || h.includes('e-mail'));
+    // 3. Email do Comprador
+    let idxEmail = headers.findIndex((h) => 
+      (h.includes('comprador') || h.includes('cliente')) && (h.includes('email') || h.includes('e-mail'))
+    );
+    if (idxEmail === -1) {
+      idxEmail = findExact(['email', 'e-mail', 'email do comprador', 'e-mail do comprador']);
+    }
+    if (idxEmail === -1) {
+      idxEmail = headers.findIndex((h) => 
+        (h.includes('email') || h.includes('e-mail')) &&
+        !h.includes('produtor') &&
+        !h.includes('afiliado')
+      );
+    }
 
+    // 4. DDD
     const idxDdd = findExact(['ddd']) !== -1
       ? findExact(['ddd'])
       : headers.findIndex((h) => h === 'ddd' || h.includes('ddd'));
 
-    const idxPhone = findExact(['telefone', 'celular', 'phone', 'whatsapp']) !== -1
-      ? findExact(['telefone', 'celular', 'phone', 'whatsapp'])
-      : headers.findIndex((h) => (h.includes('telefone') || h.includes('celular') || h.includes('phone') || h.includes('whatsapp')) && !h.includes('ddd'));
+    // 5. Telefone do Comprador
+    let idxPhone = headers.findIndex((h) => 
+      (h.includes('comprador') || h.includes('cliente')) && 
+      (h.includes('telefone') || h.includes('celular') || h.includes('phone') || h.includes('whatsapp')) &&
+      !h.includes('ddd')
+    );
+    if (idxPhone === -1) {
+      idxPhone = findExact(['telefone', 'celular', 'phone', 'whatsapp', 'telefone celular', 'whatsapp do comprador']);
+    }
+    if (idxPhone === -1) {
+      idxPhone = headers.findIndex((h) => 
+        (h.includes('telefone') || h.includes('celular') || h.includes('phone') || h.includes('whatsapp')) &&
+        !h.includes('ddd') &&
+        !h.includes('produtor') &&
+        !h.includes('afiliado')
+      );
+    }
 
-    const idxProduct = findExact(['nome do produto', 'produto', 'product']) !== -1
-      ? findExact(['nome do produto', 'produto', 'product'])
-      : headers.findIndex((h) => h.includes('produto') || h.includes('product'));
+    // 6. Produto
+    let idxProduct = findExact(['nome do produto', 'produto', 'product']);
+    if (idxProduct === -1) {
+      idxProduct = headers.findIndex((h) => 
+        (h.includes('produto') || h.includes('product')) &&
+        !h.includes('código') &&
+        !h.includes('codigo') &&
+        !h.includes('formato') &&
+        !h.includes('produtor')
+      );
+    }
 
-    const idxStatus = findExact(['status']) !== -1
-      ? findExact(['status'])
+    // 7. Status da Transação
+    const idxStatus = findExact(['status', 'status da transação', 'status da transacao']) !== -1
+      ? findExact(['status', 'status da transação', 'status da transacao'])
       : headers.findIndex((h) => h.includes('status'));
 
-    const idxTransaction = findExact(['transação', 'transacao', 'transaction']) !== -1
-      ? findExact(['transação', 'transacao', 'transaction'])
+    // 8. Código da Transação
+    const idxTransaction = findExact(['código da transação', 'codigo da transacao', 'transação', 'transacao', 'transaction']) !== -1
+      ? findExact(['código da transação', 'codigo da transacao', 'transação', 'transacao', 'transaction'])
       : headers.findIndex((h) => h.includes('transa'));
 
-    const idxPrice = findExact(['preço total', 'preco total', 'valor', 'price']) !== -1
-      ? findExact(['preço total', 'preco total', 'valor', 'price'])
-      : headers.findIndex((h) => h.includes('preço') || h.includes('preco') || h.includes('valor'));
+    // 9. Preço / Valor
+    let idxPrice = findExact(['preço da oferta', 'valor total da compra', 'preço total', 'preco total', 'preço total convertido', 'valor', 'price']);
+    if (idxPrice === -1) {
+      idxPrice = headers.findIndex((h) => 
+        (h.includes('preço') || h.includes('preco') || h.includes('valor')) &&
+        !h.includes('código') &&
+        !h.includes('codigo') &&
+        !h.includes('nome') &&
+        !h.includes('taxa') &&
+        !h.includes('frete')
+      );
+    }
 
-    const idxCountry = findExact(['país', 'pais', 'country']) !== -1
-      ? findExact(['país', 'pais', 'country'])
-      : headers.findIndex((h) => h.includes('país') || h.includes('pais'));
+    // 10. País
+    let idxCountry = headers.findIndex((h) => 
+      (h.includes('comprador') || h.includes('cliente')) && (h.includes('país') || h.includes('pais') || h.includes('country'))
+    );
+    if (idxCountry === -1) {
+      idxCountry = findExact(['país', 'pais', 'country']);
+    }
+    if (idxCountry === -1) {
+      idxCountry = headers.findIndex((h) => (h.includes('país') || h.includes('pais') || h.includes('country')) && !h.includes('produtor'));
+    }
+
+    // 11. Cidade / Estado / Instagram do Comprador
+    const idxCity = headers.findIndex((h) => 
+      (h.includes('comprador') || h.includes('cliente')) && h.includes('cidade')
+    ) !== -1
+      ? headers.findIndex((h) => (h.includes('comprador') || h.includes('cliente')) && h.includes('cidade'))
+      : findExact(['cidade', 'city']);
+
+    const idxState = headers.findIndex((h) => 
+      (h.includes('comprador') || h.includes('cliente')) && (h.includes('estado') || h.includes('província') || h.includes('provincia') || h.includes('uf'))
+    ) !== -1
+      ? headers.findIndex((h) => (h.includes('comprador') || h.includes('cliente')) && (h.includes('estado') || h.includes('província') || h.includes('provincia') || h.includes('uf')))
+      : findExact(['estado', 'uf', 'provincia', 'state']);
+
+    const idxInstagram = headers.findIndex((h) => h.includes('instagram'));
 
     if (idxEmail === -1) {
       return NextResponse.json(
@@ -189,21 +324,27 @@ export async function POST(request: Request) {
         const row = parseCSVLine(lines[i], delimiter);
         if (row.length < 2) continue;
 
-        const email = (row[idxEmail] || '').replace(/^"|"$/g, '').trim().toLowerCase();
+        const rawEmail = idxEmail !== -1 ? row[idxEmail] : '';
+        const email = cleanValue(rawEmail).toLowerCase();
         if (!email || !email.includes('@')) {
           continue;
         }
 
-        const name = (idxName !== -1 ? row[idxName] : '').replace(/^"|"$/g, '').trim() || email.split('@')[0];
-        const ddd = idxDdd !== -1 ? row[idxDdd] : '';
-        const rawPhone = idxPhone !== -1 ? row[idxPhone] : '';
-        const country = idxCountry !== -1 ? row[idxCountry] : 'Brasil';
+        const rawName = idxName !== -1 ? row[idxName] : '';
+        const name = cleanName(rawName, email);
+        const ddd = idxDdd !== -1 ? cleanValue(row[idxDdd]) : '';
+        const rawPhone = idxPhone !== -1 ? cleanValue(row[idxPhone]) : '';
+        const country = idxCountry !== -1 ? cleanValue(row[idxCountry]) : 'Brasil';
         const formattedPhone = formatPhone(ddd, rawPhone, country);
 
-        const productName = idxProduct !== -1 ? (row[idxProduct] || '').replace(/^"|"$/g, '').trim() : '';
-        const saleStatus = idxStatus !== -1 ? (row[idxStatus] || '').replace(/^"|"$/g, '').trim() : '';
-        const doc = idxDoc !== -1 ? (row[idxDoc] || '').replace(/^"|"$/g, '').trim() : '';
-        const transaction = idxTransaction !== -1 ? (row[idxTransaction] || '').replace(/^"|"$/g, '').trim() : '';
+        const productName = idxProduct !== -1 ? cleanValue(row[idxProduct]) : '';
+        const saleStatus = idxStatus !== -1 ? cleanValue(row[idxStatus]) : '';
+        const doc = idxDoc !== -1 ? cleanValue(row[idxDoc]) : '';
+        const transaction = idxTransaction !== -1 ? cleanValue(row[idxTransaction]) : '';
+        const city = idxCity !== -1 ? cleanValue(row[idxCity]) : '';
+        const state = idxState !== -1 ? cleanValue(row[idxState]) : '';
+        const instagram = idxInstagram !== -1 ? cleanValue(row[idxInstagram]) : '';
+        const price = idxPrice !== -1 ? cleanValue(row[idxPrice]) : '';
 
         // Coleta tags a aplicar para este contato
         const tagsToApply = new Set<string>();
@@ -262,14 +403,25 @@ export async function POST(request: Request) {
         if (transaction) customFieldsObj.transacaoHotmart = transaction;
         if (productName) customFieldsObj.ultimoProduto = productName;
         if (saleStatus) customFieldsObj.statusVenda = saleStatus;
+        if (city) customFieldsObj.cidade = city;
+        if (state) customFieldsObj.estado = state;
+        if (instagram) customFieldsObj.instagram = instagram;
+        if (price) customFieldsObj.valorCompra = price;
 
         let contactId = '';
 
         if (existing) {
+          const isCurrentNameInvalid =
+            !existing.name ||
+            existing.name.toLowerCase() === '(none)' ||
+            existing.name.toLowerCase() === 'none' ||
+            existing.name.toLowerCase() === 'contato' ||
+            existing.name === existing.email.split('@')[0];
+
           await prisma.contact.update({
             where: { id: existing.id },
             data: {
-              name: name || existing.name,
+              name: (name && name !== 'Contato') ? name : (isCurrentNameInvalid ? name : existing.name),
               phone: formattedPhone || existing.phone,
               customFields: JSON.stringify({
                 ...(existing.customFields ? JSON.parse(existing.customFields) : {}),
