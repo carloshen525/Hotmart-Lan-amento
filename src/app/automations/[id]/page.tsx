@@ -99,6 +99,22 @@ export interface MessageBlock {
   caption?: string;
 }
 
+// Helper para converter datetime no formato local do navegador
+const getLocalDatetimeString = (date: Date = new Date()) => {
+  const pad = (n: number) => String(n).padStart(2, '0');
+  return `${date.getFullYear()}-${pad(date.getMonth() + 1)}-${pad(date.getDate())}T${pad(date.getHours())}:${pad(date.getMinutes())}`;
+};
+
+// Helper para interpretar data/hora considerando o fuso horário de Brasília (UTC-3)
+function parseTargetDate(dateStr: string): number {
+  if (!dateStr) return NaN;
+  if (/^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}(:\d{2})?$/.test(dateStr)) {
+    const withOffset = new Date(`${dateStr}-03:00`).getTime();
+    if (!isNaN(withOffset)) return withOffset;
+  }
+  return new Date(dateStr).getTime();
+}
+
 export default function AutomationCanvasPage() {
   const params = useParams();
   const router = useRouter();
@@ -178,6 +194,9 @@ export default function AutomationCanvasPage() {
   // Instâncias / Números de WhatsApp disponíveis no sistema
   const [availableWppInstances, setAvailableWppInstances] = useState<any[]>([]);
   const [selectedWppInstanceId, setSelectedWppInstanceId] = useState<string>('');
+  const [flowWhatsappInstanceId, setFlowWhatsappInstanceId] = useState<string>('');
+  const [isFlowWppModalOpen, setIsFlowWppModalOpen] = useState(false);
+  const [propagateWppToAllNodes, setPropagateWppToAllNodes] = useState(true);
 
   // Construtor Visual de E-mails
   const [isVisualEmailBuilderOpen, setIsVisualEmailBuilderOpen] = useState(false);
@@ -422,6 +441,17 @@ export default function AutomationCanvasPage() {
         if (data.automation) {
           setName(data.automation.name);
           setStatus(data.automation.status);
+
+          let parsedTriggerConfig: any = {};
+          try {
+            parsedTriggerConfig =
+              typeof data.automation.triggerConfig === 'string'
+                ? JSON.parse(data.automation.triggerConfig)
+                : data.automation.triggerConfig || {};
+          } catch {}
+          if (parsedTriggerConfig?.whatsappInstanceId) {
+            setFlowWhatsappInstanceId(parsedTriggerConfig.whatsappInstanceId);
+          }
 
           let parsedNodes: Node[] = [];
           let parsedEdges: Edge[] = [];
@@ -1000,7 +1030,7 @@ export default function AutomationCanvasPage() {
             hasPastTimer = true;
             pastTimerError = '⚠️ Existe um timer com data específica não configurada.';
           } else {
-            const tDate = new Date(cfg.specificDate).getTime();
+            const tDate = parseTargetDate(cfg.specificDate);
             if (isNaN(tDate) || tDate <= nowTime) {
               hasPastTimer = true;
               pastTimerError = '❌ A data e hora selecionadas no timer já passaram. Escolha um horário futuro.';
@@ -1024,6 +1054,38 @@ export default function AutomationCanvasPage() {
       return;
     }
 
+    // 1.5 Validação Obrigatória de WhatsApp: Se houver nós de WhatsApp no fluxo, é obrigatório selecionar uma linha conectada
+    const wppNodesList: any[] = [];
+    const collectWpp = (node: any) => {
+      if (node.type === 'whatsapp') wppNodesList.push(node);
+      if (node.data?.subflow?.nodes && Array.isArray(node.data.subflow.nodes)) {
+        node.data.subflow.nodes.forEach(collectWpp);
+      }
+    };
+    currentMacroNodes.forEach(collectWpp);
+
+    if (wppNodesList.length > 0) {
+      for (const wn of wppNodesList) {
+        const instId = wn.data?.config?.whatsappInstanceId || flowWhatsappInstanceId;
+        if (!instId) {
+          setSaveNotice('⚠️ Obrigatório selecionar um número de WhatsApp operacional antes de ativar o fluxo.');
+          setIsFlowWppModalOpen(true);
+          return;
+        }
+        const foundInst = availableWppInstances.find((i) => i.id === instId);
+        if (!foundInst) {
+          setSaveNotice('⚠️ O WhatsApp configurado para este fluxo não foi encontrado.');
+          setIsFlowWppModalOpen(true);
+          return;
+        }
+        if (!foundInst.connected) {
+          setSaveNotice(`🔴 O WhatsApp "${foundInst.name || foundInst.phone || 'Linha'}" está desconectado. Conecte antes de ativar.`);
+          setIsFlowWppModalOpen(true);
+          return;
+        }
+      }
+    }
+
     // 2. Transição visual imediata para "Ativando..."
     setIsActivating(true);
     setSaving(true);
@@ -1037,6 +1099,7 @@ export default function AutomationCanvasPage() {
           name,
           status: 'ACTIVE',
           forceActivate: true,
+          flowWhatsappInstanceId,
           nodes: currentMacroNodes,
           edges: macroEdges,
         }),
@@ -1147,6 +1210,7 @@ export default function AutomationCanvasPage() {
         body: JSON.stringify({
           name,
           status: newStatus,
+          flowWhatsappInstanceId,
           nodes: currentMacroNodes,
           edges: macroEdges,
         }),
@@ -1208,6 +1272,64 @@ export default function AutomationCanvasPage() {
         openWarmupModal(node);
       }
     }
+  };
+
+  // Salvar WhatsApp padrão do Fluxo
+  const handleSaveFlowWhatsapp = async (selectedId: string, propagate: boolean) => {
+    setFlowWhatsappInstanceId(selectedId);
+    let updatedMacroNodes = [...macroNodes];
+
+    if (propagate && selectedId) {
+      const selInst = availableWppInstances.find((i) => i.id === selectedId);
+      const updateNodeWpp = (node: any): any => {
+        let updated = { ...node };
+        if (updated.type === 'whatsapp') {
+          updated.data = {
+            ...updated.data,
+            config: {
+              ...(updated.data?.config || {}),
+              whatsappInstanceId: selectedId,
+              whatsappInstanceName: selInst?.name || undefined,
+              whatsappPhone: selInst?.phone || undefined,
+            },
+          };
+        }
+        if (updated.data?.subflow?.nodes && Array.isArray(updated.data.subflow.nodes)) {
+          updated.data = {
+            ...updated.data,
+            subflow: {
+              ...updated.data.subflow,
+              nodes: updated.data.subflow.nodes.map(updateNodeWpp),
+            },
+          };
+        }
+        return updated;
+      };
+      updatedMacroNodes = updatedMacroNodes.map(updateNodeWpp);
+      setMacroNodes(updatedMacroNodes);
+      if (viewMode === 'SEQUENCE' && activeSequenceNode) {
+        const currentSub: any = updatedMacroNodes.find((n) => n.id === activeSequenceNode.id);
+        if (currentSub?.data?.subflow?.nodes) {
+          setSequenceNodes(currentSub.data.subflow.nodes);
+        }
+      }
+    }
+
+    try {
+      await fetch(`/api/automations/${automationId}`, {
+        method: 'PUT',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          flowWhatsappInstanceId: selectedId,
+          nodes: updatedMacroNodes,
+          edges: macroEdges,
+        }),
+      });
+      setSaveNotice('WhatsApp do Fluxo configurado com sucesso!');
+      setTimeout(() => setSaveNotice(null), 4000);
+    } catch {}
+
+    setIsFlowWppModalOpen(false);
   };
 
   // Aquecimento Modal Handler
@@ -1327,7 +1449,7 @@ export default function AutomationCanvasPage() {
         setTimerError('❌ A data e hora selecionadas já passaram. Escolha um horário futuro.');
         return;
       }
-      const selectedTime = new Date(timerSpecificDate).getTime();
+      const selectedTime = parseTargetDate(timerSpecificDate);
       if (isNaN(selectedTime) || selectedTime <= Date.now()) {
         setTimerError('❌ A data e hora selecionadas já passaram. Escolha um horário futuro.');
         return;
@@ -2097,6 +2219,25 @@ export default function AutomationCanvasPage() {
             </span>
           )}
 
+          {/* Botão WhatsApp do Fluxo */}
+          <button
+            type="button"
+            onClick={() => setIsFlowWppModalOpen(true)}
+            className={`flex items-center gap-1.5 px-3 py-1.5 rounded-xl border text-xs font-semibold transition-all cursor-pointer ${
+              flowWhatsappInstanceId
+                ? 'border-emerald-500/50 bg-emerald-950/60 text-emerald-300 hover:bg-emerald-900/60'
+                : 'border-amber-500/50 bg-amber-950/50 text-amber-300 hover:bg-amber-900/50'
+            }`}
+            title="Configurar o número de WhatsApp responsável por este fluxo"
+          >
+            <Smartphone className="w-3.5 h-3.5 text-emerald-400" />
+            <span>
+              {flowWhatsappInstanceId
+                ? `WhatsApp: ${availableWppInstances.find((i) => i.id === flowWhatsappInstanceId)?.name || 'Configurado'}`
+                : 'WhatsApp do Fluxo'}
+            </span>
+          </button>
+
           {/* Botão Compartilhar Código */}
           <button
             onClick={handleCopyCode}
@@ -2291,6 +2432,18 @@ export default function AutomationCanvasPage() {
                       <Mail className="w-6 h-6 text-orange-400 group-hover:scale-110 mb-1.5 transition-all" />
                       <span className="text-xs font-medium text-slate-300 group-hover:text-white">
                         E-mail
+                      </span>
+                    </div>
+
+                    {/* Botão Configurar WhatsApp do Fluxo */}
+                    <div
+                      onClick={() => setIsFlowWppModalOpen(true)}
+                      className="flex flex-col items-center justify-center p-2.5 rounded-xl bg-emerald-950/30 hover:bg-emerald-900/40 border border-emerald-500/40 hover:border-emerald-500/70 cursor-pointer transition-all group mt-2"
+                      title="Configurar qual número de WhatsApp é o responsável por enviar as mensagens deste fluxo"
+                    >
+                      <Smartphone className="w-5 h-5 text-emerald-400 group-hover:scale-110 mb-1 transition-all" />
+                      <span className="text-[10px] font-semibold text-emerald-300 group-hover:text-white text-center leading-tight">
+                        WhatsApp do Fluxo
                       </span>
                     </div>
                   </div>
@@ -2729,7 +2882,9 @@ export default function AutomationCanvasPage() {
                       className="w-full bg-[#181c25] border border-slate-700/80 rounded-lg px-3 py-2 text-xs text-white focus:outline-none focus:border-emerald-500 font-medium cursor-pointer"
                     >
                       <option value="">
-                        Automático (Usar número padrão / primeiro conectado)
+                        {flowWhatsappInstanceId
+                          ? `Usar WhatsApp do Fluxo (${availableWppInstances.find((i) => i.id === flowWhatsappInstanceId)?.name || 'Configurado'})`
+                          : 'Usar WhatsApp padrão do Fluxo (Não definido)'}
                       </option>
                       {availableWppInstances.map((inst) => (
                         <option key={inst.id} value={inst.id}>
@@ -2738,8 +2893,28 @@ export default function AutomationCanvasPage() {
                       ))}
                     </select>
 
+                    {!selectedWppInstanceId && !flowWhatsappInstanceId && (
+                      <p className="text-[11px] text-amber-400 font-medium flex items-center gap-1.5 pt-1">
+                        <AlertCircle className="w-3.5 h-3.5 shrink-0" />
+                        <span>Obrigatório: selecione um número neste bloco ou configure o WhatsApp padrão do Fluxo antes de ativar.</span>
+                      </p>
+                    )}
+                    {(selectedWppInstanceId || flowWhatsappInstanceId) && (() => {
+                      const effectiveId = selectedWppInstanceId || flowWhatsappInstanceId;
+                      const inst = availableWppInstances.find((i) => i.id === effectiveId);
+                      if (inst && !inst.connected) {
+                        return (
+                          <p className="text-[11px] text-red-400 font-medium flex items-center gap-1.5 pt-1">
+                            <AlertCircle className="w-3.5 h-3.5 shrink-0" />
+                            <span>Atenção: A linha selecionada está desconectada. Conecte-a para poder ativar o fluxo.</span>
+                          </p>
+                        );
+                      }
+                      return null;
+                    })()}
+
                     <p className="text-[10px] text-slate-400">
-                      Escolha qual número cadastrado fará o disparo desta mensagem. Todos os números cadastrados na plataforma são válidos para todos os Experts.
+                      Escolha qual número cadastrado fará o disparo desta mensagem. Se deixar automático, utilizará o WhatsApp padrão configurado para o fluxo.
                     </p>
                   </div>
 
@@ -3356,11 +3531,11 @@ export default function AutomationCanvasPage() {
                   <input
                     type="datetime-local"
                     value={timerSpecificDate}
-                    min={new Date(Date.now() + 60000).toISOString().slice(0, 16)}
+                    min={getLocalDatetimeString(new Date(Date.now() + 60000))}
                     onChange={(e) => {
                       setTimerSpecificDate(e.target.value);
                       if (timerError) {
-                        const time = new Date(e.target.value).getTime();
+                        const time = parseTargetDate(e.target.value);
                         if (!isNaN(time) && time > Date.now()) {
                           setTimerError(null);
                         }
@@ -3730,6 +3905,90 @@ export default function AutomationCanvasPage() {
                   SALVAR
                 </button>
               </div>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* MODAL: Configurar WhatsApp do Fluxo */}
+      {isFlowWppModalOpen && (
+        <div className="fixed inset-0 bg-black/80 backdrop-blur-sm z-50 flex items-center justify-center p-4">
+          <div className="bg-[#14161d] rounded-2xl shadow-2xl border border-slate-800 max-w-md w-full p-6 text-xs text-slate-200 animate-in fade-in zoom-in-95 duration-150 space-y-4">
+            <div className="flex items-center justify-between pb-3 border-b border-slate-800/80">
+              <div className="flex items-center gap-2">
+                <div className="p-2 bg-emerald-500/10 text-emerald-400 rounded-lg">
+                  <Smartphone className="w-5 h-5" />
+                </div>
+                <div>
+                  <h3 className="font-bold text-white text-base">WhatsApp do Fluxo</h3>
+                  <p className="text-[11px] text-slate-400">Linha de envio padrão para esta automação</p>
+                </div>
+              </div>
+              <button
+                type="button"
+                onClick={() => setIsFlowWppModalOpen(false)}
+                className="p-1 hover:text-white rounded-lg hover:bg-slate-800 transition-colors"
+              >
+                <X className="w-5 h-5" />
+              </button>
+            </div>
+
+            <div className="space-y-3">
+              <label className="block text-slate-300 font-semibold text-xs">
+                Selecione o WhatsApp para os disparos:
+              </label>
+              <select
+                value={flowWhatsappInstanceId}
+                onChange={(e) => setFlowWhatsappInstanceId(e.target.value)}
+                className="w-full bg-[#181c25] border border-slate-700 rounded-xl px-3.5 py-2.5 text-xs text-white focus:outline-none focus:border-emerald-500"
+              >
+                <option value="">-- Selecione uma linha de WhatsApp --</option>
+                {availableWppInstances.map((inst) => (
+                  <option key={inst.id} value={inst.id}>
+                    {inst.name || 'WhatsApp'} {inst.phone ? `(${inst.phone})` : ''} - {inst.connected ? '🟢 Conectado / Operacional' : '🔴 Desconectado'}
+                  </option>
+                ))}
+              </select>
+
+              {availableWppInstances.length === 0 && (
+                <div className="p-3 rounded-xl bg-amber-950/40 border border-amber-500/30 text-amber-300 text-[11px] flex items-center justify-between">
+                  <span>Nenhum WhatsApp cadastrado.</span>
+                  <a href="/whatsapp" target="_blank" className="underline font-semibold hover:text-amber-200">
+                    Cadastrar
+                  </a>
+                </div>
+              )}
+
+              <div className="pt-2 flex items-start gap-2.5 bg-[#181c25] p-3 rounded-xl border border-slate-800">
+                <input
+                  type="checkbox"
+                  id="propagateWpp"
+                  checked={propagateWppToAllNodes}
+                  onChange={(e) => setPropagateWppToAllNodes(e.target.checked)}
+                  className="mt-0.5 rounded border-slate-700 text-emerald-600 focus:ring-emerald-500"
+                />
+                <label htmlFor="propagateWpp" className="text-[11px] text-slate-300 cursor-pointer leading-tight">
+                  <span className="font-semibold block text-slate-200">Aplicar a todos os blocos de WhatsApp</span>
+                  Atualiza automaticamente todos os nós de WhatsApp deste fluxo para utilizarem esta linha.
+                </label>
+              </div>
+            </div>
+
+            <div className="pt-4 border-t border-slate-800/80 flex items-center justify-end gap-2">
+              <button
+                type="button"
+                onClick={() => setIsFlowWppModalOpen(false)}
+                className="px-4 py-2 border border-slate-700 hover:bg-slate-800 rounded-xl text-slate-300 font-semibold"
+              >
+                Cancelar
+              </button>
+              <button
+                type="button"
+                onClick={() => handleSaveFlowWhatsapp(flowWhatsappInstanceId, propagateWppToAllNodes)}
+                className="px-5 py-2 bg-emerald-600 hover:bg-emerald-500 text-white font-bold text-xs rounded-xl shadow-lg shadow-emerald-900/30 transition-all cursor-pointer"
+              >
+                Salvar Configuração
+              </button>
             </div>
           </div>
         </div>

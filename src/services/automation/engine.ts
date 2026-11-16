@@ -3,6 +3,16 @@ import { messageManager } from '../messaging';
 import { WhatsappQueueService } from '@/services/whatsapp/queue.service';
 import { WorkflowNode, WorkflowEdge } from './types';
 
+// Helper para interpretar data/hora considerando o fuso horário de Brasília (UTC-3)
+function parseTargetDate(dateStr: string): number {
+  if (!dateStr) return NaN;
+  if (/^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}(:\d{2})?$/.test(dateStr)) {
+    const withOffset = new Date(`${dateStr}-03:00`).getTime();
+    if (!isNaN(withOffset)) return withOffset;
+  }
+  return new Date(dateStr).getTime();
+}
+
 export class AutomationEngine {
   private runningSyncs = new Set<string>(); // automationId
   private executingNodes = new Set<string>(); // `${contactId}_${nodeId}`
@@ -392,8 +402,8 @@ export class AutomationEngine {
         let summaryText = '';
 
         if (config.timerType === 'SPECIFIC_DATE' || config.delayType === 'specific_date' || config.specificDate) {
-          const target = new Date(config.specificDate);
-          executeAt = !isNaN(target.getTime()) ? target : new Date(Date.now() + 60 * 1000);
+          const targetMs = parseTargetDate(config.specificDate);
+          executeAt = !isNaN(targetMs) ? new Date(targetMs) : new Date(Date.now() + 60 * 1000);
           summaryText = `Data específica: ${executeAt.toISOString()}`;
         } else {
           const unit = config.unit || (config.minutes !== undefined ? 'minutes' : config.hours !== undefined ? 'hours' : 'days');
@@ -953,10 +963,27 @@ export class AutomationEngine {
           const blocks = (cfg.blocks as any[]) || [];
           const isMedia = cfg.mediaUrl || ['image', 'video', 'audio', 'document', 'file'].includes(cfg.messageType);
 
+          // Resolve a instância do WhatsApp: usa a definida no nó ou a definida na configuração da automação
+          let wppInstanceId = (cfg as any).whatsappInstanceId;
+          if (!wppInstanceId && autoId) {
+            try {
+              const auto = await prisma.automation.findUnique({
+                where: { id: autoId },
+                select: { triggerConfig: true },
+              });
+              if (auto?.triggerConfig) {
+                const parsedTrigger = typeof auto.triggerConfig === 'string'
+                  ? JSON.parse(auto.triggerConfig)
+                  : auto.triggerConfig;
+                wppInstanceId = parsedTrigger?.whatsappInstanceId;
+              }
+            } catch {}
+          }
+
           // Enfileira na Fila Persistente do WhatsApp com controle de cadência entre contatos
           const queueItemId = await WhatsappQueueService.enqueue({
             tenantId,
-            whatsappInstanceId: (cfg as any).whatsappInstanceId,
+            whatsappInstanceId: wppInstanceId,
             contactId: contact.id,
             phone: contact.phone,
             contactName: contact.name,
@@ -1046,8 +1073,8 @@ export class AutomationEngine {
           let summaryText = '';
 
           if (cfg.timerType === 'SPECIFIC_DATE' || cfg.delayType === 'specific_date' || cfg.specificDate) {
-            const target = new Date(cfg.specificDate);
-            executeAt = !isNaN(target.getTime()) ? target : new Date(Date.now() + 60 * 1000);
+            const targetMs = parseTargetDate(cfg.specificDate);
+            executeAt = !isNaN(targetMs) ? new Date(targetMs) : new Date(Date.now() + 60 * 1000);
             summaryText = `Data específica: ${executeAt.toISOString()}`;
           } else {
             const unit = cfg.unit || (cfg.minutes !== undefined ? 'minutes' : cfg.hours !== undefined ? 'hours' : 'days');

@@ -425,6 +425,16 @@ function stripMediaBase64FromNodes(nodes: any[]): any[] {
   });
 }
 
+// Helper para interpretar data/hora considerando o fuso horário de Brasília (UTC-3)
+function parseTargetDate(dateStr: string): number {
+  if (!dateStr) return NaN;
+  if (/^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}(:\d{2})?$/.test(dateStr)) {
+    const withOffset = new Date(`${dateStr}-03:00`).getTime();
+    if (!isNaN(withOffset)) return withOffset;
+  }
+  return new Date(dateStr).getTime();
+}
+
 // Validação de segurança para temporizadores de data específica
 function validateTimerNodes(nodes: any[]): string | null {
   if (!Array.isArray(nodes)) return null;
@@ -434,7 +444,7 @@ function validateTimerNodes(nodes: any[]): string | null {
       if (!cfg.specificDate) {
         return '❌ A data e hora selecionadas já passaram. Escolha um horário futuro.';
       }
-      const targetTime = new Date(cfg.specificDate).getTime();
+      const targetTime = parseTargetDate(cfg.specificDate);
       if (isNaN(targetTime) || targetTime <= Date.now()) {
         return '❌ A data e hora selecionadas já passaram. Escolha um horário futuro.';
       }
@@ -490,7 +500,7 @@ export async function PUT(request: Request, { params }: { params: { id: string }
       );
     }
 
-    // Validação preventiva ao ativar: impedir ativação com datas no passado
+    // Validação preventiva ao ativar: impedir ativação com datas no passado e exigir WhatsApp operacional
     if (targetStatus === 'ACTIVE') {
       const nodesToCheck: any[] = body.nodes ? body.nodes : JSON.parse(existing.nodes || '[]');
       const now = Date.now();
@@ -499,7 +509,7 @@ export async function PUT(request: Request, { params }: { params: { id: string }
           const cfg = node.data?.config || {};
           if (cfg.timerType === 'SPECIFIC_DATE' || cfg.delayType === 'specific_date' || cfg.specificDate) {
             if (cfg.specificDate) {
-              const t = new Date(cfg.specificDate).getTime();
+              const t = parseTargetDate(cfg.specificDate);
               if (!isNaN(t) && t <= now) {
                 throw new Error('Existe um timer configurado para uma data/hora que já passou. Escolha um horário futuro antes de ativar.');
               }
@@ -514,6 +524,67 @@ export async function PUT(request: Request, { params }: { params: { id: string }
           n.data.subflow.nodes.forEach(checkTimerValidity);
         }
       }
+
+      // Validação de WhatsApp Obrigatório: Se houver nós de WhatsApp no fluxo, é obrigatório selecionar uma linha conectada
+      const wppNodes: any[] = [];
+      const collectWppNodes = (node: any) => {
+        if (node.type === 'whatsapp') {
+          wppNodes.push(node);
+        }
+        if (node.data?.subflow?.nodes && Array.isArray(node.data.subflow.nodes)) {
+          node.data.subflow.nodes.forEach(collectWppNodes);
+        }
+      };
+      nodesToCheck.forEach(collectWppNodes);
+
+      if (wppNodes.length > 0) {
+        let triggerCfg: any = {};
+        try {
+          triggerCfg = body.triggerConfig
+            ? (typeof body.triggerConfig === 'string' ? JSON.parse(body.triggerConfig) : body.triggerConfig)
+            : (existing.triggerConfig ? (typeof existing.triggerConfig === 'string' ? JSON.parse(existing.triggerConfig) : existing.triggerConfig) : {});
+        } catch {}
+
+        const flowWppId = body.flowWhatsappInstanceId || triggerCfg?.whatsappInstanceId;
+
+        for (const wn of wppNodes) {
+          const instId = wn.data?.config?.whatsappInstanceId || flowWppId;
+          if (!instId) {
+            return NextResponse.json(
+              {
+                error: 'É obrigatório selecionar um número de WhatsApp operacional antes de ativar o fluxo.',
+                missingWhatsapp: true,
+              },
+              { status: 400 }
+            );
+          }
+
+          const inst = await prisma.whatsappInstance.findUnique({
+            where: { id: instId },
+          });
+
+          if (!inst) {
+            return NextResponse.json(
+              {
+                error: 'O número de WhatsApp configurado para este fluxo não foi encontrado. Selecione um número válido antes de ativar.',
+                missingWhatsapp: true,
+              },
+              { status: 400 }
+            );
+          }
+
+          const isConnected = inst.status === 'CONNECTED' || (inst as any).connected === true;
+          if (!isConnected) {
+            return NextResponse.json(
+              {
+                error: `O número de WhatsApp selecionado ("${inst.name || inst.phone || 'Linha'}") está desconectado. Conecte o WhatsApp antes de ativar o fluxo.`,
+                whatsappDisconnected: true,
+              },
+              { status: 400 }
+            );
+          }
+        }
+      }
     }
 
     const updateData: any = {};
@@ -521,7 +592,20 @@ export async function PUT(request: Request, { params }: { params: { id: string }
     if (body.description !== undefined) updateData.description = body.description;
     if (body.status !== undefined) updateData.status = body.status;
     if (body.triggerType !== undefined) updateData.triggerType = body.triggerType;
-    if (body.triggerConfig !== undefined) updateData.triggerConfig = typeof body.triggerConfig === 'string' ? body.triggerConfig : JSON.stringify(body.triggerConfig);
+
+    if (body.triggerConfig !== undefined || body.flowWhatsappInstanceId !== undefined) {
+      let currentTrigger: any = {};
+      try {
+        currentTrigger = body.triggerConfig
+          ? (typeof body.triggerConfig === 'string' ? JSON.parse(body.triggerConfig) : body.triggerConfig)
+          : (existing.triggerConfig ? (typeof existing.triggerConfig === 'string' ? JSON.parse(existing.triggerConfig) : existing.triggerConfig) : {});
+      } catch {}
+
+      if (body.flowWhatsappInstanceId !== undefined) {
+        currentTrigger.whatsappInstanceId = body.flowWhatsappInstanceId;
+      }
+      updateData.triggerConfig = JSON.stringify(currentTrigger);
+    }
     if (body.nodes !== undefined) {
       updateData.nodes = JSON.stringify(stripMediaBase64FromNodes(body.nodes));
     }
