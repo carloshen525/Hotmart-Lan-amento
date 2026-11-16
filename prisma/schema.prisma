@@ -46,6 +46,7 @@ model Tenant {
   campaigns          Campaign[]
   auditLogs          AuditLog[]
   whatsappInstances  WhatsappInstance[]
+  whatsappQueue      WhatsappQueue[]
   emailSettings      EmailSettings?
   emailLogs          EmailLog[]
   emailQueue         EmailQueue[]
@@ -335,11 +336,57 @@ model WhatsappInstance {
   qrcode          String?   // Base64 para exibição única no frontend
   isDefault       Boolean   @default(false)
   lastConnectedAt DateTime?
+  fixedDelaySeconds Int      @default(30) @map("fixed_delay_seconds")
+  useRandomDelay    Boolean  @default(true) @map("use_random_delay")
+  minDelaySeconds   Int      @default(20) @map("min_delay_seconds")
+  maxDelaySeconds   Int      @default(45) @map("max_delay_seconds")
   createdAt       DateTime  @default(now())
   updatedAt       DateTime  @updatedAt
 
   tenant          Tenant    @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+  whatsappQueue   WhatsappQueue[]
   @@index([tenantId])
+}
+
+// -------------------------------------------------------------
+// 8.1. FILA DE ENVIO DO WHATSAPP (CADÊNCIA, DELAY & ANTI-BLOQUEIO)
+// -------------------------------------------------------------
+model WhatsappQueue {
+  id                 String    @id @default(cuid())
+  tenantId           String    @map("tenant_id")
+  whatsappInstanceId String?   @map("whatsapp_instance_id")
+  contactId          String?   @map("contact_id")
+  phone              String
+  contactName        String?   @map("contact_name")
+  messageType        String    @default("text") @map("message_type")
+  text               String?
+  mediaUrl           String?   @map("media_url")
+  mediaBase64        String?   @map("media_base64")
+  mediaMimeType      String?   @map("media_mime_type")
+  mediaFileName      String?   @map("media_file_name")
+  caption            String?
+  blocks             String?   // JSON com blocos de mensagens/mídias em sequência
+  variables          String?   // JSON com variáveis de substituição
+  enrollmentId       String?   @map("enrollment_id")
+  nodeId             String?   @map("node_id")
+  automationId       String?   @map("automation_id")
+  status             String    @default("PENDING") // PENDING, PROCESSING, SENT, FAILED, CANCELLED
+  scheduledAt        DateTime  @default(now()) @map("scheduled_at")
+  sentAt             DateTime? @map("sent_at")
+  attempts           Int       @default(0)
+  maxAttempts        Int       @default(3) @map("max_attempts")
+  errorMessage       String?   @map("error_message")
+  metadata           String?
+  createdAt          DateTime  @default(now()) @map("created_at")
+  updatedAt          DateTime  @updatedAt @map("updated_at")
+
+  tenant             Tenant            @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+  whatsappInstance   WhatsappInstance? @relation(fields: [whatsappInstanceId], references: [id], onDelete: SetNull)
+
+  @@map("whatsapp_queue")
+  @@index([tenantId, status])
+  @@index([status, scheduledAt])
+  @@index([whatsappInstanceId, status])
 }
 
 // -------------------------------------------------------------

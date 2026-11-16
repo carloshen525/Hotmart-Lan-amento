@@ -752,6 +752,10 @@ export class EvolutionApiService {
         phone,
         profileName,
         isDefault: inst.isDefault,
+        fixedDelaySeconds: inst.fixedDelaySeconds ?? 30,
+        useRandomDelay: inst.useRandomDelay ?? true,
+        minDelaySeconds: inst.minDelaySeconds ?? 20,
+        maxDelaySeconds: inst.maxDelaySeconds ?? 45,
         lastConnectedAt: inst.lastConnectedAt,
         qrcode: inst.qrcode,
       });
@@ -825,6 +829,10 @@ export class EvolutionApiService {
           phone,
           profileName,
           isDefault: syncedInstances.length === 0,
+          fixedDelaySeconds: 30,
+          useRandomDelay: true,
+          minDelaySeconds: 20,
+          maxDelaySeconds: 45,
           lastConnectedAt: isOpen ? new Date() : null,
           qrcode: null,
         });
@@ -1029,9 +1037,16 @@ export class EvolutionApiService {
   }
 
   /**
-   * Atualiza apelido/nome amigável ou define como número padrão (com isolamento por tenant)
+   * Atualiza apelido/nome amigável, cadência de delay anti-bloqueio ou define como número padrão (com isolamento por tenant)
    */
-  async updateInstance(instanceId: string, tenantId: string, data: { name?: string; isDefault?: boolean }) {
+  async updateInstance(instanceId: string, tenantId: string, data: {
+    name?: string;
+    isDefault?: boolean;
+    fixedDelaySeconds?: number;
+    useRandomDelay?: boolean;
+    minDelaySeconds?: number;
+    maxDelaySeconds?: number;
+  }) {
     const instance = await prisma.whatsappInstance.findFirst({
       where: { id: instanceId, tenantId },
     });
@@ -1051,6 +1066,10 @@ export class EvolutionApiService {
       data: {
         ...(data.name !== undefined ? { name: data.name } : {}),
         ...(data.isDefault !== undefined ? { isDefault: data.isDefault } : {}),
+        ...(data.fixedDelaySeconds !== undefined ? { fixedDelaySeconds: Number(data.fixedDelaySeconds) } : {}),
+        ...(data.useRandomDelay !== undefined ? { useRandomDelay: Boolean(data.useRandomDelay) } : {}),
+        ...(data.minDelaySeconds !== undefined ? { minDelaySeconds: Number(data.minDelaySeconds) } : {}),
+        ...(data.maxDelaySeconds !== undefined ? { maxDelaySeconds: Number(data.maxDelaySeconds) } : {}),
       },
     });
   }

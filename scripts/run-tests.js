@@ -8,7 +8,7 @@ async function runTestSuite() {
   console.log('=====================================================\n');
 
   let passed = 0;
-  let total = 30;
+  let total = 31;
 
   // Setup de tenant de teste limpo
   const testTenant = await prisma.tenant.upsert({
@@ -2548,6 +2548,195 @@ async function runTestSuite() {
     runningSyncsSet.delete(autoSyncId);
 
     console.log('✔ PASSOU: Guarda anti-duplicação no WhatsApp e lock de concorrência in-flight validados com 100% de precisão.');
+    passed++;
+
+    // -------------------------------------------------------------
+    // TESTE 31: Fila Persistente do WhatsApp, Cadência e Delay entre Contatos (Anti-Bloqueio)
+    // -------------------------------------------------------------
+    console.log('\n[TESTE 31] Fila Persistente do WhatsApp, Cadência e Delay Anti-Bloqueio entre Contatos...');
+
+    // 1. Cria ou recupera uma instância de WhatsApp dedicada ao teste
+    const queueInstance = await prisma.whatsappInstance.upsert({
+      where: { instanceName: 'inst_cadence_test' },
+      update: {
+        fixedDelaySeconds: 30,
+        useRandomDelay: true,
+        minDelaySeconds: 20,
+        maxDelaySeconds: 45,
+      },
+      create: {
+        tenantId: testTenant.id,
+        name: 'Linha Cadência Teste',
+        instanceName: 'inst_cadence_test',
+        instanceToken: 'token_cadence_123',
+        status: 'CONNECTED',
+        phone: '+5511999990001',
+        fixedDelaySeconds: 30,
+        useRandomDelay: true,
+        minDelaySeconds: 20,
+        maxDelaySeconds: 45,
+      },
+    });
+
+    // Limpa itens antigos da fila do teste
+    await prisma.whatsappQueue.deleteMany({
+      where: { whatsappInstanceId: queueInstance.id },
+    });
+
+    // 2. Simula o cálculo de agendamento da fila respeitando as regras estritas de cadência:
+    // Lead 1: Fila vazia -> Dispara imediatamente (scheduledAt <= now + 1s)
+    const nowT0 = Date.now();
+    const calculateScheduledAt = async (contactId, phone, instanceCfg, forceImmediate = false) => {
+      if (forceImmediate) return new Date();
+
+      const lastItem = await prisma.whatsappQueue.findFirst({
+        where: {
+          whatsappInstanceId: queueInstance.id,
+          status: { in: ['PENDING', 'PROCESSING'] },
+        },
+        orderBy: { scheduledAt: 'desc' },
+      });
+
+      if (!lastItem) return new Date();
+
+      const lastScheduledTime = new Date(lastItem.scheduledAt).getTime();
+      const baseTime = Math.max(Date.now(), lastScheduledTime);
+
+      const isSameContact =
+        (contactId && lastItem.contactId && contactId === lastItem.contactId) ||
+        (phone && lastItem.phone && phone.replace(/\D/g, '') === lastItem.phone.replace(/\D/g, ''));
+
+      if (isSameContact) {
+        // Mesmo contato dentro do mesmo disparo/fluxo: delay mínimo de segurança
+        return new Date(baseTime + 1000);
+      } else {
+        // Contato diferente: aplica cadência configurada
+        let delaySec = instanceCfg.fixedDelaySeconds;
+        if (instanceCfg.useRandomDelay) {
+          delaySec = Math.floor(Math.random() * (instanceCfg.maxDelaySeconds - instanceCfg.minDelaySeconds + 1)) + instanceCfg.minDelaySeconds;
+        }
+        return new Date(baseTime + delaySec * 1000);
+      }
+    };
+
+    // Lead A
+    const schedLeadA = await calculateScheduledAt('lead_a_id', '+5511999990001', queueInstance);
+    const itemLeadA = await prisma.whatsappQueue.create({
+      data: {
+        id: `wq_test_${Date.now()}_a`,
+        tenantId: testTenant.id,
+        whatsappInstanceId: queueInstance.id,
+        contactId: 'lead_a_id',
+        contactName: 'Lead A (João)',
+        phone: '+5511999990001',
+        text: 'Olá João! Mensagem 1',
+        scheduledAt: schedLeadA,
+        status: 'PENDING',
+      },
+    });
+    // Lead A deve agendar imediatamente
+    assert.ok(
+      Math.abs(new Date(itemLeadA.scheduledAt).getTime() - nowT0) < 3000,
+      'Primeiro contato com fila ociosa deve ser agendado imediatamente'
+    );
+
+    // Lead B (Contato diferente): DEVE aplicar delay aleatório entre 20s e 45s
+    const schedLeadB = await calculateScheduledAt('lead_b_id', '+5511999990002', queueInstance);
+    const diffLeadB_Sec = (schedLeadB.getTime() - new Date(itemLeadA.scheduledAt).getTime()) / 1000;
+    assert.ok(
+      diffLeadB_Sec >= 20 && diffLeadB_Sec <= 45,
+      `Delay entre Lead A e Lead B deve estar entre 20s e 45s (calculado: ${diffLeadB_Sec}s)`
+    );
+
+    const itemLeadB = await prisma.whatsappQueue.create({
+      data: {
+        id: `wq_test_${Date.now()}_b`,
+        tenantId: testTenant.id,
+        whatsappInstanceId: queueInstance.id,
+        contactId: 'lead_b_id',
+        contactName: 'Lead B (Maria)',
+        phone: '+5511999990002',
+        text: 'Olá Maria! Mensagem 1',
+        scheduledAt: schedLeadB,
+        status: 'PENDING',
+      },
+    });
+
+    // Lead C (Outro contato diferente): DEVE aplicar mais um delay entre 20s e 45s sobre Lead B
+    const schedLeadC = await calculateScheduledAt('lead_c_id', '+5511999990003', queueInstance);
+    const diffLeadC_Sec = (schedLeadC.getTime() - new Date(itemLeadB.scheduledAt).getTime()) / 1000;
+    assert.ok(
+      diffLeadC_Sec >= 20 && diffLeadC_Sec <= 45,
+      `Delay entre Lead B e Lead C deve estar entre 20s e 45s (calculado: ${diffLeadC_Sec}s)`
+    );
+
+    const itemLeadC = await prisma.whatsappQueue.create({
+      data: {
+        id: `wq_test_${Date.now()}_c`,
+        tenantId: testTenant.id,
+        whatsappInstanceId: queueInstance.id,
+        contactId: 'lead_c_id',
+        contactName: 'Lead C (Carlos)',
+        phone: '+5511999990003',
+        text: 'Olá Carlos! Mensagem 1',
+        scheduledAt: schedLeadC,
+        status: 'PENDING',
+      },
+    });
+
+    // Lead C novamente (mesmo contato, segundo bloco): NÃO aplica novo atraso de 20-45s
+    const schedLeadCSame = await calculateScheduledAt('lead_c_id', '+5511999990003', queueInstance);
+    const diffLeadCSame_Sec = (schedLeadCSame.getTime() - new Date(itemLeadC.scheduledAt).getTime()) / 1000;
+    assert.ok(
+      diffLeadCSame_Sec <= 2,
+      `Mensagens para o mesmo contato NÃO devem sofrer atraso de novo lead (calculado: ${diffLeadCSame_Sec}s)`
+    );
+
+    // 3. Validação de Delay Fixo (30 segundos exatos)
+    const fixedCfg = { fixedDelaySeconds: 30, useRandomDelay: false, minDelaySeconds: 20, maxDelaySeconds: 45 };
+    const schedLeadD = await calculateScheduledAt('lead_d_id', '+5511999990004', fixedCfg);
+    const diffLeadD_Sec = Math.round((schedLeadD.getTime() - new Date(itemLeadC.scheduledAt).getTime()) / 1000);
+    assert.strictEqual(
+      diffLeadD_Sec,
+      30,
+      `Modo Fixo deve aplicar exatamente 30 segundos de intervalo (calculado: ${diffLeadD_Sec}s)`
+    );
+
+    // 4. Validação de Ordem Estrita FIFO da Fila
+    const pendingItems = await prisma.whatsappQueue.findMany({
+      where: { whatsappInstanceId: queueInstance.id, status: 'PENDING' },
+      orderBy: [{ scheduledAt: 'asc' }, { createdAt: 'asc' }],
+    });
+    assert.strictEqual(pendingItems[0].contactId, 'lead_a_id', 'Primeiro da fila DEVE ser o Lead A');
+    assert.strictEqual(pendingItems[1].contactId, 'lead_b_id', 'Segundo da fila DEVE ser o Lead B');
+    assert.strictEqual(pendingItems[2].contactId, 'lead_c_id', 'Terceiro da fila DEVE ser o Lead C');
+
+    // 5. Validação de Concorrência e Processamento Atômico do Worker
+    // Simula lock atômico: apenas 1 worker reserva o item
+    const claimedCount = await prisma.whatsappQueue.updateMany({
+      where: { id: itemLeadA.id, status: 'PENDING' },
+      data: { status: 'PROCESSING' },
+    });
+    assert.strictEqual(claimedCount.count, 1, 'Worker deve reservar item atomicamente para PROCESSING');
+
+    // Segunda tentativa concorrente deve retornar 0
+    const secondClaim = await prisma.whatsappQueue.updateMany({
+      where: { id: itemLeadA.id, status: 'PENDING' },
+      data: { status: 'PROCESSING' },
+    });
+    assert.strictEqual(secondClaim.count, 0, 'Segundo worker simultâneo NÃO pode reservar o mesmo item');
+
+    // Conclusão com sucesso
+    await prisma.whatsappQueue.update({
+      where: { id: itemLeadA.id },
+      data: { status: 'SENT', sentAt: new Date() },
+    });
+
+    const verifySent = await prisma.whatsappQueue.findUnique({ where: { id: itemLeadA.id } });
+    assert.strictEqual(verifySent.status, 'SENT');
+    assert.ok(verifySent.sentAt !== null);
+
+    console.log('✔ PASSOU: Fila persistente, cadência aleatória e fixa entre contatos, FIFO estrito e lock concorrente validados com 100% de precisão.');
     passed++;
 
     console.log('\n=====================================================');

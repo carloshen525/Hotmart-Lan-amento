@@ -1,5 +1,6 @@
 import { prisma } from '@/lib/prisma';
 import { messageManager } from '../messaging';
+import { WhatsappQueueService } from '@/services/whatsapp/queue.service';
 import { WorkflowNode, WorkflowEdge } from './types';
 
 export class AutomationEngine {
@@ -847,19 +848,19 @@ export class AutomationEngine {
       return; // Prevenção de concorrência: nó já em execução ativa para este contato
     }
 
-    // 1. Regra de Idempotência: Se este nó já foi executado com SUCESSO ou está em PROCESSING para este lead neste fluxo, NUNCA executa novamente.
+    // 1. Regra de Idempotência: Se este nó já foi executado com SUCESSO, está em PROCESSING ou na FILA (QUEUED) para este lead neste fluxo, NUNCA executa novamente.
     const alreadySuccess = await prisma.automationStepLog.findFirst({
       where: {
         contactId: contact.id,
         nodeId: node.id,
-        status: { in: ['SUCCESS', 'PROCESSING'] },
+        status: { in: ['SUCCESS', 'PROCESSING', 'QUEUED'] },
         enrollment: autoId ? { automationId: autoId } : undefined,
       },
     });
 
     if (alreadySuccess) {
-      if (alreadySuccess.status === 'PROCESSING') {
-        // Já em processamento ativo por outra thread
+      if (alreadySuccess.status === 'PROCESSING' || alreadySuccess.status === 'QUEUED') {
+        // Já em processamento ativo ou aguardando envio na fila por outra thread
         return;
       }
       // Já executou com sucesso! Pula a etapa e avança diretamente para os próximos nós conectados
@@ -950,83 +951,46 @@ export class AutomationEngine {
         if (contact.phone) {
           const firstName = contact.name ? contact.name.trim().split(/\s+/)[0] : '';
           const blocks = (cfg.blocks as any[]) || [];
-          if (Array.isArray(blocks) && blocks.length > 0) {
-            let lastRes: any = null;
-            let sendErrorMsg = '';
-            for (let i = 0; i < blocks.length; i++) {
-              const b = blocks[i];
-              if (i > 0) {
-                await new Promise((r) => setTimeout(r, 600));
-              }
-              const isMedia = b.type !== 'text';
-              lastRes = await messageManager.sendWhatsApp({
-                tenantId,
-                contactId: contact.id,
-                phone: contact.phone,
-                whatsappInstanceId: (cfg as any).whatsappInstanceId,
-                text: isMedia ? (b.caption || '') : (b.text || ''),
-                messageType: (['image', 'video', 'audio', 'document', 'file'].includes(b.type) ? b.type : (isMedia ? 'image' : 'text')) as any,
-                mediaUrl: isMedia ? b.mediaUrl : undefined,
-                mediaBase64: isMedia ? b.mediaBase64 : undefined,
-                mediaMimeType: isMedia ? b.mediaMimeType : undefined,
-                mediaFileName: isMedia ? b.mediaFileName : undefined,
-                caption: isMedia ? b.caption : undefined,
-                variables: {
-                  nome: contact.name || '',
-                  primeiro_nome: firstName || contact.name || '',
-                  email: contact.email || '',
-                  telefone: contact.phone || '',
-                },
-              });
+          const isMedia = cfg.mediaUrl || ['image', 'video', 'audio', 'document', 'file'].includes(cfg.messageType);
 
-              if (!lastRes || lastRes.success === false) {
-                sendErrorMsg = lastRes?.error || 'Falha no envio via WhatsApp';
-                break;
-              }
-            }
+          // Enfileira na Fila Persistente do WhatsApp com controle de cadência entre contatos
+          const queueItemId = await WhatsappQueueService.enqueue({
+            tenantId,
+            whatsappInstanceId: (cfg as any).whatsappInstanceId,
+            contactId: contact.id,
+            phone: contact.phone,
+            contactName: contact.name,
+            messageType: (['image', 'video', 'audio', 'document', 'file'].includes(cfg.messageType) ? cfg.messageType : (isMedia ? 'image' : 'text')) as any,
+            text: cfg.message || cfg.text || `Olá ${contact.name}!`,
+            mediaUrl: cfg.mediaUrl,
+            mediaBase64: cfg.mediaBase64,
+            mediaMimeType: cfg.mediaMimeType,
+            mediaFileName: cfg.mediaFileName,
+            caption: cfg.caption || cfg.message || cfg.text,
+            blocks: Array.isArray(blocks) && blocks.length > 0 ? blocks : undefined,
+            variables: {
+              nome: contact.name || '',
+              primeiro_nome: firstName || contact.name || '',
+              email: contact.email || '',
+              telefone: contact.phone || '',
+            },
+            enrollmentId,
+            nodeId: node.id,
+            automationId: autoId || undefined,
+            fixedDelaySeconds: cfg.fixedDelaySeconds ? Number(cfg.fixedDelaySeconds) : undefined,
+            useRandomDelay: cfg.useRandomDelay !== undefined ? Boolean(cfg.useRandomDelay) : undefined,
+            minDelaySeconds: cfg.minDelaySeconds ? Number(cfg.minDelaySeconds) : undefined,
+            maxDelaySeconds: cfg.maxDelaySeconds ? Number(cfg.maxDelaySeconds) : undefined,
+          });
 
-            if (sendErrorMsg) {
-              stepStatus = 'FAILED';
-              stepDetails = { error: sendErrorMsg, phone: contact.phone };
-              shouldHalt = true;
-            } else {
-              stepStatus = 'SUCCESS';
-              stepDetails = {
-                phone: contact.phone,
-                blocksCount: blocks.length,
-                status: lastRes?.status || 'SENT',
-              };
-            }
-          } else {
-            const singleRes = await messageManager.sendWhatsApp({
-              tenantId,
-              contactId: contact.id,
-              phone: contact.phone,
-              whatsappInstanceId: (cfg as any).whatsappInstanceId,
-              text: cfg.message || cfg.text || `Olá ${contact.name}!`,
-              messageType: (['image', 'video', 'audio', 'document', 'file'].includes(cfg.messageType) ? cfg.messageType : (cfg.mediaUrl ? 'image' : 'text')) as any,
-              mediaUrl: cfg.mediaUrl,
-              mediaBase64: cfg.mediaBase64,
-              mediaMimeType: cfg.mediaMimeType,
-              mediaFileName: cfg.mediaFileName,
-              caption: cfg.caption || cfg.message || cfg.text,
-              variables: {
-                nome: contact.name || '',
-                primeiro_nome: firstName || contact.name || '',
-                email: contact.email || '',
-                telefone: contact.phone || '',
-              },
-            });
-
-            if (!singleRes || singleRes.success === false) {
-              stepStatus = 'FAILED';
-              stepDetails = { error: singleRes?.error || 'Falha no envio via WhatsApp', phone: contact.phone };
-              shouldHalt = true;
-            } else {
-              stepStatus = 'SUCCESS';
-              stepDetails = { phone: contact.phone, messageType: cfg.messageType || 'text' };
-            }
-          }
+          stepStatus = 'QUEUED';
+          stepDetails = {
+            phone: contact.phone,
+            queueItemId,
+            status: 'QUEUED',
+            enqueuedAt: new Date().toISOString(),
+          };
+          shouldHalt = true;
         } else {
           stepStatus = 'FAILED';
           stepDetails = { error: 'Contato sem telefone cadastrado' };
@@ -1238,6 +1202,77 @@ export class AutomationEngine {
     }
     } finally {
       this.executingNodes.delete(execKey);
+    }
+  }
+
+  /**
+   * Avança dinamicamente o fluxo a partir de uma etapa concluída (ex: disparo da fila do WhatsApp)
+   */
+  async advanceFromSubflowNode(
+    enrollmentId: string,
+    nodeId: string,
+    tenantId: string,
+    autoId?: string | null
+  ): Promise<void> {
+    const enrollment = await prisma.automationEnrollment.findUnique({
+      where: { id: enrollmentId },
+      include: { contact: true, automation: true },
+    });
+
+    if (!enrollment || enrollment.status === 'COMPLETED' || enrollment.status === 'CANCELLED') {
+      return;
+    }
+
+    const contact = enrollment.contact;
+    const effectiveAutoId = autoId || enrollment.automationId;
+
+    let currentSubNodes: WorkflowNode[] = [];
+    let currentSubEdges: WorkflowEdge[] = [];
+
+    if (effectiveAutoId) {
+      try {
+        const freshAuto = await prisma.automation.findUnique({
+          where: { id: effectiveAutoId },
+          select: { nodes: true },
+        });
+        if (freshAuto?.nodes) {
+          const freshMacroNodes: WorkflowNode[] = JSON.parse(freshAuto.nodes || '[]');
+          for (const mn of freshMacroNodes) {
+            const sub = (mn.data as any)?.subflow;
+            if (sub && Array.isArray(sub.nodes) && sub.nodes.some((sn: any) => sn.id === nodeId)) {
+              currentSubNodes = sub.nodes;
+              currentSubEdges = sub.edges || [];
+              break;
+            }
+          }
+        }
+      } catch (err: any) {
+        console.warn('[AutomationEngine] Erro ao carregar nós para avanço de etapa:', err.message);
+      }
+    }
+
+    const nextOutgoing = currentSubEdges.filter((e) => e.source === nodeId);
+    if (nextOutgoing.length === 0) {
+      await prisma.automationEnrollment.update({
+        where: { id: enrollmentId },
+        data: { status: 'COMPLETED', completedAt: new Date() },
+      });
+    } else {
+      await prisma.automationEnrollment.update({
+        where: { id: enrollmentId },
+        data: { status: 'ACTIVE', completedAt: null },
+      });
+      for (const edge of nextOutgoing) {
+        await this.executeSubflowNode(
+          enrollmentId,
+          edge.target,
+          currentSubNodes,
+          currentSubEdges,
+          tenantId,
+          contact,
+          effectiveAutoId
+        );
+      }
     }
   }
 

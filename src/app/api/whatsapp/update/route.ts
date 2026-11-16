@@ -20,6 +20,10 @@ export async function POST(request: Request) {
     const updated = await messageManager.evolutionApi.updateInstance(body.instanceId, tenantId, {
       name: body.name,
       isDefault: body.isDefault,
+      fixedDelaySeconds: body.fixedDelaySeconds,
+      useRandomDelay: body.useRandomDelay,
+      minDelaySeconds: body.minDelaySeconds,
+      maxDelaySeconds: body.maxDelaySeconds,
     });
 
     return NextResponse.json({ success: true, instance: updated });
