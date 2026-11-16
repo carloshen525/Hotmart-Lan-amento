@@ -929,6 +929,19 @@ export default function AutomationCanvasPage() {
             }
           : n
       );
+      setMacroNodes(currentMacroNodes);
+      setActiveSequenceNode((prev) =>
+        prev
+          ? {
+              ...prev,
+              data: {
+                ...prev.data,
+                label: sequenceName || prev.data.label,
+                subflow: { nodes: sequenceNodes, edges: sequenceEdges },
+              },
+            }
+          : null
+      );
     }
 
     // 1.2 Pelo menos uma Tag / Gatilho de entrada configurado
@@ -1052,6 +1065,9 @@ export default function AutomationCanvasPage() {
 
       // Atualiza estatísticas em tempo real
       fetchRealtimeStats();
+      setTimeout(() => {
+        fetchRealtimeStats();
+      }, 1500);
     } catch (err: any) {
       // Caso ocorra algum erro: manter pausada e exibir motivo
       setStatus('PAUSED');
@@ -1105,6 +1121,19 @@ export default function AutomationCanvasPage() {
                 },
               }
             : n
+        );
+        setMacroNodes(currentMacroNodes);
+        setActiveSequenceNode((prev) =>
+          prev
+            ? {
+                ...prev,
+                data: {
+                  ...prev.data,
+                  label: sequenceName || prev.data.label,
+                  subflow: { nodes: sequenceNodes, edges: sequenceEdges },
+                },
+              }
+            : null
         );
       }
 

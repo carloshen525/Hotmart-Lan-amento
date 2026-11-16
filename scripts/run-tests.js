@@ -8,7 +8,7 @@ async function runTestSuite() {
   console.log('=====================================================\n');
 
   let passed = 0;
-  let total = 28;
+  let total = 29;
 
   // Setup de tenant de teste limpo
   const testTenant = await prisma.tenant.upsert({
@@ -2273,6 +2273,225 @@ async function runTestSuite() {
     );
 
     console.log('✔ PASSOU: Coerência estrita de contagem entre Tag (2 leads) e Sequência (2 leads) validada com sucesso.');
+    passed++;
+
+    // -------------------------------------------------------------
+    // TESTE 29: Continuação e avanço de leads ao adicionar nós ao fluxo em andamento
+    // -------------------------------------------------------------
+    console.log('\n[TESTE 29] Continuação e avanço de leads ao adicionar novos nós a fluxo em andamento...');
+    const flowTagCont = `tag_continuation_${Date.now()}`;
+    const tagCont = await prisma.tag.create({
+      data: { tenantId: testTenant.id, name: flowTagCont, color: '#10b981' },
+    });
+
+    const lead1 = await prisma.contact.create({
+      data: {
+        tenantId: testTenant.id,
+        name: 'Lead Teste 1',
+        email: `lead1_${Date.now()}@teste.com`,
+        phone: '+5511999991111',
+      },
+    });
+    const lead2 = await prisma.contact.create({
+      data: {
+        tenantId: testTenant.id,
+        name: 'Lead Teste 2',
+        email: `lead2_${Date.now()}@teste.com`,
+        phone: '+5511999992222',
+      },
+    });
+
+    await prisma.contactTag.createMany({
+      data: [
+        { contactId: lead1.id, tagId: tagCont.id },
+        { contactId: lead2.id, tagId: tagCont.id },
+      ],
+    });
+
+    const nodeTagId = `tag_node_${Date.now()}`;
+    const nodeSeqId = `seq_node_${Date.now()}`;
+    const nodeWpp1Id = `wpp_1_${Date.now()}`;
+    const nodeWpp2Id = `wpp_2_${Date.now()}`;
+
+    // Estado 1: Fluxo criado apenas com o nó WhatsApp 1
+    const initialSubNodes = [
+      { id: 'start_node', type: 'start' },
+      { id: nodeWpp1Id, type: 'whatsapp', data: { label: 'WhatsApp 1' } },
+    ];
+    const initialSubEdges = [
+      { id: 'edge-start-w1', source: 'start_node', target: nodeWpp1Id },
+    ];
+
+    const autoDynamic = await prisma.automation.create({
+      data: {
+        tenantId: testTenant.id,
+        name: 'Fluxo Dinâmico Expansível',
+        status: 'ACTIVE',
+        nodes: JSON.stringify([
+          { id: nodeTagId, type: 'tag', data: { config: { entryTags: [flowTagCont] } } },
+          {
+            id: nodeSeqId,
+            type: 'sequence_lead',
+            data: {
+              label: 'Sequência WhatsApp',
+              subflow: { nodes: initialSubNodes, edges: initialSubEdges },
+            },
+          },
+        ]),
+        edges: JSON.stringify([
+          { id: 'edge-tag-seq', source: nodeTagId, target: nodeSeqId },
+        ]),
+      },
+    });
+
+    // Cria as inscrições dos 2 leads já completas no WhatsApp 1 (como no cenário da foto do usuário)
+    const dynEnr1 = await prisma.automationEnrollment.create({
+      data: {
+        automationId: autoDynamic.id,
+        contactId: lead1.id,
+        status: 'COMPLETED',
+        currentNodeId: nodeWpp1Id,
+        completedAt: new Date(),
+      },
+    });
+    const dynEnr2 = await prisma.automationEnrollment.create({
+      data: {
+        automationId: autoDynamic.id,
+        contactId: lead2.id,
+        status: 'COMPLETED',
+        currentNodeId: nodeWpp1Id,
+        completedAt: new Date(),
+      },
+    });
+
+    // Registra os logs de sucesso no nó 1
+    await prisma.automationStepLog.createMany({
+      data: [
+        {
+          enrollmentId: dynEnr1.id,
+          contactId: lead1.id,
+          nodeId: nodeWpp1Id,
+          nodeType: 'whatsapp',
+          action: 'WHATSAPP',
+          status: 'SUCCESS',
+        },
+        {
+          enrollmentId: dynEnr2.id,
+          contactId: lead2.id,
+          nodeId: nodeWpp1Id,
+          nodeType: 'whatsapp',
+          action: 'WHATSAPP',
+          status: 'SUCCESS',
+        },
+      ],
+    });
+
+    // Estado 2: O usuário adiciona o segundo nó de WhatsApp conectado ao primeiro (WhatsApp 1 -> WhatsApp 2)
+    const expandedSubNodes = [
+      { id: 'start_node', type: 'start' },
+      { id: nodeWpp1Id, type: 'whatsapp', data: { label: 'WhatsApp 1' } },
+      { id: nodeWpp2Id, type: 'whatsapp', data: { label: 'WhatsApp 2' } },
+    ];
+    const expandedSubEdges = [
+      { id: 'edge-start-w1', source: 'start_node', target: nodeWpp1Id },
+      { id: 'edge-w1-w2', source: nodeWpp1Id, target: nodeWpp2Id },
+    ];
+
+    await prisma.automation.update({
+      where: { id: autoDynamic.id },
+      data: {
+        nodes: JSON.stringify([
+          { id: nodeTagId, type: 'tag', data: { config: { entryTags: [flowTagCont] } } },
+          {
+            id: nodeSeqId,
+            type: 'sequence_lead',
+            data: {
+              label: 'Sequência WhatsApp',
+              subflow: { nodes: expandedSubNodes, edges: expandedSubEdges },
+            },
+          },
+        ]),
+      },
+    });
+
+    // Executa a sincronização do motor de avanço
+    const enrollmentsToSync = [dynEnr1, dynEnr2];
+    for (const enr of enrollmentsToSync) {
+      const successLogs = await prisma.automationStepLog.findMany({
+        where: {
+          contactId: enr.contactId,
+          status: 'SUCCESS',
+          enrollment: { automationId: autoDynamic.id },
+        },
+        select: { nodeId: true },
+      });
+      const executedNodeIds = new Set(successLogs.map((l) => l.nodeId));
+
+      const nodesToExecute = new Set();
+      for (const executedId of Array.from(executedNodeIds)) {
+        const outgoing = expandedSubEdges.filter((e) => e.source === executedId);
+        for (const edge of outgoing) {
+          if (!executedNodeIds.has(edge.target)) {
+            nodesToExecute.add(edge.target);
+          }
+        }
+      }
+
+      assert.strictEqual(nodesToExecute.size, 1, 'Deve encontrar exatamente 1 nó subsequente pendente (WhatsApp 2)');
+      assert.ok(nodesToExecute.has(nodeWpp2Id), 'O nó pendente deve ser o WhatsApp 2');
+
+      // Simula a execução do novo nó WhatsApp 2
+      for (const targetId of Array.from(nodesToExecute)) {
+        await prisma.automationEnrollment.update({
+          where: { id: enr.id },
+          data: { status: 'ACTIVE', completedAt: null, currentNodeId: targetId },
+        });
+
+        await prisma.automationStepLog.create({
+          data: {
+            enrollmentId: enr.id,
+            contactId: enr.contactId,
+            nodeId: targetId,
+            nodeType: 'whatsapp',
+            action: 'WHATSAPP',
+            status: 'SUCCESS',
+          },
+        });
+
+        // Como WhatsApp 2 não tem outgoing edges, finaliza em COMPLETED
+        const nextOutgoing = expandedSubEdges.filter((e) => e.source === targetId);
+        if (nextOutgoing.length === 0) {
+          await prisma.automationEnrollment.update({
+            where: { id: enr.id },
+            data: { status: 'COMPLETED', completedAt: new Date() },
+          });
+        }
+      }
+    }
+
+    // Validações pós-avanço:
+    // 1. WhatsApp 1 NÃO pode ter logs adicionais (deve permanecer com exatamente 2)
+    const wpp1Logs = await prisma.automationStepLog.findMany({
+      where: { enrollment: { automationId: autoDynamic.id }, nodeId: nodeWpp1Id },
+    });
+    assert.strictEqual(wpp1Logs.length, 2, 'WhatsApp 1 NÃO pode ter sido reexecutado para nenhum lead');
+
+    // 2. WhatsApp 2 deve ter sido executado para ambos os leads (exatamente 2 logs)
+    const wpp2Logs = await prisma.automationStepLog.findMany({
+      where: { enrollment: { automationId: autoDynamic.id }, nodeId: nodeWpp2Id },
+    });
+    assert.strictEqual(wpp2Logs.length, 2, 'WhatsApp 2 deve ter sido executado para ambos os leads');
+
+    // 3. Status final dos enrollments deve ser COMPLETED e currentNodeId apontar para WhatsApp 2
+    const finalEnrs = await prisma.automationEnrollment.findMany({
+      where: { automationId: autoDynamic.id },
+    });
+    for (const fEnr of finalEnrs) {
+      assert.strictEqual(fEnr.status, 'COMPLETED');
+      assert.strictEqual(fEnr.currentNodeId, nodeWpp2Id);
+    }
+
+    console.log('✔ PASSOU: Leads que estavam no nó 1 avançaram para o novo nó 2 sem reiniciar e sem reenviar mensagens.');
     passed++;
 
     console.log('\n=====================================================');

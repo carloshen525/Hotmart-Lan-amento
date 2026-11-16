@@ -875,6 +875,10 @@ export class AutomationEngine {
           data: { status: 'COMPLETED', completedAt: new Date(), currentNodeId: node.id },
         });
       } else {
+        await prisma.automationEnrollment.update({
+          where: { id: enrollmentId },
+          data: { status: 'ACTIVE', completedAt: null },
+        });
         for (const edge of nextOutgoing) {
           await this.executeSubflowNode(
             enrollmentId,
@@ -1290,41 +1294,74 @@ export class AutomationEngine {
             const subNodes: WorkflowNode[] = subflow.nodes || [];
             const subEdges: WorkflowEdge[] = subflow.edges || [];
 
-            // Se o lead está ATIVO e seu currentNodeId já teve sucesso mas possui novas etapas conectadas a ele:
-            if (existingEnrollment.status === 'ACTIVE' && existingEnrollment.currentNodeId) {
-              const alreadySuccess = await prisma.automationStepLog.findFirst({
-                where: {
-                  contactId: contact.id,
-                  nodeId: existingEnrollment.currentNodeId,
-                  status: 'SUCCESS',
-                  enrollment: { automationId },
+            if (subNodes.length === 0) continue;
+
+            // 1. Busca todos os nós executados com SUCESSO para este lead nesta automação
+            const successLogs = await prisma.automationStepLog.findMany({
+              where: {
+                contactId: contact.id,
+                status: 'SUCCESS',
+                enrollment: { automationId },
+              },
+              select: { nodeId: true },
+            });
+            const executedNodeIds = new Set(successLogs.map((l) => l.nodeId));
+
+            // 2. Verifica se o lead possui job agendado PENDING (ex: temporizador/timer em contagem regressiva)
+            const pendingJob = await prisma.scheduledJob.findFirst({
+              where: {
+                enrollmentId: existingEnrollment.id,
+                status: 'PENDING',
+              },
+            });
+
+            // 3. Identifica nós seguintes que AINDA NÃO foram executados a partir de etapas já concluídas
+            const nodesToExecute = new Set<string>();
+
+            for (const executedId of Array.from(executedNodeIds)) {
+              const outgoing = subEdges.filter((e) => e.source === executedId);
+              for (const edge of outgoing) {
+                if (!executedNodeIds.has(edge.target)) {
+                  // Se não há agendamento pendente para este nó alvo, ele é candidato à execução imediata
+                  if (!pendingJob || pendingJob.targetNodeId !== edge.target) {
+                    nodesToExecute.add(edge.target);
+                  }
+                }
+              }
+            }
+
+            // 4. Caso o lead nunca tenha executado nenhuma etapa interna (ex: acabou de entrar ou sequência acabou de ser conectada)
+            if (executedNodeIds.size === 0 && !pendingJob) {
+              const startNode = subNodes.find((n) => n.type === 'start') || subNodes[0];
+              if (startNode) {
+                const outgoingFromStart = subEdges.filter((e) => e.source === startNode.id);
+                for (const edge of outgoingFromStart) {
+                  nodesToExecute.add(edge.target);
+                }
+              }
+            }
+
+            // 5. Se houver novos nós a serem percorridos, avança o lead
+            if (nodesToExecute.size > 0) {
+              // Reativa a inscrição para ACTIVE caso estivesse COMPLETED
+              await prisma.automationEnrollment.update({
+                where: { id: existingEnrollment.id },
+                data: {
+                  status: 'ACTIVE',
+                  completedAt: null,
                 },
               });
 
-              if (alreadySuccess) {
-                const outgoingFromCurrent = subEdges.filter((e) => e.source === existingEnrollment.currentNodeId);
-                for (const edge of outgoingFromCurrent) {
-                  const nextAlreadySuccess = await prisma.automationStepLog.findFirst({
-                    where: {
-                      contactId: contact.id,
-                      nodeId: edge.target,
-                      status: 'SUCCESS',
-                      enrollment: { automationId },
-                    },
-                  });
-
-                  if (!nextAlreadySuccess) {
-                    await this.executeSubflowNode(
-                      existingEnrollment.id,
-                      edge.target,
-                      subNodes,
-                      subEdges,
-                      tenantId,
-                      contact,
-                      automationId
-                    );
-                  }
-                }
+              for (const targetNodeId of Array.from(nodesToExecute)) {
+                await this.executeSubflowNode(
+                  existingEnrollment.id,
+                  targetNodeId,
+                  subNodes,
+                  subEdges,
+                  tenantId,
+                  contact,
+                  automationId
+                );
               }
             }
           }
