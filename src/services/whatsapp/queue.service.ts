@@ -113,16 +113,20 @@ export class WhatsappQueueService {
 
       // Garante colunas de cadência na tabela WhatsappInstance caso ainda não existam
       try {
-        await prisma.$executeRawUnsafe(`ALTER TABLE WhatsappInstance ADD COLUMN fixed_delay_seconds INTEGER DEFAULT 30;`);
-      } catch {}
-      try {
-        await prisma.$executeRawUnsafe(`ALTER TABLE WhatsappInstance ADD COLUMN use_random_delay BOOLEAN DEFAULT 1;`);
-      } catch {}
-      try {
-        await prisma.$executeRawUnsafe(`ALTER TABLE WhatsappInstance ADD COLUMN min_delay_seconds INTEGER DEFAULT 20;`);
-      } catch {}
-      try {
-        await prisma.$executeRawUnsafe(`ALTER TABLE WhatsappInstance ADD COLUMN max_delay_seconds INTEGER DEFAULT 45;`);
+        const cols: any = await prisma.$queryRawUnsafe(`PRAGMA table_info("WhatsappInstance");`);
+        const colSet = new Set((cols || []).map((c: any) => c.name));
+        if (!colSet.has('fixed_delay_seconds')) {
+          await prisma.$executeRawUnsafe(`ALTER TABLE "WhatsappInstance" ADD COLUMN fixed_delay_seconds INTEGER DEFAULT 30;`);
+        }
+        if (!colSet.has('use_random_delay')) {
+          await prisma.$executeRawUnsafe(`ALTER TABLE "WhatsappInstance" ADD COLUMN use_random_delay BOOLEAN DEFAULT 1;`);
+        }
+        if (!colSet.has('min_delay_seconds')) {
+          await prisma.$executeRawUnsafe(`ALTER TABLE "WhatsappInstance" ADD COLUMN min_delay_seconds INTEGER DEFAULT 20;`);
+        }
+        if (!colSet.has('max_delay_seconds')) {
+          await prisma.$executeRawUnsafe(`ALTER TABLE "WhatsappInstance" ADD COLUMN max_delay_seconds INTEGER DEFAULT 45;`);
+        }
       } catch {}
     } catch (err: any) {
       console.warn('[WhatsappQueueService] Aviso em ensureQueueTable:', err.message);
