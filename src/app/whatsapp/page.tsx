@@ -818,29 +818,29 @@ export default function WhatsAppPage() {
 
                 {/* Dados da Linha */}
                 <div className="grid grid-cols-1 sm:grid-cols-3 gap-4 text-xs mt-4">
-                  <div className="p-3.5 rounded-xl bg-slate-50 border border-slate-100">
+                  <div className="p-3.5 rounded-xl bg-slate-50 dark:bg-[#0b0f1a] border border-slate-100 dark:border-slate-800">
                     <span className="text-[10px] text-slate-400 uppercase font-bold block mb-1">
                       Número Conectado
                     </span>
-                    <span className="font-bold text-slate-900 text-sm font-mono">
+                    <span className="font-bold text-slate-900 dark:text-slate-100 text-sm font-mono">
                       {inst.phone || (inst.connected ? 'Identificando...' : 'Não conectado')}
                     </span>
                   </div>
 
-                  <div className="p-3.5 rounded-xl bg-slate-50 border border-slate-100">
+                  <div className="p-3.5 rounded-xl bg-slate-50 dark:bg-[#0b0f1a] border border-slate-100 dark:border-slate-800">
                     <span className="text-[10px] text-slate-400 uppercase font-bold block mb-1">
                       Perfil no WhatsApp
                     </span>
-                    <span className="font-bold text-slate-900 text-sm truncate block">
+                    <span className="font-bold text-slate-900 dark:text-slate-100 text-sm truncate block">
                       {inst.profileName || 'Conta Comercial'}
                     </span>
                   </div>
 
-                  <div className="p-3.5 rounded-xl bg-slate-50 border border-slate-100">
+                  <div className="p-3.5 rounded-xl bg-slate-50 dark:bg-[#0b0f1a] border border-slate-100 dark:border-slate-800">
                     <span className="text-[10px] text-slate-400 uppercase font-bold block mb-1">
                       Disponibilidade
                     </span>
-                    <span className="font-semibold text-indigo-700 text-xs flex items-center gap-1">
+                    <span className="font-semibold text-indigo-700 dark:text-indigo-400 text-xs flex items-center gap-1">
                       <Users className="w-3.5 h-3.5 text-indigo-500" />
                       <span>Todos os Experts</span>
                     </span>
@@ -848,11 +848,11 @@ export default function WhatsAppPage() {
                 </div>
 
                 {/* Configuração de Cadência e Delay Anti-Bloqueio da Linha */}
-                <div className="mt-4 pt-4 border-t border-slate-100 bg-slate-50/70 rounded-xl p-4">
+                <div className="mt-4 pt-4 border-t border-slate-100 dark:border-slate-800/80 bg-slate-50/70 dark:bg-[#0b0f1a] rounded-xl p-4">
                   <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-2 mb-3">
                     <div className="flex items-center gap-2">
-                      <Sliders className="w-4 h-4 text-emerald-600" />
-                      <span className="font-bold text-slate-800 text-xs">
+                      <Sliders className="w-4 h-4 text-emerald-600 dark:text-emerald-400" />
+                      <span className="font-bold text-slate-800 dark:text-slate-100 text-xs">
                         Cadência de Envio (Delay Anti-Bloqueio entre Contatos)
                       </span>
                     </div>
@@ -863,11 +863,11 @@ export default function WhatsAppPage() {
 
                   <div className="grid grid-cols-1 md:grid-cols-3 gap-3 items-end">
                     <div>
-                      <label className="block text-[11px] font-semibold text-slate-700 mb-1">
+                      <label className="block text-[11px] font-semibold text-slate-700 dark:text-slate-300 mb-1">
                         Modo de Intervalo
                       </label>
                       <div className="flex items-center gap-2">
-                        <label className="inline-flex items-center gap-1.5 text-xs text-slate-700 cursor-pointer">
+                        <label className="inline-flex items-center gap-1.5 text-xs text-slate-700 dark:text-slate-200 cursor-pointer">
                           <input
                             type="radio"
                             name={`delay_mode_${inst.id}`}
@@ -877,7 +877,7 @@ export default function WhatsAppPage() {
                           />
                           <span>Aleatório (Recomendado)</span>
                         </label>
-                        <label className="inline-flex items-center gap-1.5 text-xs text-slate-700 cursor-pointer ml-2">
+                        <label className="inline-flex items-center gap-1.5 text-xs text-slate-700 dark:text-slate-200 cursor-pointer ml-2">
                           <input
                             type="radio"
                             name={`delay_mode_${inst.id}`}
@@ -893,7 +893,7 @@ export default function WhatsAppPage() {
                     {Boolean(cadenceSettings[inst.id]?.useRandomDelay ?? inst.useRandomDelay ?? true) ? (
                       <>
                         <div>
-                          <label className="block text-[11px] font-semibold text-slate-700 mb-1">
+                          <label className="block text-[11px] font-semibold text-slate-700 dark:text-slate-300 mb-1">
                             Intervalo Mínimo (segundos)
                           </label>
                           <input
@@ -902,11 +902,11 @@ export default function WhatsAppPage() {
                             max={600}
                             value={cadenceSettings[inst.id]?.minDelaySeconds ?? inst.minDelaySeconds ?? 20}
                             onChange={(e) => handleUpdateCadenceField(inst.id, 'minDelaySeconds', Number(e.target.value))}
-                            className="w-full p-2 border border-slate-200 rounded-lg text-xs bg-white text-slate-900 focus:outline-none focus:border-emerald-500"
+                            className="w-full p-2 border border-slate-200 dark:border-slate-700 rounded-lg text-xs bg-white dark:bg-[#131b2c] text-slate-900 dark:text-slate-100 focus:outline-none focus:border-emerald-500"
                           />
                         </div>
                         <div>
-                          <label className="block text-[11px] font-semibold text-slate-700 mb-1">
+                          <label className="block text-[11px] font-semibold text-slate-700 dark:text-slate-300 mb-1">
                             Intervalo Máximo (segundos)
                           </label>
                           <div className="flex items-center gap-2">
@@ -916,7 +916,7 @@ export default function WhatsAppPage() {
                               max={600}
                               value={cadenceSettings[inst.id]?.maxDelaySeconds ?? inst.maxDelaySeconds ?? 45}
                               onChange={(e) => handleUpdateCadenceField(inst.id, 'maxDelaySeconds', Number(e.target.value))}
-                              className="w-full p-2 border border-slate-200 rounded-lg text-xs bg-white text-slate-900 focus:outline-none focus:border-emerald-500"
+                              className="w-full p-2 border border-slate-200 dark:border-slate-700 rounded-lg text-xs bg-white dark:bg-[#131b2c] text-slate-900 dark:text-slate-100 focus:outline-none focus:border-emerald-500"
                             />
                             <button
                               onClick={() => handleSaveCadence(inst.id)}
@@ -930,7 +930,7 @@ export default function WhatsAppPage() {
                       </>
                     ) : (
                       <div className="md:col-span-2">
-                        <label className="block text-[11px] font-semibold text-slate-700 mb-1">
+                        <label className="block text-[11px] font-semibold text-slate-700 dark:text-slate-300 mb-1">
                           Delay Fixo entre Contatos (segundos)
                         </label>
                         <div className="flex items-center gap-2">
@@ -940,7 +940,7 @@ export default function WhatsAppPage() {
                             max={600}
                             value={cadenceSettings[inst.id]?.fixedDelaySeconds ?? inst.fixedDelaySeconds ?? 30}
                             onChange={(e) => handleUpdateCadenceField(inst.id, 'fixedDelaySeconds', Number(e.target.value))}
-                            className="w-full max-w-[200px] p-2 border border-slate-200 rounded-lg text-xs bg-white text-slate-900 focus:outline-none focus:border-emerald-500"
+                            className="w-full max-w-[200px] p-2 border border-slate-200 dark:border-slate-700 rounded-lg text-xs bg-white dark:bg-[#131b2c] text-slate-900 dark:text-slate-100 focus:outline-none focus:border-emerald-500"
                           />
                           <button
                             onClick={() => handleSaveCadence(inst.id)}
