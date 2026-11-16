@@ -15,6 +15,7 @@ import {
   Flame,
   LogOut,
 } from 'lucide-react';
+import { ThemeToggle } from '@/components/ThemeToggle';
 
 const menuItems = [
   { name: 'Visão Geral', href: '/', icon: LayoutDashboard },
@@ -78,6 +79,11 @@ export function Sidebar() {
             <span className="text-emerald-400 font-semibold">Ativo</span>
           </div>
           <p className="text-[11px] text-slate-500">Timers e idempotência monitorados</p>
+        </div>
+
+        <div className="flex items-center justify-between pt-1">
+          <span className="text-[11px] text-slate-400 font-medium">Tema</span>
+          <ThemeToggle showLabel className="!px-2.5 !py-1 !text-xs !bg-slate-800/80 !border-slate-700/60" />
         </div>
 
         <button
