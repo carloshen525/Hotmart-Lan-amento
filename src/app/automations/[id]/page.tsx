@@ -79,6 +79,7 @@ import {
   WhatsAppNode,
   EmailNode,
   EditarGrupoNode,
+  DeletableEdge,
   formatTimerSummary,
 } from '@/components/automation/CustomNodes';
 import { EmailBuilderModal } from '@/components/email-builder/EmailBuilderModal';
@@ -334,6 +335,15 @@ export default function AutomationCanvasPage() {
       trigger: TagNode,
       action: WhatsAppNode,
       condition: TimerNode,
+    }),
+    []
+  );
+
+  // Mapeamento de arestas/conexões com suporte a exclusão visual no hover e clique
+  const edgeTypes = useMemo(
+    () => ({
+      deletable: DeletableEdge,
+      default: DeletableEdge,
     }),
     []
   );
@@ -697,6 +707,18 @@ export default function AutomationCanvasPage() {
       .catch(() => setLoading(false));
   }, [automationId, applyStatsToNodeList]);
 
+  // Handler para exclusão de conexão (linha/Edge) via botão de lixeira no hover/clique
+  const handleDeleteEdge = useCallback(
+    (edgeId: string) => {
+      if (viewMode === 'MACRO') {
+        setMacroEdges((eds) => eds.filter((e) => e.id !== edgeId));
+      } else {
+        setSequenceEdges((eds) => eds.filter((e) => e.id !== edgeId));
+      }
+    },
+    [viewMode]
+  );
+
   // Handlers para nós do Macro Canvas
   const onMacroNodesChange: OnNodesChange = useCallback(
     (changes) => setMacroNodes((nds) => applyNodeChanges(changes, nds)),
@@ -712,6 +734,7 @@ export default function AutomationCanvasPage() {
         addEdge(
           {
             ...params,
+            type: 'deletable',
             animated: status === 'ACTIVE',
             style: {
               stroke: status === 'ACTIVE' ? '#22c55e' : '#ffffff',
@@ -740,6 +763,7 @@ export default function AutomationCanvasPage() {
         addEdge(
           {
             ...params,
+            type: 'deletable',
             animated: status === 'ACTIVE',
             style: {
               stroke: status === 'ACTIVE' ? '#22c55e' : '#ffffff',
@@ -2624,9 +2648,17 @@ export default function AutomationCanvasPage() {
   const formatEdgesWithFlowState = useCallback(
     (edgesList: Edge[]): Edge[] => {
       return edgesList.map((edge) => {
+        const base = {
+          ...edge,
+          type: 'deletable',
+          data: {
+            ...edge.data,
+            onDelete: handleDeleteEdge,
+          },
+        };
         if (isFlowActive) {
           return {
-            ...edge,
+            ...base,
             animated: true,
             style: {
               ...edge.style,
@@ -2637,7 +2669,7 @@ export default function AutomationCanvasPage() {
           };
         } else {
           return {
-            ...edge,
+            ...base,
             animated: false,
             style: {
               ...edge.style,
@@ -2649,7 +2681,7 @@ export default function AutomationCanvasPage() {
         }
       });
     },
-    [isFlowActive]
+    [isFlowActive, handleDeleteEdge]
   );
 
   const displayEdges = useMemo(() => {
@@ -3146,6 +3178,8 @@ export default function AutomationCanvasPage() {
             onConnect={viewMode === 'MACRO' ? onMacroConnect : onSequenceConnect}
             onNodeClick={onNodeClick}
             nodeTypes={nodeTypes}
+            edgeTypes={edgeTypes}
+            defaultEdgeOptions={{ type: 'deletable' }}
             fitView
             className="bg-[#0e1015]"
           >

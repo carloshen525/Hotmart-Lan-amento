@@ -1,7 +1,14 @@
 'use client';
 
-import { memo } from 'react';
-import { Handle, Position } from '@xyflow/react';
+import { memo, useState } from 'react';
+import {
+  Handle,
+  Position,
+  BaseEdge,
+  EdgeLabelRenderer,
+  getBezierPath,
+  type EdgeProps,
+} from '@xyflow/react';
 import {
   Tag,
   Clock,
@@ -12,6 +19,7 @@ import {
   Settings,
   Flame,
   Globe,
+  Trash2,
 } from 'lucide-react';
 
 // ============================================================
@@ -652,3 +660,91 @@ export const EditarGrupoNode = memo(({ data, selected }: any) => {
   );
 });
 EditarGrupoNode.displayName = 'EditarGrupoNode';
+
+// ============================================================
+// CONEXÃO PERSONALIZADA (EDGE) COM BOTÃO DE LIXEIRA (DELETÁVEL)
+// ============================================================
+export const DeletableEdge = memo(({
+  id,
+  sourceX,
+  sourceY,
+  targetX,
+  targetY,
+  sourcePosition = Position.Right,
+  targetPosition = Position.Left,
+  style = {},
+  markerEnd,
+  selected,
+  data,
+}: EdgeProps) => {
+  const [isHovered, setIsHovered] = useState(false);
+  const [edgePath, labelX, labelY] = getBezierPath({
+    sourceX,
+    sourceY,
+    sourcePosition,
+    targetX,
+    targetY,
+    targetPosition,
+  });
+
+  const showActions = Boolean(isHovered || selected);
+
+  return (
+    <>
+      <BaseEdge
+        path={edgePath}
+        markerEnd={markerEnd}
+        style={{
+          ...style,
+          stroke: showActions ? '#f43f5e' : style?.stroke || '#ffffff',
+          strokeWidth: showActions ? 2.5 : style?.strokeWidth || 2,
+          transition: 'stroke 0.15s ease, stroke-width 0.15s ease',
+        }}
+        interactionWidth={0}
+      />
+      {/* Área invisível mais espessa para capturar hover e clique com facilidade */}
+      <path
+        d={edgePath}
+        fill="none"
+        stroke="rgba(0,0,0,0.001)"
+        strokeWidth={28}
+        style={{ pointerEvents: 'stroke' }}
+        className="cursor-pointer"
+        onMouseEnter={() => setIsHovered(true)}
+        onMouseLeave={() => setIsHovered(false)}
+        onClick={() => setIsHovered(true)}
+      />
+      <EdgeLabelRenderer>
+        <div
+          style={{
+            position: 'absolute',
+            transform: `translate(-50%, -50%) translate(${labelX}px,${labelY}px)`,
+            pointerEvents: 'all',
+          }}
+          className="nodrag nopan z-30"
+          onMouseEnter={() => setIsHovered(true)}
+          onMouseLeave={() => setIsHovered(false)}
+        >
+          {showActions && (
+            <button
+              type="button"
+              onClick={(e) => {
+                e.stopPropagation();
+                if (typeof data?.onDelete === 'function') {
+                  (data.onDelete as (edgeId: string) => void)(id);
+                }
+              }}
+              title="Remover conexão entre os nós"
+              aria-label="Remover conexão"
+              className="w-7 h-7 rounded-full bg-rose-600 hover:bg-rose-500 active:bg-rose-700 text-white flex items-center justify-center shadow-xl shadow-black/80 border border-rose-400/40 hover:scale-125 active:scale-95 transition-all duration-150 cursor-pointer group"
+            >
+              <Trash2 className="w-3.5 h-3.5 text-white transition-transform group-hover:scale-110" />
+            </button>
+          )}
+        </div>
+      </EdgeLabelRenderer>
+    </>
+  );
+});
+DeletableEdge.displayName = 'DeletableEdge';
+
