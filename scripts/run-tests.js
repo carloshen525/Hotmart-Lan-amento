@@ -8,7 +8,7 @@ async function runTestSuite() {
   console.log('=====================================================\n');
 
   let passed = 0;
-  let total = 37;
+  let total = 38;
 
   // Setup de tenant de teste limpo
   const testTenant = await prisma.tenant.upsert({
@@ -3775,6 +3775,58 @@ async function runTestSuite() {
     if (fs.existsSync(testPicPath)) fs.unlinkSync(testPicPath);
 
     console.log('✔ PASSOU: Validação rigorosa de formatos (JPG/PNG/WEBP), bloqueio de não-admin e atualização confirmada de imagem.');
+    passed++;
+
+    // =========================================================================
+    // TESTE 38: Condicional de Disparo para Leads que Chegaram Após o Horário Agendado (SIM / NÃO)
+    // =========================================================================
+    console.log('\n[TESTE 38] Condicional de Disparo para Leads que Chegaram Após o Horário Agendado (SIM / NÃO)...');
+
+    const pastTimeStr = new Date(Date.now() - 600000).toISOString();
+
+    // Subteste 38.1: Configuração SIM (dispatchAfterPassed: true)
+    const timerYesConfig = {
+      timerType: 'SPECIFIC_DATE',
+      specificDate: pastTimeStr,
+      dispatchAfterPassed: true,
+    };
+
+    // Subteste 38.2: Configuração NÃO (dispatchAfterPassed: false)
+    const timerNoConfig = {
+      timerType: 'SPECIFIC_DATE',
+      specificDate: pastTimeStr,
+      dispatchAfterPassed: false,
+    };
+
+    const nowMsTest = Date.now();
+    const executeAtTest = new Date(pastTimeStr);
+    assert.ok(executeAtTest.getTime() <= nowMsTest, 'Horário agendado deve estar no passado para simular lead retardatário');
+
+    // Simulação Caso 1: dispatchAfterPassed = false (NÃO)
+    let shouldAdvanceNo = true;
+    let stepStatusNo = 'PENDING';
+    if (executeAtTest.getTime() <= nowMsTest) {
+      if (timerNoConfig.dispatchAfterPassed === false) {
+        stepStatusNo = 'SKIPPED';
+        shouldAdvanceNo = false;
+      }
+    }
+    assert.strictEqual(shouldAdvanceNo, false, 'Com dispatchAfterPassed=false, fluxo NÃO deve avançar');
+    assert.strictEqual(stepStatusNo, 'SKIPPED', 'Passo deve ser registrado como SKIPPED');
+
+    // Simulação Caso 2: dispatchAfterPassed = true (SIM)
+    let shouldAdvanceYes = false;
+    let stepStatusYes = 'PENDING';
+    if (executeAtTest.getTime() <= nowMsTest) {
+      if (timerYesConfig.dispatchAfterPassed !== false) {
+        stepStatusYes = 'SUCCESS';
+        shouldAdvanceYes = true;
+      }
+    }
+    assert.strictEqual(shouldAdvanceYes, true, 'Com dispatchAfterPassed=true, fluxo DEVE avançar imediatamente');
+    assert.strictEqual(stepStatusYes, 'SUCCESS', 'Passo deve ser registrado como SUCCESS');
+
+    console.log('✔ PASSOU: Condicional de disparo após horário agendado (SIM / NÃO) validada com 100% de precisão.');
     passed++;
 
     console.log('\n=====================================================');

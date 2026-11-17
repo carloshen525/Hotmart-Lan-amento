@@ -274,6 +274,7 @@ export default function AutomationCanvasPage() {
   const [timerIntervalEnd, setTimerIntervalEnd] = useState('20:00');
   const [timerHasWeekDays, setTimerHasWeekDays] = useState(false);
   const [timerWeekDays, setTimerWeekDays] = useState<string[]>(['seg', 'ter', 'qua', 'qui', 'sex']);
+  const [timerDispatchAfterPassed, setTimerDispatchAfterPassed] = useState<boolean>(true);
 
   // Modal de Aquecimento (Throttle / Warmup)
   const [isWarmupModalOpen, setIsWarmupModalOpen] = useState(false);
@@ -1808,6 +1809,7 @@ export default function AutomationCanvasPage() {
     setTimerIntervalEnd(cfg.intervalEnd || '20:00');
     setTimerHasWeekDays(!!cfg.hasWeekDays);
     setTimerWeekDays(cfg.weekDays || ['seg', 'ter', 'qua', 'qui', 'sex']);
+    setTimerDispatchAfterPassed(cfg.dispatchAfterPassed !== false);
     setTimerError(null);
 
     setIsTimerModalOpen(true);
@@ -1823,8 +1825,12 @@ export default function AutomationCanvasPage() {
         return;
       }
       const selectedTime = parseTargetDate(timerSpecificDate);
-      if (isNaN(selectedTime) || selectedTime <= Date.now()) {
-        setTimerError('❌ A data e hora selecionadas já passaram. Escolha um horário futuro.');
+      if (isNaN(selectedTime)) {
+        setTimerError('❌ Data e hora inválidas.');
+        return;
+      }
+      if (selectedTime <= Date.now() && !timerDispatchAfterPassed) {
+        setTimerError('❌ A data e hora selecionadas já passaram. Ative a opção de disparar para leads que chegaram após o horário ou escolha um horário futuro.');
         return;
       }
     }
@@ -1858,6 +1864,7 @@ export default function AutomationCanvasPage() {
         ...baseCfg,
         timerType: 'SPECIFIC_DATE',
         specificDate: timerSpecificDate,
+        dispatchAfterPassed: timerDispatchAfterPassed,
         cancelCondition: timerCancelCondition,
         hasLimit: timerHasLimit,
         hasInterval: timerHasInterval,
@@ -1876,6 +1883,7 @@ export default function AutomationCanvasPage() {
       delete baseCfg.targetDate;
       delete baseCfg.targetTime;
       delete baseCfg.timezone;
+      delete baseCfg.dispatchAfterPassed;
 
       updatedCfg = {
         ...baseCfg,
@@ -4710,6 +4718,49 @@ export default function AutomationCanvasPage() {
                 <div className="pt-2 text-[10px] text-slate-400 space-y-0.5">
                   <span className="font-semibold text-slate-300 block">Fuso horário: SÃO PAULO</span>
                   <span>Esta configuração é aplicada somente para este timer.</span>
+                </div>
+
+                {/* Condicional: Disparar para leads que chegaram após o horário agendado? SIM - NÃO */}
+                <div className="pt-3 border-t border-slate-800/80 mt-2">
+                  <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-3 bg-[#181c25]/80 p-3 rounded-xl border border-slate-800">
+                    <div className="flex-1 pr-2">
+                      <span className="font-semibold text-slate-200 block text-xs">
+                        Disparar para leads que chegaram após o horário agendado?
+                      </span>
+                      <span className="text-[10px] text-slate-400 block leading-tight mt-1">
+                        {timerDispatchAfterPassed
+                          ? 'SIM: Leads que chegarem após este horário agendado receberão o disparo normalmente.'
+                          : 'NÃO: Leads que chegarem após este horário agendado NÃO receberão o disparo.'}
+                      </span>
+                    </div>
+                    <div className="flex items-center gap-1.5 shrink-0 self-start sm:self-auto bg-[#12141a] p-1 rounded-lg border border-slate-700/80">
+                      <button
+                        type="button"
+                        onClick={() => {
+                          setTimerDispatchAfterPassed(true);
+                          setTimerError(null);
+                        }}
+                        className={`px-3 py-1.5 text-xs font-bold rounded-md transition-all cursor-pointer ${
+                          timerDispatchAfterPassed
+                            ? 'bg-emerald-600 text-white shadow-md shadow-emerald-950/40 ring-1 ring-emerald-400'
+                            : 'text-slate-400 hover:text-slate-200 hover:bg-slate-800/50'
+                        }`}
+                      >
+                        SIM
+                      </button>
+                      <button
+                        type="button"
+                        onClick={() => setTimerDispatchAfterPassed(false)}
+                        className={`px-3 py-1.5 text-xs font-bold rounded-md transition-all cursor-pointer ${
+                          !timerDispatchAfterPassed
+                            ? 'bg-red-600 text-white shadow-md shadow-red-950/40 ring-1 ring-red-400'
+                            : 'text-slate-400 hover:text-slate-200 hover:bg-slate-800/50'
+                        }`}
+                      >
+                        NÃO
+                      </button>
+                    </div>
+                  </div>
                 </div>
               </div>
             )}

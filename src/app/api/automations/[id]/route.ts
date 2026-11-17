@@ -546,9 +546,9 @@ function validateTimerNodes(nodes: any[]): string | null {
         return '❌ A data e hora selecionadas já passaram. Escolha um horário futuro.';
       }
       const targetTime = parseTargetDate(cfg.specificDate);
-      // Tolerância de 60 segundos para evitar falsos-positivos na edição no mesmo minuto
-      if (isNaN(targetTime) || targetTime <= Date.now() - 60000) {
-        return '❌ A data e hora selecionadas já passaram. Escolha um horário futuro.';
+      // Se a condicional de disparar para retardatários estiver desativada (NÃO), não permite data no passado
+      if (cfg.dispatchAfterPassed === false && (isNaN(targetTime) || targetTime <= Date.now() - 60000)) {
+        return '❌ A data e hora selecionadas já passaram. Escolha um horário futuro ou ative a opção de disparar para leads após o horário agendado.';
       }
     }
     const subNodes = node.data?.subflow?.nodes;
@@ -612,8 +612,8 @@ export async function PUT(request: Request, { params }: { params: { id: string }
           if (cfg.timerType === 'SPECIFIC_DATE' || cfg.delayType === 'specific_date' || cfg.specificDate) {
             if (cfg.specificDate) {
               const t = parseTargetDate(cfg.specificDate);
-              if (!isNaN(t) && t <= now - 60000) {
-                throw new Error('Existe um timer configurado para uma data/hora que já passou. Escolha um horário futuro antes de ativar.');
+              if (cfg.dispatchAfterPassed === false && !isNaN(t) && t <= now - 60000) {
+                throw new Error('Existe um timer configurado para uma data/hora que já passou com a opção de disparar após o horário desativada. Escolha um horário futuro antes de ativar.');
               }
             }
           }

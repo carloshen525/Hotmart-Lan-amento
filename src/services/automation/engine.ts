@@ -436,10 +436,29 @@ export class AutomationEngine {
         if (outgoing.length > 0) {
           const nowMs = Date.now();
           if (executeAt.getTime() <= nowMs) {
-            // Se o horário agendado já chegou ou passou, avança imediatamente sem criar agendamento pendente
-            stepStatus = 'SUCCESS';
-            stepDetails = { scheduledUntil: executeAt, passedImmediately: true, summary: summaryText };
-            // Continua o fluxo para os nós seguintes sem pausar
+            const isSpecific =
+              config.timerType === 'SPECIFIC_DATE' ||
+              config.delayType === 'specific_date' ||
+              Boolean(config.specificDate);
+            const dispatchAfterPassed = isSpecific ? config.dispatchAfterPassed !== false : true;
+
+            if (!dispatchAfterPassed) {
+              // Condicional NÃO: Não disparar para leads que chegaram após o horário agendado
+              stepStatus = 'SKIPPED';
+              stepDetails = {
+                scheduledUntil: executeAt,
+                passedImmediately: false,
+                skipped: true,
+                reason: 'Lead chegou após o horário agendado e a condicional de disparar após o horário está desativada (NÃO)',
+                summary: summaryText,
+              };
+              shouldHaltExecution = true; // Bloqueia avanço para os próximos nós
+            } else {
+              // Condicional SIM: Se o horário agendado já chegou ou passou, avança imediatamente sem criar agendamento pendente
+              stepStatus = 'SUCCESS';
+              stepDetails = { scheduledUntil: executeAt, passedImmediately: true, summary: summaryText };
+              // Continua o fluxo para os nós seguintes sem pausar
+            }
           } else {
             // Horário no futuro: Criar Job Agendado persistente e pausar execução
             for (const nextEdge of outgoing) {
@@ -1198,18 +1217,36 @@ export class AutomationEngine {
           const outgoing = subEdges.filter((e) => e.source === node.id);
           const nowMs = Date.now();
           if (executeAt.getTime() <= nowMs) {
-            // Se o horário agendado já chegou ou passou, avança imediatamente sem criar agendamento pendente
-            stepDetails = { scheduledUntil: executeAt, passedImmediately: true, summary: summaryText };
-            for (const edge of outgoing) {
-              await this.executeSubflowNode(
-                enrollmentId,
-                edge.target,
-                subNodes,
-                subEdges,
-                tenantId,
-                contact,
-                autoId
-              );
+            const isSpecific =
+              cfg.timerType === 'SPECIFIC_DATE' ||
+              cfg.delayType === 'specific_date' ||
+              Boolean(cfg.specificDate);
+            const dispatchAfterPassed = isSpecific ? cfg.dispatchAfterPassed !== false : true;
+
+            if (!dispatchAfterPassed) {
+              // Condicional NÃO: Não disparar para leads que chegaram após o horário agendado
+              stepDetails = {
+                scheduledUntil: executeAt,
+                passedImmediately: false,
+                skipped: true,
+                reason: 'Lead chegou após o horário agendado e a condicional de disparar após o horário está desativada (NÃO)',
+                summary: summaryText,
+              };
+              shouldHalt = true; // Bloqueia avanço para os próximos nós
+            } else {
+              // Condicional SIM: Se o horário agendado já chegou ou passou, avança imediatamente sem criar agendamento pendente
+              stepDetails = { scheduledUntil: executeAt, passedImmediately: true, summary: summaryText };
+              for (const edge of outgoing) {
+                await this.executeSubflowNode(
+                  enrollmentId,
+                  edge.target,
+                  subNodes,
+                  subEdges,
+                  tenantId,
+                  contact,
+                  autoId
+                );
+              }
             }
           } else {
             for (const edge of outgoing) {
@@ -2010,7 +2047,30 @@ export class AutomationEngine {
         return; // Aguarda o horário
       }
 
-      // Se o horário já chegou ou é atraso curto:
+      // Se o horário já chegou ou passou:
+      const isSpecificGroup = Boolean(config.specificDate || config.targetDate || config.targetTime);
+      const dispatchAfterPassedGroup = isSpecificGroup ? config.dispatchAfterPassed !== false : true;
+
+      if (!dispatchAfterPassedGroup && targetTimestamp && targetTimestamp <= now) {
+        // Condicional NÃO: grupo chegou após o horário e não deve disparar
+        await prisma.automationGroupStepLog.create({
+          data: {
+            enrollmentId,
+            groupId: group.id,
+            tenantId,
+            nodeId,
+            nodeType: 'timer',
+            action: 'TIMER_EXPIRED_SKIPPED',
+            status: 'SKIPPED',
+            details: JSON.stringify({
+              reason: 'Grupo chegou após o horário agendado e a condicional de disparar após o horário está desativada (NÃO)',
+              targetDate: new Date(targetTimestamp).toISOString(),
+            }),
+          },
+        });
+        return; // Não avança para os próximos nós do grupo
+      }
+
       await prisma.automationGroupStepLog.create({
         data: {
           enrollmentId,
