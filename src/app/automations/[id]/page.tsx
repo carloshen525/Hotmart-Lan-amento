@@ -916,9 +916,12 @@ export default function AutomationCanvasPage() {
         data: {
           label: 'WhatsApp',
           type: 'whatsapp',
-          targetType: 'GROUP',
+          targetType: targetType === 'GROUP' ? 'GROUP' : 'LEAD',
+          isGroup: targetType === 'GROUP',
           config: {
             message: '',
+            targetType: targetType === 'GROUP' ? 'GROUP' : 'LEAD',
+            whatsappInstanceId: flowWhatsappInstanceId || '',
             leadsCount: 0,
             waitingCount: 0,
             successCount: 0,
@@ -3081,16 +3084,30 @@ export default function AutomationCanvasPage() {
                     <span>Disparos</span>
                     <div className="flex-1 h-[1px] bg-slate-700" />
                   </div>
-                  {/* Editar grupos */}
-                  <div
-                    onClick={() => addMacroBlock('editar_grupo')}
-                    className="flex flex-col items-center justify-center p-3 rounded-xl bg-[#1b1e27] hover:bg-[#232733] border border-slate-800 hover:border-purple-500/60 cursor-pointer transition-all group shadow-sm"
-                    title="Editar grupos: abrir/fechar grupo para mensagens, alterar nome, descrição ou enviar mensagens"
-                  >
-                    <Settings className="w-6 h-6 text-slate-300 group-hover:text-purple-300 mb-1.5 transition-colors group-hover:rotate-45" />
-                    <span className="text-xs font-medium text-slate-300 group-hover:text-white">
-                      Editar grupos
-                    </span>
+                  <div className="space-y-2">
+                    {/* WhatsApp */}
+                    <div
+                      onClick={() => addMacroBlock('whatsapp')}
+                      className="flex flex-col items-center justify-center p-3 rounded-xl bg-[#1b1e27] hover:bg-[#232733] border border-slate-800 hover:border-emerald-500/60 cursor-pointer transition-all group shadow-sm"
+                      title="Disparo WhatsApp: enviar mensagens para os grupos"
+                    >
+                      <MessageSquare className="w-6 h-6 text-slate-300 group-hover:text-emerald-400 mb-1.5 transition-colors" />
+                      <span className="text-xs font-medium text-slate-300 group-hover:text-white">
+                        WhatsApp
+                      </span>
+                    </div>
+
+                    {/* Editar grupos */}
+                    <div
+                      onClick={() => addMacroBlock('editar_grupo')}
+                      className="flex flex-col items-center justify-center p-3 rounded-xl bg-[#1b1e27] hover:bg-[#232733] border border-slate-800 hover:border-purple-500/60 cursor-pointer transition-all group shadow-sm"
+                      title="Editar grupos: abrir/fechar grupo para mensagens, alterar nome, descrição ou imagem"
+                    >
+                      <Settings className="w-6 h-6 text-slate-300 group-hover:text-purple-300 mb-1.5 transition-colors group-hover:rotate-45" />
+                      <span className="text-xs font-medium text-slate-300 group-hover:text-white">
+                        Editar grupos
+                      </span>
+                    </div>
                   </div>
                 </div>
               </div>
