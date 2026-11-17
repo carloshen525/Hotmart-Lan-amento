@@ -1,4 +1,6 @@
 import { prisma } from '@/lib/prisma';
+import fs from 'fs';
+import path from 'path';
 
 export interface GroupSyncResult {
   totalSynced: number;
@@ -292,6 +294,24 @@ export class WhatsappGroupService {
       leftCount,
       instancesProcessed: instances.length,
     };
+  }
+
+  /**
+   * Alias para verificação de elegibilidade do grupo
+   */
+  async checkGroupEligibility(
+    groupIdOrJid: string,
+    whatsappInstanceId?: string,
+    tenantId?: string
+  ): Promise<{ eligible: boolean; reason?: string; group?: any; instance?: any }> {
+    if (tenantId) {
+      return this.verifyGroupEligibility(tenantId, groupIdOrJid, whatsappInstanceId);
+    }
+    const group = await prisma.whatsappGroup.findFirst({
+      where: { OR: [{ id: groupIdOrJid }, { jid: groupIdOrJid }] },
+    });
+    if (!group) return { eligible: false, reason: 'Grupo não encontrado' };
+    return this.verifyGroupEligibility(group.tenantId, groupIdOrJid, whatsappInstanceId);
   }
 
   /**
@@ -671,22 +691,318 @@ export class WhatsappGroupService {
   }
 
   /**
-   * Altera a imagem / foto de perfil de um grupo
+   * Altera a imagem / foto de perfil de um grupo via Evolution API
    */
-  async updateGroupPicture(instanceName: string, groupJid: string, image: string) {
+  async updateGroupPicture(
+    instanceName: string,
+    groupJid: string,
+    imageInput: string
+  ): Promise<{ success: boolean; error?: string; status?: number; data?: any }> {
     try {
-      const url = `${this.apiUrl}/group/updateGroupPicture/${encodeURIComponent(instanceName)}?groupJid=${encodeURIComponent(groupJid)}`;
-      const res = await fetch(url, {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json', apikey: this.apiKey },
-        body: JSON.stringify({ image }),
+      if (!this.isConfigured()) {
+        return { success: false, error: 'Evolution API não configurada no servidor' };
+      }
+
+      // 1. Validar e processar formato da imagem (MIME type, extensão, magic bytes, base64/url)
+      const processed = validateAndProcessGroupImage(imageInput);
+      if (!processed.valid || !processed.payload) {
+        console.warn('[Group Service] Imagem inválida rejeitada antes do envio:', processed.error);
+        return {
+          success: false,
+          error: processed.error || 'Não foi possível alterar a imagem do grupo. Formato de arquivo não suportado.',
+        };
+      }
+
+      const cleanJid = groupJid.includes('@g.us') ? groupJid : `${groupJid}@g.us`;
+
+      // 2. Logs para diagnóstico ANTES do envio (Requisito 6)
+      console.log('Alterando imagem do grupo:');
+      console.log('Grupo:', cleanJid);
+      console.log('Instância:', instanceName);
+      console.log('Arquivo:', processed.fileName || 'imagem');
+      console.log('Tipo:', processed.mimeType || 'image/jpeg');
+      console.log('Tamanho:', processed.fileSize ? `${processed.fileSize} bytes` : 'URL externa');
+
+      const urlWithQuery = `${this.apiUrl}/group/updateGroupPicture/${encodeURIComponent(instanceName)}?groupJid=${encodeURIComponent(cleanJid)}`;
+      const urlWithoutQuery = `${this.apiUrl}/group/updateGroupPicture/${encodeURIComponent(instanceName)}`;
+
+      const headers = {
+        'Content-Type': 'application/json',
+        apikey: this.apiKey,
+      };
+
+      // Payload contendo groupJid e a imagem convertida para Base64 puro ou URL pública
+      const bodyPayload = JSON.stringify({
+        groupJid: cleanJid,
+        image: processed.payload,
+        picture: processed.payload,
       });
-      return { success: res.ok };
+
+      // Tentativa 1: POST com query string
+      let res = await fetch(urlWithQuery, {
+        method: 'POST',
+        headers,
+        body: bodyPayload,
+      }).catch((e) => ({ ok: false, status: 500, json: async () => ({ error: e.message }) } as any));
+
+      let resData = await res.json().catch(() => ({}));
+
+      // Tentativa 2: Se 404/405, tenta PUT com query string (padrão em certas versões da Evolution API)
+      if (!res.ok && (res.status === 404 || res.status === 405)) {
+        res = await fetch(urlWithQuery, {
+          method: 'PUT',
+          headers,
+          body: bodyPayload,
+        }).catch((e) => ({ ok: false, status: 500, json: async () => ({ error: e.message }) } as any));
+        resData = await res.json().catch(() => ({}));
+      }
+
+      // Tentativa 3: Se 404/405, tenta POST sem query string (groupJid apenas no body)
+      if (!res.ok && (res.status === 404 || res.status === 405)) {
+        res = await fetch(urlWithoutQuery, {
+          method: 'POST',
+          headers,
+          body: bodyPayload,
+        }).catch((e) => ({ ok: false, status: 500, json: async () => ({ error: e.message }) } as any));
+        resData = await res.json().catch(() => ({}));
+      }
+
+      // Tentativa 4: Se 404/405, tenta PUT sem query string
+      if (!res.ok && (res.status === 404 || res.status === 405)) {
+        res = await fetch(urlWithoutQuery, {
+          method: 'PUT',
+          headers,
+          body: bodyPayload,
+        }).catch((e) => ({ ok: false, status: 500, json: async () => ({ error: e.message }) } as any));
+        resData = await res.json().catch(() => ({}));
+      }
+
+      // 3. Logs para diagnóstico RESPOSTA (Requisito 6)
+      const resMessage =
+        resData?.message ||
+        resData?.response?.message ||
+        resData?.error ||
+        (res.ok ? 'Imagem alterada com sucesso' : `Erro HTTP ${res.status}`);
+
+      console.log('Evolution API:');
+      console.log('Status:', res.status);
+      console.log('Mensagem:', typeof resMessage === 'object' ? JSON.stringify(resMessage) : resMessage);
+
+      // 4. Validação estrita de sucesso (Requisito 5)
+      // Somente salvar 'Imagem alterada com sucesso' quando a Evolution API retornar confirmação positiva
+      const isApiSuccess =
+        res.ok &&
+        !resData?.error &&
+        resData?.status !== 400 &&
+        resData?.status !== 401 &&
+        resData?.status !== 403 &&
+        resData?.status !== 404 &&
+        resData?.status !== 500;
+
+      if (isApiSuccess) {
+        return {
+          success: true,
+          status: res.status,
+          data: resData,
+        };
+      }
+
+      const errorMessage =
+        (Array.isArray(resData?.response?.message) ? resData.response.message.join(', ') : resData?.response?.message) ||
+        resData?.message ||
+        resData?.error ||
+        `Retorno HTTP ${res.status}`;
+
+      return {
+        success: false,
+        status: res.status,
+        error: `Falha ao alterar imagem do grupo Motivo: ${errorMessage}`,
+        data: resData,
+      };
     } catch (err: any) {
-      console.error('[Group Service] updateGroupPicture error:', err);
-      return { success: false, error: err.message };
+      console.error('[Group Service] updateGroupPicture exception:', err);
+      return {
+        success: false,
+        error: `Falha ao alterar imagem do grupo Motivo: ${err.message || 'Erro inesperado'}`,
+      };
     }
   }
+}
+
+export interface ProcessedGroupImage {
+  valid: boolean;
+  error?: string;
+  payload?: string; // base64 ou URL pública
+  mimeType?: string;
+  fileSize?: number;
+  fileName?: string;
+}
+
+/**
+ * Validador e processador de formato de imagem para grupos do WhatsApp.
+ * Verifica MIME type, extensão, integridade/magic bytes e converte para Base64 puro ou URL pública.
+ * Formatos suportados: JPG/JPEG, PNG, WEBP.
+ */
+export function validateAndProcessGroupImage(imageInput: string): ProcessedGroupImage {
+  if (!imageInput || typeof imageInput !== 'string' || !imageInput.trim()) {
+    return {
+      valid: false,
+      error: 'Não foi possível alterar a imagem do grupo. Nenhuma imagem fornecida.',
+    };
+  }
+
+  const trimmed = imageInput.trim();
+
+  // 1. Caso seja URL pública (http/https)
+  if (trimmed.startsWith('http://') || trimmed.startsWith('https://')) {
+    const urlWithoutQuery = trimmed.split('?')[0].toLowerCase();
+    const isJpg = urlWithoutQuery.endsWith('.jpg') || urlWithoutQuery.endsWith('.jpeg');
+    const isPng = urlWithoutQuery.endsWith('.png');
+    const isWebp = urlWithoutQuery.endsWith('.webp');
+
+    if (!isJpg && !isPng && !isWebp) {
+      return {
+        valid: false,
+        error: 'Não foi possível alterar a imagem do grupo. Formato de arquivo não suportado.',
+      };
+    }
+
+    const mime = isPng ? 'image/png' : isWebp ? 'image/webp' : 'image/jpeg';
+    return {
+      valid: true,
+      payload: trimmed,
+      mimeType: mime,
+      fileName: trimmed.split('/').pop() || 'group_pic.jpg',
+    };
+  }
+
+  // 2. Caso seja Base64 direto ou Data URI (data:image/...;base64,...)
+  if (trimmed.startsWith('data:image/') || (!trimmed.startsWith('/') && trimmed.length > 100 && !trimmed.includes(' '))) {
+    let mimeType = 'image/jpeg';
+    let rawBase64 = trimmed;
+
+    if (trimmed.startsWith('data:image/')) {
+      const match = trimmed.match(/^data:(image\/[a-zA-Z0-9.+_-]+);base64,(.+)$/s);
+      if (match) {
+        mimeType = match[1].toLowerCase();
+        rawBase64 = match[2];
+      }
+    }
+
+    if (!['image/jpeg', 'image/jpg', 'image/png', 'image/webp'].includes(mimeType)) {
+      return {
+        valid: false,
+        error: 'Não foi possível alterar a imagem do grupo. Formato de arquivo não suportado.',
+      };
+    }
+
+    try {
+      const buffer = Buffer.from(rawBase64, 'base64');
+      if (buffer.length < 50) {
+        return {
+          valid: false,
+          error: 'Não foi possível alterar a imagem do grupo. Formato de arquivo não suportado.',
+        };
+      }
+
+      // Validação de magic bytes
+      const isJpegMagic = buffer[0] === 0xff && buffer[1] === 0xd8 && buffer[2] === 0xff;
+      const isPngMagic = buffer[0] === 0x89 && buffer[1] === 0x50 && buffer[2] === 0x4e && buffer[3] === 0x47;
+      const isWebpMagic = buffer.slice(0, 4).toString() === 'RIFF' && buffer.slice(8, 12).toString() === 'WEBP';
+
+      if (!isJpegMagic && !isPngMagic && !isWebpMagic) {
+        return {
+          valid: false,
+          error: 'Não foi possível alterar a imagem do grupo. Formato de arquivo não suportado.',
+        };
+      }
+
+      const verifiedMime = isPngMagic ? 'image/png' : isWebpMagic ? 'image/webp' : 'image/jpeg';
+
+      return {
+        valid: true,
+        payload: rawBase64,
+        mimeType: verifiedMime,
+        fileSize: buffer.length,
+        fileName: `group_pic.${verifiedMime === 'image/png' ? 'png' : verifiedMime === 'image/webp' ? 'webp' : 'jpg'}`,
+      };
+    } catch {
+      return {
+        valid: false,
+        error: 'Não foi possível alterar a imagem do grupo. Formato de arquivo não suportado.',
+      };
+    }
+  }
+
+  // 3. Caso seja arquivo local salvo no disco (/uploads/... ou uploads/...)
+  if (trimmed.startsWith('/uploads/') || trimmed.startsWith('uploads/')) {
+    const localRelative = trimmed.replace(/^\//, '');
+    const localPath = path.join(process.cwd(), 'public', localRelative);
+
+    if (!fs.existsSync(localPath)) {
+      return {
+        valid: false,
+        error: `Arquivo de imagem do grupo não encontrado no servidor: ${trimmed}`,
+      };
+    }
+
+    const lowerName = localRelative.toLowerCase();
+    const hasValidExt =
+      lowerName.endsWith('.jpg') ||
+      lowerName.endsWith('.jpeg') ||
+      lowerName.endsWith('.png') ||
+      lowerName.endsWith('.webp');
+
+    if (!hasValidExt) {
+      return {
+        valid: false,
+        error: 'Não foi possível alterar a imagem do grupo. Formato de arquivo não suportado.',
+      };
+    }
+
+    try {
+      const buffer = fs.readFileSync(localPath);
+      if (buffer.length < 50) {
+        return {
+          valid: false,
+          error: 'Não foi possível alterar a imagem do grupo. Formato de arquivo não suportado.',
+        };
+      }
+
+      // Validação de magic bytes
+      const isJpegMagic = buffer[0] === 0xff && buffer[1] === 0xd8 && buffer[2] === 0xff;
+      const isPngMagic = buffer[0] === 0x89 && buffer[1] === 0x50 && buffer[2] === 0x4e && buffer[3] === 0x47;
+      const isWebpMagic = buffer.slice(0, 4).toString() === 'RIFF' && buffer.slice(8, 12).toString() === 'WEBP';
+
+      if (!isJpegMagic && !isPngMagic && !isWebpMagic) {
+        return {
+          valid: false,
+          error: 'Não foi possível alterar a imagem do grupo. Formato de arquivo não suportado.',
+        };
+      }
+
+      const verifiedMime = isPngMagic ? 'image/png' : isWebpMagic ? 'image/webp' : 'image/jpeg';
+      const base64Data = buffer.toString('base64');
+
+      return {
+        valid: true,
+        payload: base64Data,
+        mimeType: verifiedMime,
+        fileSize: buffer.length,
+        fileName: path.basename(localPath),
+      };
+    } catch (readErr: any) {
+      return {
+        valid: false,
+        error: `Erro ao ler arquivo local da imagem do grupo: ${readErr.message}`,
+      };
+    }
+  }
+
+  return {
+    valid: false,
+    error: 'Não foi possível alterar a imagem do grupo. Formato de arquivo não suportado.',
+  };
 }
 
 /**

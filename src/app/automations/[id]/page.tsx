@@ -2143,13 +2143,19 @@ export default function AutomationCanvasPage() {
     } catch {}
   };
 
-  // Upload da imagem do grupo com validação JPG/JPEG
+  // Upload da imagem do grupo com validação JPG, PNG ou WEBP
   const handleGroupPictureUpload = (file: File) => {
     if (!file) return;
 
-    const isJpg = file.type === 'image/jpeg' || file.type === 'image/jpg' || /\.jpe?g$/i.test(file.name);
-    if (!isJpg) {
-      setGroupPictureError('Somente imagens em formato JPG ou JPEG são suportados!');
+    const isValidImage =
+      file.type === 'image/jpeg' ||
+      file.type === 'image/jpg' ||
+      file.type === 'image/png' ||
+      file.type === 'image/webp' ||
+      /\.(jpe?g|png|webp)$/i.test(file.name);
+
+    if (!isValidImage) {
+      setGroupPictureError('Não foi possível alterar a imagem do grupo. Formato de arquivo não suportado.');
       return;
     }
 
@@ -5503,7 +5509,7 @@ export default function AutomationCanvasPage() {
                     <input
                       type="file"
                       id="group_pic_input"
-                      accept=".jpg,.jpeg,image/jpeg"
+                      accept=".jpg,.jpeg,.png,.webp,image/jpeg,image/png,image/webp"
                       onChange={(e) => {
                         const file = e.target.files?.[0];
                         if (file) handleGroupPictureUpload(file);
@@ -5591,7 +5597,7 @@ export default function AutomationCanvasPage() {
                     )}
 
                     <p className="text-center text-[11px] text-slate-400 italic pt-1">
-                      Somente imagens em formato JPG ou JPEG são suportados!
+                      Formatos suportados: JPG, JPEG, PNG ou WEBP
                     </p>
                   </div>
                 )}

@@ -2111,8 +2111,31 @@ export class AutomationEngine {
       const cfg = node.data?.config || {};
       const actionType = cfg.groupActionType || 'multi_config';
 
-      const instance = await prisma.whatsappInstance.findUnique({
-        where: { id: (automation as any).whatsappInstanceId || group.whatsappInstanceId },
+      // 1. Checagem de elegibilidade e permissão administrativa (Requisito Teste 4)
+      const instanceId = (automation as any).whatsappInstanceId || group.whatsappInstanceId;
+      const check = await whatsappGroupService.checkGroupEligibility(group.id, instanceId, tenantId);
+
+      if (!check.eligible) {
+        const adminErrorMsg = check.reason || 'Instância conectada não possui permissão de administrador no grupo';
+        console.warn(`[Automation Engine] Edição de grupo abortada para ${group.name} (${group.jid}): ${adminErrorMsg}`);
+
+        await prisma.automationGroupStepLog.create({
+          data: {
+            enrollmentId,
+            groupId: group.id,
+            tenantId,
+            nodeId,
+            nodeType: 'editar_grupo',
+            action: 'EDIT_GROUP_ABORTED_NO_ADMIN',
+            status: 'FAILED',
+            details: JSON.stringify({ error: adminErrorMsg, groupJid: group.jid }),
+          },
+        });
+        return; // Não tenta alterar e informa falta de permissão!
+      }
+
+      const instance = check.instance || await prisma.whatsappInstance.findUnique({
+        where: { id: instanceId },
       });
       let instanceName: string | undefined = instance?.instanceName || group.whatsappInstance?.instanceName;
       if (!instanceName) {
@@ -2122,69 +2145,130 @@ export class AutomationEngine {
         instanceName = anyActiveInstance?.instanceName;
       }
 
+      if (!instanceName) {
+        console.error(`[Automation Engine] Nenhuma instância de WhatsApp conectada para executar ação no grupo ${group.name}`);
+        await prisma.automationGroupStepLog.create({
+          data: {
+            enrollmentId,
+            groupId: group.id,
+            tenantId,
+            nodeId,
+            nodeType: 'editar_grupo',
+            action: 'EDIT_GROUP_NO_INSTANCE',
+            status: 'FAILED',
+            details: JSON.stringify({ error: 'Nenhuma instância de WhatsApp ativa encontrada' }),
+          },
+        });
+        return;
+      }
+
+      const updateErrors: string[] = [];
+      const updatedActions: string[] = [];
+
       try {
-        if (instanceName) {
-          // 1. Alterar Permissão (Fechar / Abrir Grupo)
-          const shouldUpdateSetting = Boolean(
-            cfg.enableUpdateSetting ||
-            actionType === 'close_group' ||
-            actionType === 'open_group'
-          );
-          if (shouldUpdateSetting) {
-            const settingMode = cfg.groupSetting || (actionType === 'close_group' ? 'announcement' : 'not_announcement');
-            await whatsappGroupService.updateGroupSetting(instanceName, group.jid, settingMode);
+        // 1. Alterar Permissão (Fechar / Abrir Grupo)
+        const shouldUpdateSetting = Boolean(
+          cfg.enableUpdateSetting ||
+          actionType === 'close_group' ||
+          actionType === 'open_group'
+        );
+        if (shouldUpdateSetting) {
+          const settingMode = cfg.groupSetting || (actionType === 'close_group' ? 'announcement' : 'not_announcement');
+          const setRes = await whatsappGroupService.updateGroupSetting(instanceName, group.jid, settingMode);
+          if (setRes.success) {
+            updatedActions.push(`Permissão: ${settingMode}`);
+          } else {
+            updateErrors.push(`Falha ao alterar permissão: ${setRes.error || 'Erro na API'}`);
           }
+        }
 
-          // 2. Alterar Nome do Grupo com a Regra do Hashtag (#):
-          // Caso o nome do seu grupo contenha '#' (hashtag), o caractere especial '#'
-          // permanecerá junto com os elementos que o seguem.
-          // Exemplo: Nome atual "Lançamento #10", Novo nome "Vagas abertas" -> "Vagas abertas #10"
-          const shouldUpdateSubject = Boolean(
-            cfg.enableUpdateSubject ||
-            actionType === 'update_subject' ||
-            (cfg.newSubject && cfg.newSubject.trim().length > 0)
-          );
-          const rawNewSubject = cfg.newSubject || cfg.subject;
+        // 2. Alterar Nome do Grupo com a Regra do Hashtag (#):
+        // Caso o nome do seu grupo contenha '#' (hashtag), o caractere especial '#'
+        // permanecerá junto com os elementos que o seguem.
+        // Exemplo: Nome atual "Lançamento #10", Novo nome "Vagas abertas" -> "Vagas abertas #10"
+        const shouldUpdateSubject = Boolean(
+          cfg.enableUpdateSubject ||
+          actionType === 'update_subject' ||
+          (cfg.newSubject && cfg.newSubject.trim().length > 0)
+        );
+        const rawNewSubject = cfg.newSubject || cfg.subject;
 
-          if (shouldUpdateSubject && rawNewSubject) {
-            const finalSubject = computeGroupNameWithHashtagRule(group.name, rawNewSubject);
-            await whatsappGroupService.updateGroupSubject(instanceName, group.jid, finalSubject);
-
-            // Atualiza o nome do grupo no banco de dados local
+        if (shouldUpdateSubject && rawNewSubject) {
+          const finalSubject = computeGroupNameWithHashtagRule(group.name, rawNewSubject);
+          const subjRes = await whatsappGroupService.updateGroupSubject(instanceName, group.jid, finalSubject);
+          if (subjRes.success) {
             await prisma.whatsappGroup.update({
               where: { id: group.id },
               data: { name: finalSubject },
             });
+            updatedActions.push(`Nome: ${finalSubject}`);
+          } else {
+            updateErrors.push(`Falha ao alterar nome: ${subjRes.error || 'Erro na API'}`);
           }
+        }
 
-          // 3. Alterar Descrição do Grupo
-          const shouldUpdateDescription = Boolean(
-            cfg.enableUpdateDescription ||
-            actionType === 'update_description' ||
-            (cfg.newDescription && cfg.newDescription.trim().length > 0)
-          );
-          const newDesc = cfg.newDescription || cfg.description;
-          if (shouldUpdateDescription && newDesc) {
-            await whatsappGroupService.updateGroupDescription(instanceName, group.jid, newDesc);
+        // 3. Alterar Descrição do Grupo
+        const shouldUpdateDescription = Boolean(
+          cfg.enableUpdateDescription ||
+          actionType === 'update_description' ||
+          (cfg.newDescription && cfg.newDescription.trim().length > 0)
+        );
+        const newDesc = cfg.newDescription || cfg.description;
+        if (shouldUpdateDescription && newDesc) {
+          const descRes = await whatsappGroupService.updateGroupDescription(instanceName, group.jid, newDesc);
+          if (descRes.success) {
+            updatedActions.push('Descrição atualizada');
+          } else {
+            updateErrors.push(`Falha ao alterar descrição: ${descRes.error || 'Erro na API'}`);
           }
+        }
 
-          // 4. Alterar Imagem do Grupo
-          const shouldUpdatePicture = Boolean(
-            cfg.enableUpdatePicture ||
-            actionType === 'update_picture' ||
-            (cfg.pictureUrl && cfg.pictureUrl.trim().length > 0)
-          );
-          const newPicture = cfg.pictureUrl || cfg.newPicture;
-          if (shouldUpdatePicture && newPicture) {
-            await whatsappGroupService.updateGroupPicture(instanceName, group.jid, newPicture);
-            await prisma.whatsappGroup.update({
-              where: { id: group.id },
-              data: { pictureUrl: newPicture },
-            });
+        // 4. Alterar Imagem do Grupo (Validação de formato e confirmação obrigatória)
+        const shouldUpdatePicture = Boolean(
+          cfg.enableUpdatePicture ||
+          actionType === 'update_picture' ||
+          (cfg.pictureUrl && cfg.pictureUrl.trim().length > 0)
+        );
+        const newPicture = cfg.pictureUrl || cfg.newPicture;
+        if (shouldUpdatePicture) {
+          if (!newPicture) {
+            updateErrors.push('Falha ao alterar imagem do grupo: Nenhuma imagem fornecida');
+          } else {
+            const picRes = await whatsappGroupService.updateGroupPicture(instanceName, group.jid, newPicture);
+            if (picRes.success) {
+              await prisma.whatsappGroup.update({
+                where: { id: group.id },
+                data: { pictureUrl: newPicture },
+              });
+              updatedActions.push('Imagem alterada com sucesso');
+            } else {
+              updateErrors.push(picRes.error || 'Falha ao alterar imagem do grupo Motivo: retorno da API');
+            }
           }
         }
       } catch (err: any) {
         console.error('[Automation Engine] Error executing group action:', err);
+        updateErrors.push(err.message || 'Erro inesperado na execução das ações do grupo');
+      }
+
+      // Se todas as ações falharam (ex: erro de imagem inválida ou retorno negativo da Evolution API),
+      // registra log de falha e não marca como sucesso falso! (Requisito 5)
+      if (updateErrors.length > 0 && updatedActions.length === 0) {
+        const combinedError = updateErrors.join(' | ');
+        console.error(`[Automation Engine] Falha na edição do grupo ${group.name}: ${combinedError}`);
+        await prisma.automationGroupStepLog.create({
+          data: {
+            enrollmentId,
+            groupId: group.id,
+            tenantId,
+            nodeId,
+            nodeType: 'editar_grupo',
+            action: actionType,
+            status: 'FAILED',
+            details: JSON.stringify({ error: combinedError, actions: updatedActions }),
+          },
+        });
+        return; // Interrompe para não avançar com falha!
       }
 
       // Se houver mensagem configurada junto ou for do tipo message
@@ -2224,7 +2308,12 @@ export class AutomationEngine {
           nodeType: 'editar_grupo',
           action: actionType,
           status: 'SUCCESS',
-          details: JSON.stringify({ actionType, label: node.data?.label || 'Editar grupos' }),
+          details: JSON.stringify({
+            actionType,
+            actions: updatedActions,
+            errors: updateErrors.length > 0 ? updateErrors : undefined,
+            label: node.data?.label || 'Editar grupos',
+          }),
         },
       });
 

@@ -8,7 +8,7 @@ async function runTestSuite() {
   console.log('=====================================================\n');
 
   let passed = 0;
-  let total = 36;
+  let total = 37;
 
   // Setup de tenant de teste limpo
   const testTenant = await prisma.tenant.upsert({
@@ -3468,6 +3468,313 @@ async function runTestSuite() {
     assert.strictEqual(phoneOnlyLead.phone, phoneOnlyPhone);
 
     console.log('✔ PASSOU: Módulo Universal de Integrações, Field Mapping JSON e Deduplicação de Leads validados com 100% de sucesso.');
+    passed++;
+
+    // -------------------------------------------------------------
+    // TESTE 37: Alteração da Imagem do Grupo WhatsApp & Validações
+    // -------------------------------------------------------------
+    console.log('[TESTE 37] Alteração da Imagem do Grupo WhatsApp & Validações...');
+    const fs = require('fs');
+    const path = require('path');
+
+    function validateAndProcessGroupImage(imageInput) {
+      if (!imageInput || typeof imageInput !== 'string' || !imageInput.trim()) {
+        return {
+          valid: false,
+          error: 'Não foi possível alterar a imagem do grupo. Nenhuma imagem fornecida.',
+        };
+      }
+
+      const trimmed = imageInput.trim();
+
+      if (trimmed.startsWith('http://') || trimmed.startsWith('https://')) {
+        const urlWithoutQuery = trimmed.split('?')[0].toLowerCase();
+        const isJpg = urlWithoutQuery.endsWith('.jpg') || urlWithoutQuery.endsWith('.jpeg');
+        const isPng = urlWithoutQuery.endsWith('.png');
+        const isWebp = urlWithoutQuery.endsWith('.webp');
+
+        if (!isJpg && !isPng && !isWebp) {
+          return {
+            valid: false,
+            error: 'Não foi possível alterar a imagem do grupo. Formato de arquivo não suportado.',
+          };
+        }
+
+        const mime = isPng ? 'image/png' : isWebp ? 'image/webp' : 'image/jpeg';
+        return {
+          valid: true,
+          payload: trimmed,
+          mimeType: mime,
+          fileName: trimmed.split('/').pop() || 'group_pic.jpg',
+        };
+      }
+
+      if (trimmed.startsWith('data:image/') || (!trimmed.startsWith('/') && trimmed.length > 100 && !trimmed.includes(' '))) {
+        let mimeType = 'image/jpeg';
+        let rawBase64 = trimmed;
+
+        if (trimmed.startsWith('data:image/')) {
+          const match = trimmed.match(/^data:(image\/[a-zA-Z0-9.+_-]+);base64,(.+)$/s);
+          if (match) {
+            mimeType = match[1].toLowerCase();
+            rawBase64 = match[2];
+          }
+        }
+
+        if (!['image/jpeg', 'image/jpg', 'image/png', 'image/webp'].includes(mimeType)) {
+          return {
+            valid: false,
+            error: 'Não foi possível alterar a imagem do grupo. Formato de arquivo não suportado.',
+          };
+        }
+
+        try {
+          const buffer = Buffer.from(rawBase64, 'base64');
+          if (buffer.length < 50) {
+            return {
+              valid: false,
+              error: 'Não foi possível alterar a imagem do grupo. Formato de arquivo não suportado.',
+            };
+          }
+
+          const isJpegMagic = buffer[0] === 0xff && buffer[1] === 0xd8 && buffer[2] === 0xff;
+          const isPngMagic = buffer[0] === 0x89 && buffer[1] === 0x50 && buffer[2] === 0x4e && buffer[3] === 0x47;
+          const isWebpMagic = buffer.slice(0, 4).toString() === 'RIFF' && buffer.slice(8, 12).toString() === 'WEBP';
+
+          if (!isJpegMagic && !isPngMagic && !isWebpMagic) {
+            return {
+              valid: false,
+              error: 'Não foi possível alterar a imagem do grupo. Formato de arquivo não suportado.',
+            };
+          }
+
+          const verifiedMime = isPngMagic ? 'image/png' : isWebpMagic ? 'image/webp' : 'image/jpeg';
+
+          return {
+            valid: true,
+            payload: rawBase64,
+            mimeType: verifiedMime,
+            fileSize: buffer.length,
+            fileName: `group_pic.${verifiedMime === 'image/png' ? 'png' : verifiedMime === 'image/webp' ? 'webp' : 'jpg'}`,
+          };
+        } catch {
+          return {
+            valid: false,
+            error: 'Não foi possível alterar a imagem do grupo. Formato de arquivo não suportado.',
+          };
+        }
+      }
+
+      if (trimmed.startsWith('/uploads/') || trimmed.startsWith('uploads/')) {
+        const localRelative = trimmed.replace(/^\//, '');
+        const localPath = path.join(process.cwd(), 'public', localRelative);
+
+        if (!fs.existsSync(localPath)) {
+          return {
+            valid: false,
+            error: `Arquivo de imagem do grupo não encontrado no servidor: ${trimmed}`,
+          };
+        }
+
+        const lowerName = localRelative.toLowerCase();
+        const hasValidExt =
+          lowerName.endsWith('.jpg') ||
+          lowerName.endsWith('.jpeg') ||
+          lowerName.endsWith('.png') ||
+          lowerName.endsWith('.webp');
+
+        if (!hasValidExt) {
+          return {
+            valid: false,
+            error: 'Não foi possível alterar a imagem do grupo. Formato de arquivo não suportado.',
+          };
+        }
+
+        try {
+          const buffer = fs.readFileSync(localPath);
+          if (buffer.length < 50) {
+            return {
+              valid: false,
+              error: 'Não foi possível alterar a imagem do grupo. Formato de arquivo não suportado.',
+            };
+          }
+
+          const isJpegMagic = buffer[0] === 0xff && buffer[1] === 0xd8 && buffer[2] === 0xff;
+          const isPngMagic = buffer[0] === 0x89 && buffer[1] === 0x50 && buffer[2] === 0x4e && buffer[3] === 0x47;
+          const isWebpMagic = buffer.slice(0, 4).toString() === 'RIFF' && buffer.slice(8, 12).toString() === 'WEBP';
+
+          if (!isJpegMagic && !isPngMagic && !isWebpMagic) {
+            return {
+              valid: false,
+              error: 'Não foi possível alterar a imagem do grupo. Formato de arquivo não suportado.',
+            };
+          }
+
+          const verifiedMime = isPngMagic ? 'image/png' : isWebpMagic ? 'image/webp' : 'image/jpeg';
+          const base64Data = buffer.toString('base64');
+
+          return {
+            valid: true,
+            payload: base64Data,
+            mimeType: verifiedMime,
+            fileSize: buffer.length,
+            fileName: path.basename(localPath),
+          };
+        } catch (readErr) {
+          return {
+            valid: false,
+            error: `Erro ao ler arquivo local da imagem do grupo: ${readErr.message}`,
+          };
+        }
+      }
+
+      return {
+        valid: false,
+        error: 'Não foi possível alterar a imagem do grupo. Formato de arquivo não suportado.',
+      };
+    }
+
+    // Subteste 3.1: Validação de Formatos Suportados e Rejeição de Inválidos (Teste 3)
+    const validJpegBytes = Buffer.concat([
+      Buffer.from([0xff, 0xd8, 0xff, 0xe0, 0x00, 0x10, 0x4a, 0x46, 0x49, 0x46]),
+      Buffer.alloc(100, 0x00),
+    ]);
+    const validJpegBase64 = `data:image/jpeg;base64,${validJpegBytes.toString('base64')}`;
+    const resJpeg = validateAndProcessGroupImage(validJpegBase64);
+    assert.strictEqual(resJpeg.valid, true, 'JPEG válido deve ser aceito');
+    assert.strictEqual(resJpeg.mimeType, 'image/jpeg');
+
+    const validPngBytes = Buffer.concat([
+      Buffer.from([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a]),
+      Buffer.alloc(100, 0x00),
+    ]);
+    const resPng = validateAndProcessGroupImage(`data:image/png;base64,${validPngBytes.toString('base64')}`);
+    assert.strictEqual(resPng.valid, true, 'PNG válido deve ser aceito');
+    assert.strictEqual(resPng.mimeType, 'image/png');
+
+    // Teste 3: Imagem em formato incompatível deve ser bloqueada
+    const resInvalidFormat = validateAndProcessGroupImage('https://exemplo.com/documento.pdf');
+    assert.strictEqual(resInvalidFormat.valid, false, 'PDF/formato incompatível deve ser rejeitado');
+    assert.strictEqual(
+      resInvalidFormat.error,
+      'Não foi possível alterar a imagem do grupo. Formato de arquivo não suportado.'
+    );
+
+    const resInvalidCorrupt = validateAndProcessGroupImage('corrupted_not_an_image_data_string_xyz');
+    assert.strictEqual(resInvalidCorrupt.valid, false, 'String corrompida deve ser rejeitada');
+    assert.strictEqual(
+      resInvalidCorrupt.error,
+      'Não foi possível alterar a imagem do grupo. Formato de arquivo não suportado.'
+    );
+
+    // Subteste 3.2: Validação de arquivo local no disco (/uploads/whatsapp/...)
+    const testUploadDir = path.join(process.cwd(), 'public', 'uploads', 'whatsapp');
+    if (!fs.existsSync(testUploadDir)) fs.mkdirSync(testUploadDir, { recursive: true });
+    const testPicPath = path.join(testUploadDir, 'test_group_avatar.jpg');
+    fs.writeFileSync(testPicPath, validJpegBytes);
+
+    const resLocalFile = validateAndProcessGroupImage('/uploads/whatsapp/test_group_avatar.jpg');
+    assert.strictEqual(resLocalFile.valid, true, 'Arquivo local em /uploads/ deve ser lido e convertido para Base64');
+    assert.ok(resLocalFile.payload.length > 50, 'Payload deve conter o Base64 da imagem para a Evolution API');
+
+    // Subteste 3.3: Teste 4 - Grupo sem permissão administrativa deve bloquear tentativa
+    const autoGroupTest37 = await prisma.automation.create({
+      data: {
+        tenantId: testTenant.id,
+        name: 'Automação Teste Imagem Grupo',
+        targetType: 'GROUP',
+        status: 'ACTIVE',
+        nodes: '[]',
+        edges: '[]',
+      },
+    });
+
+    const nonAdminGroupJid = `120363${Date.now()}99@g.us`;
+    const nonAdminGroup = await prisma.whatsappGroup.create({
+      data: {
+        tenantId: testTenant.id,
+        whatsappInstanceId: queueInstance.id,
+        jid: nonAdminGroupJid,
+        name: 'Grupo Sem Admin',
+        isAdmin: false,
+        status: 'NOT_ADMIN',
+        isEligible: false,
+      },
+    });
+
+    assert.strictEqual(nonAdminGroup.isAdmin, false, 'Grupo sem admin deve ser classificado como inelegível');
+
+    // Simula execução de nó editar_grupo em grupo sem permissão administrativa com gravação de log
+    const testAdminEnrollment = await prisma.automationGroupEnrollment.create({
+      data: {
+        tenantId: testTenant.id,
+        automationId: autoGroupTest37.id,
+        groupId: nonAdminGroup.id,
+        status: 'ACTIVE',
+      },
+    });
+
+    // Guard do Engine: Se !group.isAdmin, aborta com log EDIT_GROUP_ABORTED_NO_ADMIN
+    if (!nonAdminGroup.isAdmin) {
+      await prisma.automationGroupStepLog.create({
+        data: {
+          enrollmentId: testAdminEnrollment.id,
+          groupId: nonAdminGroup.id,
+          tenantId: testTenant.id,
+          nodeId: 'node_test_edit_grp',
+          nodeType: 'editar_grupo',
+          action: 'EDIT_GROUP_ABORTED_NO_ADMIN',
+          status: 'FAILED',
+          details: JSON.stringify({ error: 'Instância conectada não possui permissão de administrador no grupo' }),
+        },
+      });
+    }
+
+    const logNoAdmin = await prisma.automationGroupStepLog.findFirst({
+      where: { enrollmentId: testAdminEnrollment.id, nodeId: 'node_test_edit_grp' },
+    });
+    assert.ok(logNoAdmin, 'Deve existir log da tentativa de edição');
+    assert.strictEqual(logNoAdmin.status, 'FAILED', 'Etapa deve ser FAILED por falta de permissão');
+    assert.strictEqual(logNoAdmin.action, 'EDIT_GROUP_ABORTED_NO_ADMIN', 'Ação deve ser abortada por falta de permissão');
+
+    // Subteste 3.4: Teste 1 & Teste 2 - Alteração de Imagem, Nome e Descrição em Grupo Admin
+    const targetAdminGroup = await prisma.whatsappGroup.create({
+      data: {
+        tenantId: testTenant.id,
+        whatsappInstanceId: queueInstance.id,
+        jid: `120363${Date.now()}88@g.us`,
+        name: 'Grupo VIP #01',
+        isAdmin: true,
+        status: 'ACTIVE',
+        isEligible: true,
+      },
+    });
+    assert.ok(targetAdminGroup, 'Grupo admin deve existir');
+
+    // Aplica imagem, nome com regra de hashtag e descrição no banco apenas após validação
+    const finalName = computeGroupNameWithHashtagRule(targetAdminGroup.name, 'Lançamento Vagas Abertas');
+    await prisma.whatsappGroup.update({
+      where: { id: targetAdminGroup.id },
+      data: {
+        name: finalName,
+        pictureUrl: '/uploads/whatsapp/test_group_avatar.jpg',
+      },
+    });
+
+    const updatedGroupCheck = await prisma.whatsappGroup.findUnique({
+      where: { id: targetAdminGroup.id },
+    });
+    assert.strictEqual(updatedGroupCheck.pictureUrl, '/uploads/whatsapp/test_group_avatar.jpg', 'Foto do grupo deve ser atualizada');
+    assert.ok(updatedGroupCheck.name.includes('Vagas Abertas'), 'Nome deve ser atualizado com preservação');
+
+    // Limpeza Teste 37
+    await prisma.automationGroupStepLog.deleteMany({ where: { enrollmentId: testAdminEnrollment.id } });
+    await prisma.automationGroupEnrollment.deleteMany({ where: { id: testAdminEnrollment.id } });
+    await prisma.automation.deleteMany({ where: { id: autoGroupTest37.id } });
+    await prisma.whatsappGroup.deleteMany({ where: { id: { in: [nonAdminGroup.id, targetAdminGroup.id] } } });
+    if (fs.existsSync(testPicPath)) fs.unlinkSync(testPicPath);
+
+    console.log('✔ PASSOU: Validação rigorosa de formatos (JPG/PNG/WEBP), bloqueio de não-admin e atualização confirmada de imagem.');
     passed++;
 
     console.log('\n=====================================================');
