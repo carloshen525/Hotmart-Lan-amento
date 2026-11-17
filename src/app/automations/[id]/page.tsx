@@ -84,7 +84,8 @@ interface TagItem {
   id: string;
   name: string;
   color: string;
-  _count?: { contacts: number };
+  _count?: { contacts?: number; groups?: number };
+  isGroupTag?: boolean;
 }
 
 export interface MessageBlock {
@@ -174,6 +175,7 @@ export default function AutomationCanvasPage() {
 
   // Tags disponíveis no expert
   const [availableTags, setAvailableTags] = useState<TagItem[]>([]);
+  const [tagSearchQuery, setTagSearchQuery] = useState('');
 
   // Seleção de nó e modais
   const [selectedNode, setSelectedNode] = useState<Node | null>(null);
@@ -301,11 +303,31 @@ export default function AutomationCanvasPage() {
     []
   );
 
-  const fetchTags = async () => {
+  const fetchTags = async (isGroup?: boolean) => {
     try {
-      const res = await fetch('/api/tags');
-      const data = await res.json();
-      setAvailableTags(data.tags || []);
+      const isGroupMode = isGroup !== undefined ? isGroup : targetType === 'GROUP';
+      const [resTags, resGroupTags] = await Promise.all([
+        fetch('/api/tags').catch(() => null),
+        fetch('/api/groups/tags').catch(() => null),
+      ]);
+      const dataTags = resTags?.ok ? await resTags.json() : { tags: [] };
+      const dataGroupTags = resGroupTags?.ok ? await resGroupTags.json() : { tags: [] };
+
+      const cTags: TagItem[] = (dataTags.tags || []).map((t: any) => ({ ...t, isGroupTag: false }));
+      const gTags: TagItem[] = (dataGroupTags.tags || []).map((t: any) => ({ ...t, isGroupTag: true }));
+
+      if (isGroupMode) {
+        // No modo grupo, prioriza tags de grupos
+        const merged = [...gTags];
+        for (const ct of cTags) {
+          if (!merged.some((m) => m.name.toLowerCase() === ct.name.toLowerCase())) {
+            merged.push(ct);
+          }
+        }
+        setAvailableTags(merged);
+      } else {
+        setAvailableTags(cTags);
+      }
     } catch {}
   };
 
@@ -464,7 +486,9 @@ export default function AutomationCanvasPage() {
         if (data.automation) {
           setName(data.automation.name);
           setStatus(data.automation.status);
-          setTargetType(data.automation.targetType || 'INDIVIDUAL');
+          const currentTarget = data.automation.targetType || 'INDIVIDUAL';
+          setTargetType(currentTarget);
+          fetchTags(currentTarget === 'GROUP');
 
           let parsedTriggerConfig: any = {};
           try {
@@ -857,6 +881,10 @@ export default function AutomationCanvasPage() {
 
   // Adicionar blocos dentro da Sequência (Timer, Aquecimento, WhatsApp, E-mail)
   const addSequenceBlock = (type: 'timer' | 'aquecimento' | 'whatsapp' | 'email') => {
+    if (type === 'email' && targetType === 'GROUP') {
+      alert('Disparo de E-mail não está disponível em automações de grupos ou comunidades do WhatsApp.');
+      return;
+    }
     if (status === 'ACTIVE') {
       const wantsToPause = confirm(
         'Regra de Edição: Este fluxo está ATIVO em produção.\n\nPara adicionar novos blocos ou editar etapas, a automação precisa ser pausada.\n\nDeseja pausar o fluxo agora para prosseguir com a edição?'
@@ -1117,6 +1145,19 @@ export default function AutomationCanvasPage() {
     setSaveNotice('Ativando automação...');
 
     try {
+      let extractedGroupTags: string[] = [];
+      if (targetType === 'GROUP') {
+        for (const mn of currentMacroNodes) {
+          if (mn.type === 'tag' || mn.type === 'trigger') {
+            const cfg = (mn.data?.config as any) || {};
+            const tList = cfg.entryTags || cfg.tagNames || (cfg.tagName ? [cfg.tagName] : (mn.data as any)?.tagName ? [(mn.data as any).tagName] : []);
+            tList.forEach((t: string) => {
+              if (t && !extractedGroupTags.includes(t)) extractedGroupTags.push(t);
+            });
+          }
+        }
+      }
+
       const res = await fetch(`/api/automations/${automationId}`, {
         method: 'PUT',
         headers: { 'Content-Type': 'application/json' },
@@ -1125,6 +1166,7 @@ export default function AutomationCanvasPage() {
           status: 'ACTIVE',
           forceActivate: true,
           flowWhatsappInstanceId,
+          targetGroupTags: extractedGroupTags,
           nodes: currentMacroNodes,
           edges: macroEdges,
         }),
@@ -1229,6 +1271,19 @@ export default function AutomationCanvasPage() {
         );
       }
 
+      let extractedGroupTags: string[] = [];
+      if (targetType === 'GROUP') {
+        for (const mn of currentMacroNodes) {
+          if (mn.type === 'tag' || mn.type === 'trigger') {
+            const cfg = (mn.data?.config as any) || {};
+            const tList = cfg.entryTags || cfg.tagNames || (cfg.tagName ? [cfg.tagName] : (mn.data as any)?.tagName ? [(mn.data as any).tagName] : []);
+            tList.forEach((t: string) => {
+              if (t && !extractedGroupTags.includes(t)) extractedGroupTags.push(t);
+            });
+          }
+        }
+      }
+
       const res = await fetch(`/api/automations/${automationId}`, {
         method: 'PUT',
         headers: { 'Content-Type': 'application/json' },
@@ -1236,6 +1291,7 @@ export default function AutomationCanvasPage() {
           name,
           status: newStatus,
           flowWhatsappInstanceId,
+          targetGroupTags: extractedGroupTags,
           nodes: currentMacroNodes,
           edges: macroEdges,
         }),
@@ -1690,14 +1746,16 @@ export default function AutomationCanvasPage() {
     setTagDateLimit(cfg.dateLimit || '');
     setCurrentEntrySelect('');
     setCurrentExclusionSelect('');
+    setTagSearchQuery('');
     setIsCreateTagOpen(false);
     setIsTagModalOpen(true);
   };
 
-  const handleAddEntryTag = () => {
-    if (!currentEntrySelect.trim()) return;
-    if (!tagEntryTags.includes(currentEntrySelect.trim())) {
-      setTagEntryTags((prev) => [...prev, currentEntrySelect.trim()]);
+  const handleAddEntryTag = (tagNameToAdd?: string) => {
+    const val = (tagNameToAdd || currentEntrySelect || '').trim();
+    if (!val) return;
+    if (!tagEntryTags.includes(val)) {
+      setTagEntryTags((prev) => [...prev, val]);
     }
     setCurrentEntrySelect('');
   };
@@ -1706,10 +1764,11 @@ export default function AutomationCanvasPage() {
     setTagEntryTags((prev) => prev.filter((t) => t !== name));
   };
 
-  const handleAddExclusionTag = () => {
-    if (!currentExclusionSelect.trim()) return;
-    if (!tagExclusionTags.includes(currentExclusionSelect.trim())) {
-      setTagExclusionTags((prev) => [...prev, currentExclusionSelect.trim()]);
+  const handleAddExclusionTag = (tagNameToAdd?: string) => {
+    const val = (tagNameToAdd || currentExclusionSelect || '').trim();
+    if (!val) return;
+    if (!tagExclusionTags.includes(val)) {
+      setTagExclusionTags((prev) => [...prev, val]);
     }
     setCurrentExclusionSelect('');
   };
@@ -1731,7 +1790,7 @@ export default function AutomationCanvasPage() {
 
     const count = availableTags
       .filter((t) => tagEntryTags.includes(t.name))
-      .reduce((acc, t) => acc + (t._count?.contacts || 0), 0);
+      .reduce((acc, t) => acc + (targetType === 'GROUP' ? (t._count?.groups || 0) : (t._count?.contacts || 0)), 0);
 
     const updatedCfg: any = {
       ...((selectedNode.data.config as object) || {}),
@@ -1743,6 +1802,7 @@ export default function AutomationCanvasPage() {
       dateLimit: tagDateLimit,
       matchMode: 'ALL',
       leadsCount: count,
+      targetType,
     };
 
     setMacroNodes((nds) =>
@@ -1758,6 +1818,7 @@ export default function AutomationCanvasPage() {
                 exclusionTags: tagExclusionTags,
                 matchMode: 'ALL',
                 leadsCount: count,
+                targetType,
                 config: updatedCfg,
               },
             }
@@ -1767,21 +1828,26 @@ export default function AutomationCanvasPage() {
     setIsTagModalOpen(false);
   };
 
-  // Criação rápida de Tag
+  // Criação rápida de Tag (adapta para tag de contato ou tag de grupo/comunidade)
   const handleQuickCreateTag = async (e: React.FormEvent) => {
     e.preventDefault();
     if (!newTagName.trim()) return;
 
     try {
-      const res = await fetch('/api/tags', {
+      const endpoint = targetType === 'GROUP' ? '/api/groups/tags' : '/api/tags';
+      const res = await fetch(endpoint, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ name: newTagName.trim(), color: newTagColor }),
       });
       const data = await res.json();
       if (res.ok && data.tag) {
-        setAvailableTags((prev) => [...prev, data.tag]);
-        setCurrentEntrySelect(data.tag.name);
+        const createdTag = { ...data.tag, isGroupTag: targetType === 'GROUP' };
+        setAvailableTags((prev) => [...prev, createdTag]);
+        if (!tagEntryTags.includes(createdTag.name)) {
+          setTagEntryTags((prev) => [...prev, createdTag.name]);
+        }
+        setCurrentEntrySelect(createdTag.name);
         setNewTagName('');
         setIsCreateTagOpen(false);
       }
@@ -2518,16 +2584,18 @@ export default function AutomationCanvasPage() {
                       </span>
                     </div>
 
-                    {/* E-mail */}
-                    <div
-                      onClick={() => addSequenceBlock('email')}
-                      className="flex flex-col items-center justify-center p-3 rounded-xl bg-[#1b1e27] hover:bg-[#232733] border border-slate-800 hover:border-orange-600/60 cursor-pointer transition-all group"
-                    >
-                      <Mail className="w-6 h-6 text-orange-400 group-hover:scale-110 mb-1.5 transition-all" />
-                      <span className="text-xs font-medium text-slate-300 group-hover:text-white">
-                        E-mail
-                      </span>
-                    </div>
+                    {/* E-mail (Apenas para Automações Individuais) */}
+                    {targetType !== 'GROUP' && (
+                      <div
+                        onClick={() => addSequenceBlock('email')}
+                        className="flex flex-col items-center justify-center p-3 rounded-xl bg-[#1b1e27] hover:bg-[#232733] border border-slate-800 hover:border-orange-600/60 cursor-pointer transition-all group"
+                      >
+                        <Mail className="w-6 h-6 text-orange-400 group-hover:scale-110 mb-1.5 transition-all" />
+                        <span className="text-xs font-medium text-slate-300 group-hover:text-white">
+                          E-mail
+                        </span>
+                      </div>
+                    )}
 
                     {/* Botão Configurar WhatsApp do Fluxo */}
                     <div
@@ -2697,12 +2765,92 @@ export default function AutomationCanvasPage() {
               )}
             </div>
 
-            {/* Seção 1: Tag(s) de entrada dos leads */}
+            {/* Seção 1: Tag(s) de entrada */}
             <div className="mt-5 space-y-1.5">
-              <h4 className="font-bold text-white text-xs">Tag(s) de entrada dos leads</h4>
+              <div className="flex items-center justify-between">
+                <h4 className="font-bold text-white text-xs">
+                  {targetType === 'GROUP'
+                    ? 'Tag(s) de entrada dos grupos e comunidades'
+                    : 'Tag(s) de entrada dos leads'}
+                </h4>
+                {targetType === 'GROUP' && (
+                  <span className="text-[10px] font-semibold text-emerald-400 bg-emerald-950/60 border border-emerald-800/60 px-2 py-0.5 rounded-full">
+                    👥 Automação de Grupos
+                  </span>
+                )}
+              </div>
               <p className="text-slate-400 text-[11px]">
-                Para o lead entrar nesta tag, o mesmo deve possuir TODAS as tags abaixo, simultaneamente.
+                {targetType === 'GROUP'
+                  ? 'Os grupos e comunidades que possuírem as tags selecionadas entrarão nesta automação.'
+                  : 'Para o lead entrar nesta tag, o mesmo deve possuir TODAS as tags abaixo, simultaneamente.'}
               </p>
+
+              {/* Campo de Pesquisa em Tempo Real */}
+              <div className="relative pt-1">
+                <Search className="w-4 h-4 absolute left-3 top-1/2 -translate-y-1/2 text-slate-400 pointer-events-none" />
+                <input
+                  type="text"
+                  placeholder={
+                    targetType === 'GROUP'
+                      ? 'Pesquisar tag de grupo ou comunidade...'
+                      : 'Pesquisar tag pelo nome...'
+                  }
+                  value={tagSearchQuery}
+                  onChange={(e) => setTagSearchQuery(e.target.value)}
+                  className="w-full pl-9 pr-8 py-2 bg-[#101217] border border-[#2b2b3b] hover:border-slate-600 rounded-xl text-xs text-white placeholder-slate-500 focus:outline-none focus:border-purple-500 transition-colors"
+                />
+                {tagSearchQuery && (
+                  <button
+                    type="button"
+                    onClick={() => setTagSearchQuery('')}
+                    className="absolute right-2.5 top-1/2 -translate-y-1/2 text-slate-400 hover:text-white p-0.5"
+                    title="Limpar pesquisa"
+                  >
+                    <X className="w-3.5 h-3.5" />
+                  </button>
+                )}
+              </div>
+
+              {/* Sugestões de Tags Filtradas / Chips Rápidos para Clicar */}
+              {availableTags.length > 0 && (
+                <div className="flex flex-wrap gap-1.5 pt-1 max-h-28 overflow-y-auto custom-scrollbar">
+                  {availableTags
+                    .filter((t) => !tagSearchQuery || t.name.toLowerCase().includes(tagSearchQuery.toLowerCase()))
+                    .map((t) => {
+                      const isSelected = tagEntryTags.includes(t.name);
+                      const unitCount = targetType === 'GROUP' ? (t._count?.groups ?? 0) : (t._count?.contacts ?? 0);
+                      const unitLabel = targetType === 'GROUP' ? (unitCount === 1 ? 'grupo' : 'grupos') : (unitCount === 1 ? 'lead' : 'leads');
+                      return (
+                        <button
+                          key={t.id}
+                          type="button"
+                          onClick={() => {
+                            if (isSelected) {
+                              handleRemoveEntryTag(t.name);
+                            } else {
+                              handleAddEntryTag(t.name);
+                            }
+                          }}
+                          className={`inline-flex items-center gap-1.5 px-2.5 py-1 rounded-lg text-xs font-semibold transition-all border ${
+                            isSelected
+                              ? 'bg-purple-900/60 border-purple-500 text-white shadow-sm'
+                              : 'bg-[#14161f] border-slate-700/70 text-slate-300 hover:border-purple-400 hover:text-white'
+                          }`}
+                        >
+                          <span
+                            className="w-2 h-2 rounded-full"
+                            style={{ backgroundColor: t.color || '#a855f7' }}
+                          />
+                          <span>{t.name}</span>
+                          <span className="text-[10px] text-slate-400 font-normal">
+                            ({unitCount} {unitLabel})
+                          </span>
+                          {isSelected && <Check className="w-3 h-3 text-purple-300 ml-0.5" />}
+                        </button>
+                      );
+                    })}
+                </div>
+              )}
 
               <div className="flex items-center gap-2 pt-1">
                 <select
@@ -2711,18 +2859,26 @@ export default function AutomationCanvasPage() {
                   className="flex-1 bg-[#101217] border border-[#2b2b3b] hover:border-slate-600 rounded-xl px-3 py-2.5 text-xs text-white focus:outline-none focus:border-purple-500 transition-colors"
                 >
                   <option value="" disabled>
-                    Selecione uma tag para adicionar...
+                    {targetType === 'GROUP'
+                      ? 'Selecione uma tag de grupo para adicionar...'
+                      : 'Selecione uma tag para adicionar...'}
                   </option>
-                  {availableTags.map((t) => (
-                    <option key={t.id} value={t.name}>
-                      {t.name} ({t._count?.contacts || 0} leads)
-                    </option>
-                  ))}
+                  {availableTags
+                    .filter((t) => !tagSearchQuery || t.name.toLowerCase().includes(tagSearchQuery.toLowerCase()))
+                    .map((t) => (
+                      <option key={t.id} value={t.name}>
+                        {t.name} (
+                        {targetType === 'GROUP'
+                          ? `${t._count?.groups ?? 0} grupos`
+                          : `${t._count?.contacts ?? 0} leads`}
+                        )
+                      </option>
+                    ))}
                 </select>
 
                 <button
                   type="button"
-                  onClick={handleAddEntryTag}
+                  onClick={() => handleAddEntryTag()}
                   disabled={!currentEntrySelect}
                   className="w-10 h-10 border border-[#2b2b3b] hover:border-purple-500 hover:bg-[#1a1c24] rounded-xl flex items-center justify-center text-slate-200 hover:text-white text-lg font-bold bg-[#101217] transition-all disabled:opacity-40 disabled:cursor-not-allowed"
                 >
@@ -2759,13 +2915,17 @@ export default function AutomationCanvasPage() {
               )}
             </div>
 
-            {/* Seção 2: Tag(s) que impossibilitam a entrada dos leads */}
+            {/* Seção 2: Tag(s) que impossibilitam a entrada */}
             <div className="mt-5 space-y-1.5">
               <h4 className="font-bold text-white text-xs">
-                Tag(s) que impossibilitam a entrada dos leads
+                {targetType === 'GROUP'
+                  ? 'Tag(s) que impossibilitam a entrada dos grupos'
+                  : 'Tag(s) que impossibilitam a entrada dos leads'}
               </h4>
               <p className="text-slate-400 text-[11px]">
-                Se o lead possuir TODAS as tags abaixo, ele não entrará nesta etapa.
+                {targetType === 'GROUP'
+                  ? 'Se o grupo possuir as tags abaixo, ele não entrará nesta etapa.'
+                  : 'Se o lead possuir TODAS as tags abaixo, ele não entrará nesta etapa.'}
               </p>
 
               <div className="flex items-center gap-2 pt-1">
@@ -2777,16 +2937,22 @@ export default function AutomationCanvasPage() {
                   <option value="" disabled>
                     Selecione uma tag que impossibilita a entrada...
                   </option>
-                  {availableTags.map((t) => (
-                    <option key={t.id} value={t.name}>
-                      {t.name} ({t._count?.contacts || 0} leads)
-                    </option>
-                  ))}
+                  {availableTags
+                    .filter((t) => !tagSearchQuery || t.name.toLowerCase().includes(tagSearchQuery.toLowerCase()))
+                    .map((t) => (
+                      <option key={t.id} value={t.name}>
+                        {t.name} (
+                        {targetType === 'GROUP'
+                          ? `${t._count?.groups ?? 0} grupos`
+                          : `${t._count?.contacts ?? 0} leads`}
+                        )
+                      </option>
+                    ))}
                 </select>
 
                 <button
                   type="button"
-                  onClick={handleAddExclusionTag}
+                  onClick={() => handleAddExclusionTag()}
                   disabled={!currentExclusionSelect}
                   className="w-10 h-10 border border-[#2b2b3b] hover:border-red-500 hover:bg-[#1a1c24] rounded-xl flex items-center justify-center text-slate-200 hover:text-white text-lg font-bold bg-[#101217] transition-all disabled:opacity-40 disabled:cursor-not-allowed"
                 >

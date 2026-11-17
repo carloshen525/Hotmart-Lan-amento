@@ -95,6 +95,37 @@ export class WhatsappGroupService {
           continue;
         }
 
+        // Tenta também buscar comunidades caso a Evolution API utilize endpoint específico
+        try {
+          const comUrl = `${this.apiUrl}/community/fetchAll/${encodeURIComponent(instance.instanceName)}`;
+          const comRes = await fetch(comUrl, { method: 'GET', headers: { apikey: this.apiKey } });
+          if (comRes.ok) {
+            const comData = await comRes.json();
+            if (Array.isArray(comData)) {
+              for (const c of comData) {
+                if (!rawGroups.some((g: any) => g.id === c.id)) {
+                  rawGroups.push({ ...c, isCommunity: true });
+                }
+              }
+            }
+          }
+        } catch {}
+
+        try {
+          const findComUrl = `${this.apiUrl}/group/findCommunities/${encodeURIComponent(instance.instanceName)}`;
+          const findComRes = await fetch(findComUrl, { method: 'GET', headers: { apikey: this.apiKey } });
+          if (findComRes.ok) {
+            const findComData = await findComRes.json();
+            if (Array.isArray(findComData)) {
+              for (const c of findComData) {
+                if (!rawGroups.some((g: any) => g.id === c.id)) {
+                  rawGroups.push({ ...c, isCommunity: true });
+                }
+              }
+            }
+          }
+        } catch {}
+
         // Determina o número de telefone da instância para identificar seu participante no grupo
         let myNumber = (instance.phone || '').replace(/\D/g, '');
         if (!myNumber || myNumber.length < 8) {
@@ -197,8 +228,9 @@ export class WhatsappGroupService {
               isEligible,
               metadata: JSON.stringify({
                 owner: group.owner,
-                isCommunity: Boolean(group.isCommunity),
+                isCommunity: Boolean(group.isCommunity || group.isParentGroup || group.linkedParent || group.linkedParentJid || (name && name.toLowerCase().includes('comunidade'))),
                 isCommunityAnnounce: Boolean(group.isCommunityAnnounce),
+                linkedParentJid: group.linkedParentJid || group.linkedParent || null,
                 creation: group.creation,
                 myRole: adminRole,
               }),
@@ -214,8 +246,9 @@ export class WhatsappGroupService {
               isEligible,
               metadata: JSON.stringify({
                 owner: group.owner,
-                isCommunity: Boolean(group.isCommunity),
+                isCommunity: Boolean(group.isCommunity || group.isParentGroup || group.linkedParent || group.linkedParentJid || (name && name.toLowerCase().includes('comunidade'))),
                 isCommunityAnnounce: Boolean(group.isCommunityAnnounce),
+                linkedParentJid: group.linkedParentJid || group.linkedParent || null,
                 creation: group.creation,
                 myRole: adminRole,
               }),

@@ -29,78 +29,130 @@ export async function GET(request: Request, { params }: { params: { id: string }
       parsedEdges = JSON.parse(automation.edges || '[]');
     } catch {}
 
-    const [allEnrollments, allStepLogs, allQueueItems, pendingJobs] = await Promise.all([
-      prisma.automationEnrollment.findMany({
-        where: {
-          automationId: params.id,
-          contact: {
-            tenantId,
-            status: { not: 'UNSUBSCRIBED' },
+    const isGroupMode = (automation as any).targetType === 'GROUP';
+
+    let allEnrollments: any[] = [];
+    let allStepLogs: any[] = [];
+    let allQueueItems: any[] = [];
+    let pendingJobs: any[] = [];
+
+    if (isGroupMode) {
+      const [allGroupEnrollments, allGroupStepLogs] = await Promise.all([
+        prisma.automationGroupEnrollment.findMany({
+          where: { automationId: params.id },
+          select: {
+            id: true,
+            groupId: true,
+            currentNodeId: true,
+            status: true,
+            enteredAt: true,
+            completedAt: true,
           },
-        },
-        select: {
-          id: true,
-          contactId: true,
-          currentNodeId: true,
-          status: true,
-          enteredAt: true,
-          completedAt: true,
-          contact: {
-            select: {
-              id: true,
-              name: true,
-              email: true,
-              phone: true,
-              status: true,
-              tags: {
-                select: {
-                  tag: { select: { name: true } },
+        }),
+        prisma.automationGroupStepLog.findMany({
+          where: { enrollment: { automationId: params.id } },
+          select: {
+            nodeId: true,
+            status: true,
+            groupId: true,
+          },
+        }),
+      ]);
+
+      allEnrollments = allGroupEnrollments.map((g) => ({
+        id: g.id,
+        contactId: g.groupId,
+        currentNodeId: g.currentNodeId,
+        status: g.status,
+        enteredAt: g.enteredAt,
+        completedAt: g.completedAt,
+        contact: null,
+      }));
+
+      allStepLogs = allGroupStepLogs.map((l) => ({
+        nodeId: l.nodeId,
+        status: l.status,
+        contactId: l.groupId,
+      }));
+    } else {
+      const results = await Promise.all([
+        prisma.automationEnrollment.findMany({
+          where: {
+            automationId: params.id,
+            contact: {
+              tenantId,
+              status: { not: 'UNSUBSCRIBED' },
+            },
+          },
+          select: {
+            id: true,
+            contactId: true,
+            currentNodeId: true,
+            status: true,
+            enteredAt: true,
+            completedAt: true,
+            contact: {
+              select: {
+                id: true,
+                name: true,
+                email: true,
+                phone: true,
+                status: true,
+                tags: {
+                  select: {
+                    tag: { select: { name: true } },
+                  },
                 },
               },
             },
           },
-        },
-      }),
-      prisma.automationStepLog.findMany({
-        where: {
-          enrollment: {
+        }),
+        prisma.automationStepLog.findMany({
+          where: {
+            enrollment: {
+              automationId: params.id,
+            },
+            contact: {
+              status: { not: 'UNSUBSCRIBED' },
+            },
+          },
+          select: {
+            nodeId: true,
+            status: true,
+            contactId: true,
+          },
+        }),
+        prisma.whatsappQueue.findMany({
+          where: {
             automationId: params.id,
           },
-          contact: {
-            status: { not: 'UNSUBSCRIBED' },
+          select: {
+            nodeId: true,
+            status: true,
+            contactId: true,
+            phone: true,
           },
-        },
-        select: {
-          nodeId: true,
-          status: true,
-          contactId: true,
-        },
-      }),
-      prisma.whatsappQueue.findMany({
-        where: {
-          automationId: params.id,
-        },
-        select: {
-          nodeId: true,
-          status: true,
-          contactId: true,
-          phone: true,
-        },
-      }),
-      prisma.scheduledJob.findMany({
-        where: {
-          automationId: params.id,
-          status: 'PENDING',
-          contact: {
-            status: { not: 'UNSUBSCRIBED' },
+        }),
+        prisma.scheduledJob.findMany({
+          where: {
+            automationId: params.id,
+            status: 'PENDING',
+            contact: {
+              status: { not: 'UNSUBSCRIBED' },
+            },
           },
-        },
-        select: {
-          targetNodeId: true,
-          contactId: true,
-        },
-      }),
-    ]);
+          select: {
+            targetNodeId: true,
+            contactId: true,
+          },
+        }),
+      ]);
+
+      allEnrollments = results[0];
+      allStepLogs = results[1];
+      allQueueItems = results[2];
+      pendingJobs = results[3];
+    }
 
     // 1. Identifica todas as tags de entrada válidas configuradas no fluxo
     const allAutoTagNames = new Set<string>();
@@ -115,7 +167,7 @@ export async function GET(request: Request, { params }: { params: { id: string }
 
     // 2. Filtra inscrições de leads para estatísticas sem deletar dados do banco
     let validEnrollments = allEnrollments;
-    if (allAutoTagNames.size > 0) {
+    if (!isGroupMode && allAutoTagNames.size > 0) {
       validEnrollments = allEnrollments.filter((e) => {
         const cTags = e.contact?.tags?.map((t: any) => t.tag?.name?.toLowerCase().trim()) || [];
         return cTags.some((ct: string) => allAutoTagNames.has(ct));
@@ -303,18 +355,41 @@ export async function GET(request: Request, { params }: { params: { id: string }
         const tags: string[] =
           cfg.entryTags || cfg.tagNames || (cfg.tagName ? [cfg.tagName] : (n.data as any)?.tagName ? [(n.data as any).tagName] : []) || [];
         if (tags.length > 0) {
-          const count = await prisma.contact.count({
-            where: {
-              tenantId,
-              status: { not: 'UNSUBSCRIBED' },
-              tags: {
-                some: {
-                  tag: { name: { in: tags } },
+          if (isGroupMode) {
+            const count = await prisma.whatsappGroup.count({
+              where: {
+                tenantId,
+                isEligible: true,
+                status: 'ACTIVE',
+                tags: {
+                  some: {
+                    tag: {
+                      OR: [
+                        { id: { in: tags } },
+                        { name: { in: tags } },
+                        ...tags.map((t) => ({ name: t.replace(/^#/, '') })),
+                        ...tags.map((t) => ({ name: `#${t.replace(/^#/, '')}` })),
+                      ],
+                    },
+                  },
                 },
               },
-            },
-          });
-          tagStat.leadsCount = count;
+            });
+            tagStat.leadsCount = count;
+          } else {
+            const count = await prisma.contact.count({
+              where: {
+                tenantId,
+                status: { not: 'UNSUBSCRIBED' },
+                tags: {
+                  some: {
+                    tag: { name: { in: tags } },
+                  },
+                },
+              },
+            });
+            tagStat.leadsCount = count;
+          }
         } else {
           tagStat.leadsCount = 0;
         }

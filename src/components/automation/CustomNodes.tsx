@@ -21,6 +21,8 @@ import {
 // 1. Nó de Tag (Gatilho de Entrada / Saída) - Suporta Tags de Entrada e Exclusão
 export const TagNode = memo(({ data, selected }: any) => {
   const count = data.config?.leadsCount ?? data.leadsCount ?? 0;
+  const isGroup = data.config?.targetType === 'GROUP' || data.isGroup || data.targetType === 'GROUP';
+  const unitLabel = isGroup ? (count === 1 ? 'grupo' : 'grupos') : (count === 1 ? 'lead' : 'leads');
   const entryTags: string[] =
     data.config?.entryTags ||
     data.config?.tagNames ||
@@ -68,7 +70,7 @@ export const TagNode = memo(({ data, selected }: any) => {
       <div className="text-center mt-1.5 max-w-[210px]">
         <div className="flex items-center justify-center gap-1 flex-wrap">
           <span className="text-[12px] font-medium text-slate-200 tracking-wide block">
-            Tags{entryTags.length > 1 ? ` (${entryTags.length})` : ''} | {count} lead{count === 1 ? '' : 's'}
+            Tags{entryTags.length > 1 ? ` (${entryTags.length})` : ''} | {count} {unitLabel}
           </span>
           {entryTags.length > 1 && (
             <span className="text-[9px] font-bold px-1.5 py-0.2 rounded bg-indigo-950 text-indigo-300 border border-indigo-800">
@@ -118,7 +120,9 @@ export const SequenceLeadNode = memo(({ data, selected }: any) => {
   const waiting = data.config?.waitingCount ?? 0;
   const success = data.config?.successCount ?? 0;
   const failed = data.config?.failedCount ?? 0;
-  const label = data.label || 'Sequência Lead';
+  const isGroup = data.config?.targetType === 'GROUP' || data.isGroup || data.targetType === 'GROUP';
+  const unitLabel = isGroup ? (count === 1 ? 'grupo' : 'grupos') : (count === 1 ? 'lead' : 'leads');
+  const label = data.label || (isGroup ? 'Sequência de Grupos' : 'Sequência Lead');
 
   return (
     <div className="flex flex-col items-center group cursor-pointer select-none">
@@ -163,7 +167,7 @@ export const SequenceLeadNode = memo(({ data, selected }: any) => {
       {/* Legenda abaixo */}
       <div className="text-center mt-1.5">
         <span className="text-[12px] font-medium text-slate-200 tracking-wide block">
-          {label} | {count} lead{count === 1 ? '' : 's'}
+          {label} | {count} {unitLabel}
         </span>
 
         {/* Pílulas coloridas de status (Amarelo, Verde, Vermelho) */}
@@ -320,6 +324,8 @@ StartNode.displayName = 'StartNode';
 // 5. Nó de Disparo de WhatsApp - Verde com Ícone do WhatsApp
 export const WhatsAppNode = memo(({ data, selected }: any) => {
   const count = data.config?.leadsCount ?? data.leadsCount ?? 0;
+  const isGroup = data.config?.targetType === 'GROUP' || data.isGroup || data.targetType === 'GROUP';
+  const unitLabel = isGroup ? (count === 1 ? 'grupo' : 'grupos') : (count === 1 ? 'lead' : 'leads');
   const waiting = data.config?.waitingCount ?? 0;
   const success = data.config?.successCount ?? 0;
   const failed = data.config?.failedCount ?? 0;
@@ -372,7 +378,7 @@ export const WhatsAppNode = memo(({ data, selected }: any) => {
 
       <div className="text-center mt-1.5">
         <span className="text-[12px] font-medium text-slate-200 tracking-wide block">
-          WhatsApp | {count} lead{count === 1 ? '' : 's'}
+          WhatsApp | {count} {unitLabel}
         </span>
 
         {Boolean(data.config?.whatsappInstanceName || data.config?.whatsappPhone) ? (

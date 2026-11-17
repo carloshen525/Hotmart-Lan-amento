@@ -60,7 +60,7 @@ export default function GroupsPage() {
   const [loading, setLoading] = useState(true);
   const [syncing, setSyncing] = useState(false);
   const [search, setSearch] = useState('');
-  const [tabFilter, setTabFilter] = useState<'ELIGIBLE' | 'ALL' | 'INELIGIBLE'>('ELIGIBLE');
+  const [tabFilter, setTabFilter] = useState<'ELIGIBLE' | 'ALL' | 'COMMUNITIES' | 'GROUPS' | 'INELIGIBLE'>('ELIGIBLE');
   const [selectedTagFilter, setSelectedTagFilter] = useState<string>('ALL');
   const [selectedGroups, setSelectedGroups] = useState<string[]>([]);
   const [copiedJid, setCopiedJid] = useState<string | null>(null);
@@ -243,11 +243,27 @@ export default function GroupsPage() {
     }
   };
 
+  // Helper para verificar se o grupo é uma Comunidade ou Canal de Comunidade
+  const getCommunityStatus = (g: WhatsappGroup) => {
+    try {
+      const meta = g.metadata ? JSON.parse(g.metadata) : {};
+      const isAnnounce = Boolean(meta.isCommunityAnnounce);
+      const isCom = Boolean(meta.isCommunity || meta.isParentGroup || meta.linkedParentJid || (g.name && g.name.toLowerCase().includes('comunidade')));
+      return { isCommunity: isCom || isAnnounce, isCommunityAnnounce: isAnnounce };
+    } catch {
+      return { isCommunity: Boolean(g.name && g.name.toLowerCase().includes('comunidade')), isCommunityAnnounce: false };
+    }
+  };
+
   // Filtragem dos grupos
   const filteredGroups = groups.filter((g) => {
+    const { isCommunity } = getCommunityStatus(g);
+
     // Filtro por tab
     if (tabFilter === 'ELIGIBLE' && !g.isEligible) return false;
     if (tabFilter === 'INELIGIBLE' && g.isEligible) return false;
+    if (tabFilter === 'COMMUNITIES' && !isCommunity) return false;
+    if (tabFilter === 'GROUPS' && isCommunity) return false;
 
     // Filtro por tag
     if (selectedTagFilter !== 'ALL') {
@@ -271,6 +287,8 @@ export default function GroupsPage() {
   const eligibleGroupsCount = groups.filter((g) => g.isEligible).length;
   const ineligibleGroupsCount = groups.filter((g) => !g.isEligible && g.status === 'NOT_ADMIN').length;
   const unverifiedGroupsCount = groups.filter((g) => g.status === 'UNVERIFIED').length;
+  const communitiesCount = groups.filter((g) => getCommunityStatus(g).isCommunity).length;
+  const standardGroupsCount = groups.filter((g) => !getCommunityStatus(g).isCommunity).length;
 
   const toggleSelectGroup = (id: string) => {
     setSelectedGroups((prev) => (prev.includes(id) ? prev.filter((item) => item !== id) : [...prev, id]));
@@ -414,8 +432,8 @@ export default function GroupsPage() {
       {/* Filtros e Barra de Ações */}
       <div className="bg-white dark:bg-slate-900 p-4 rounded-2xl border border-slate-200 dark:border-slate-800 shadow-sm space-y-4">
         <div className="flex flex-col md:flex-row md:items-center justify-between gap-4">
-          {/* Tabs de Filtro de Elegibilidade */}
-          <div className="flex items-center gap-1.5 p-1 bg-slate-100 dark:bg-slate-800 rounded-xl">
+          {/* Tabs de Filtro de Elegibilidade e Tipo */}
+          <div className="flex items-center gap-1.5 p-1 bg-slate-100 dark:bg-slate-800 rounded-xl flex-wrap">
             <button
               onClick={() => setTabFilter('ELIGIBLE')}
               className={`px-3 py-1.5 rounded-lg text-xs font-semibold transition-all ${
@@ -434,7 +452,27 @@ export default function GroupsPage() {
                   : 'text-slate-600 dark:text-slate-400 hover:text-slate-900 dark:hover:text-white'
               }`}
             >
-              Todos os Grupos ({groups.length})
+              Todos ({groups.length})
+            </button>
+            <button
+              onClick={() => setTabFilter('COMMUNITIES')}
+              className={`px-3 py-1.5 rounded-lg text-xs font-semibold transition-all ${
+                tabFilter === 'COMMUNITIES'
+                  ? 'bg-white dark:bg-slate-700 text-blue-700 dark:text-blue-300 shadow-sm'
+                  : 'text-slate-600 dark:text-slate-400 hover:text-slate-900 dark:hover:text-white'
+              }`}
+            >
+              🌐 Comunidades ({communitiesCount})
+            </button>
+            <button
+              onClick={() => setTabFilter('GROUPS')}
+              className={`px-3 py-1.5 rounded-lg text-xs font-semibold transition-all ${
+                tabFilter === 'GROUPS'
+                  ? 'bg-white dark:bg-slate-700 text-indigo-700 dark:text-indigo-300 shadow-sm'
+                  : 'text-slate-600 dark:text-slate-400 hover:text-slate-900 dark:hover:text-white'
+              }`}
+            >
+              👥 Grupos ({standardGroupsCount})
             </button>
             <button
               onClick={() => setTabFilter('INELIGIBLE')}
@@ -580,9 +618,33 @@ export default function GroupsPage() {
                             <span className="font-bold text-slate-900 dark:text-white block truncate text-sm">
                               {g.name}
                             </span>
-                            <span className="text-[11px] text-slate-400 block truncate">
-                              Atualizado em: {new Date(g.lastSyncedAt).toLocaleDateString('pt-BR')}
-                            </span>
+                            <div className="flex items-center gap-1.5 mt-0.5">
+                              {(() => {
+                                const { isCommunity, isCommunityAnnounce } = getCommunityStatus(g);
+                                if (isCommunityAnnounce) {
+                                  return (
+                                    <span className="inline-flex items-center gap-0.5 px-1.5 py-0.5 rounded text-[10px] font-semibold bg-purple-100 dark:bg-purple-950/60 text-purple-700 dark:text-purple-300 border border-purple-200 dark:border-purple-800/40">
+                                      📢 Canal de Avisos
+                                    </span>
+                                  );
+                                }
+                                if (isCommunity) {
+                                  return (
+                                    <span className="inline-flex items-center gap-0.5 px-1.5 py-0.5 rounded text-[10px] font-semibold bg-blue-100 dark:bg-blue-950/60 text-blue-700 dark:text-blue-300 border border-blue-200 dark:border-blue-800/40">
+                                      🌐 Comunidade
+                                    </span>
+                                  );
+                                }
+                                return (
+                                  <span className="inline-flex items-center gap-0.5 px-1.5 py-0.5 rounded text-[10px] font-semibold bg-slate-100 dark:bg-slate-800 text-slate-600 dark:text-slate-400">
+                                    👥 Grupo
+                                  </span>
+                                );
+                              })()}
+                              <span className="text-[10px] text-slate-400 block truncate">
+                                {new Date(g.lastSyncedAt).toLocaleDateString('pt-BR')}
+                              </span>
+                            </div>
                           </div>
                         </div>
                       </td>

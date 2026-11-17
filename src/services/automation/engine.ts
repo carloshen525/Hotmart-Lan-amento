@@ -1736,11 +1736,28 @@ export class AutomationEngine {
       where.whatsappInstanceId = (automation as any).whatsappInstanceId;
     }
 
-    // 2. Filtro por Tags de Grupos
+    // 2. Filtro por Tags de Grupos (tanto da coluna quanto dos nós de Tag configurados no Canvas)
     let targetTags: string[] = [];
     try {
       if ((automation as any).targetGroupTags) {
-        targetTags = JSON.parse((automation as any).targetGroupTags);
+        const parsed = JSON.parse((automation as any).targetGroupTags);
+        if (Array.isArray(parsed)) targetTags.push(...parsed);
+      }
+    } catch {}
+
+    try {
+      const macroNodes: any[] = JSON.parse(automation.nodes || '[]');
+      for (const mn of macroNodes) {
+        if (mn.type === 'tag' || mn.type === 'trigger') {
+          const cfg = mn.data?.config || {};
+          const tList: string[] =
+            cfg.entryTags ||
+            cfg.tagNames ||
+            (cfg.tagName ? [cfg.tagName] : (mn.data as any)?.tagName ? [(mn.data as any).tagName] : []);
+          tList.forEach((t) => {
+            if (!targetTags.includes(t)) targetTags.push(t);
+          });
+        }
       }
     } catch {}
 
@@ -1752,7 +1769,7 @@ export class AutomationEngine {
       }
     } catch {}
 
-    // Aplica filtros combinados
+    // Aplica filtros combinados (tolerante a tags com ou sem prefixo '#')
     if (targetTags.length > 0) {
       where.tags = {
         some: {
@@ -1760,6 +1777,8 @@ export class AutomationEngine {
             OR: [
               { id: { in: targetTags } },
               { name: { in: targetTags } },
+              ...targetTags.map((t) => ({ name: t.replace(/^#/, '') })),
+              ...targetTags.map((t) => ({ name: `#${t.replace(/^#/, '')}` })),
             ],
           },
         },
