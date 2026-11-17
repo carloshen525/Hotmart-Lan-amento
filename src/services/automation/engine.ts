@@ -1,7 +1,7 @@
 import { prisma } from '@/lib/prisma';
 import { messageManager } from '../messaging';
 import { WhatsappQueueService } from '@/services/whatsapp/queue.service';
-import { whatsappGroupService } from '@/services/whatsapp/group.service';
+import { whatsappGroupService, computeGroupNameWithHashtagRule } from '@/services/whatsapp/group.service';
 import { WorkflowNode, WorkflowEdge } from './types';
 import { BackgroundSchedulerRunner } from './background-runner';
 
@@ -2081,10 +2081,10 @@ export class AutomationEngine {
       return; // A conclusão e avanço acontecem quando a mensagem é enviada pela fila
     }
 
-    // 2.2. Ação / Edição de Grupos (Abrir/Fechar mensagens, Alterar Nome/Assunto, Alterar Descrição)
+    // 2.2. Ação / Edição de Grupos (Abrir/Fechar mensagens, Alterar Nome/Assunto com regra do #, Alterar Descrição, Alterar Imagem)
     if (nodeType === 'editar_grupo' || nodeType === 'group_action') {
       const cfg = node.data?.config || {};
-      const actionType = cfg.groupActionType || 'message';
+      const actionType = cfg.groupActionType || 'multi_config';
 
       const instance = await prisma.whatsappInstance.findUnique({
         where: { id: (automation as any).whatsappInstanceId || group.whatsappInstanceId },
@@ -2092,14 +2092,49 @@ export class AutomationEngine {
       const instanceName = instance?.instanceName;
 
       try {
-        if (actionType === 'close_group' && instanceName) {
-          await whatsappGroupService.updateGroupSetting(instanceName, group.jid, 'announcement');
-        } else if (actionType === 'open_group' && instanceName) {
-          await whatsappGroupService.updateGroupSetting(instanceName, group.jid, 'not_announcement');
-        } else if (actionType === 'update_subject' && instanceName && cfg.newSubject) {
-          await whatsappGroupService.updateGroupSubject(instanceName, group.jid, cfg.newSubject);
-        } else if (actionType === 'update_description' && instanceName && cfg.newDescription) {
-          await whatsappGroupService.updateGroupDescription(instanceName, group.jid, cfg.newDescription);
+        if (instanceName) {
+          // 1. Alterar Permissão (Fechar / Abrir Grupo)
+          if (actionType === 'close_group' || (cfg.enableUpdateSetting && cfg.groupSetting === 'announcement')) {
+            await whatsappGroupService.updateGroupSetting(instanceName, group.jid, 'announcement');
+          } else if (actionType === 'open_group' || (cfg.enableUpdateSetting && cfg.groupSetting === 'not_announcement')) {
+            await whatsappGroupService.updateGroupSetting(instanceName, group.jid, 'not_announcement');
+          }
+
+          // 2. Alterar Nome do Grupo com a Regra do Hashtag (#):
+          // Caso o nome do seu grupo contenha '#' (hashtag), o caractere especial '#'
+          // permanecerá junto com os elementos que o seguem.
+          // Exemplo: Nome atual "Lançamento #10", Novo nome "Vagas abertas" -> "Vagas abertas #10"
+          const shouldUpdateSubject = actionType === 'update_subject' || cfg.enableUpdateSubject;
+          const rawNewSubject = cfg.newSubject || cfg.subject;
+
+          if (shouldUpdateSubject && rawNewSubject) {
+            const finalSubject = computeGroupNameWithHashtagRule(group.name, rawNewSubject);
+            await whatsappGroupService.updateGroupSubject(instanceName, group.jid, finalSubject);
+
+            // Atualiza o nome do grupo no banco de dados local
+            await prisma.whatsappGroup.update({
+              where: { id: group.id },
+              data: { name: finalSubject },
+            });
+          }
+
+          // 3. Alterar Descrição do Grupo
+          const shouldUpdateDescription = actionType === 'update_description' || cfg.enableUpdateDescription;
+          const newDesc = cfg.newDescription || cfg.description;
+          if (shouldUpdateDescription && newDesc) {
+            await whatsappGroupService.updateGroupDescription(instanceName, group.jid, newDesc);
+          }
+
+          // 4. Alterar Imagem do Grupo
+          const shouldUpdatePicture = actionType === 'update_picture' || cfg.enableUpdatePicture;
+          const newPicture = cfg.pictureUrl || cfg.newPicture;
+          if (shouldUpdatePicture && newPicture) {
+            await whatsappGroupService.updateGroupPicture(instanceName, group.jid, newPicture);
+            await prisma.whatsappGroup.update({
+              where: { id: group.id },
+              data: { pictureUrl: newPicture },
+            });
+          }
         }
       } catch (err: any) {
         console.error('[Automation Engine] Error executing group action:', err);

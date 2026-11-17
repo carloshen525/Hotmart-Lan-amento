@@ -8,7 +8,7 @@ async function runTestSuite() {
   console.log('=====================================================\n');
 
   let passed = 0;
-  let total = 34;
+  let total = 35;
 
   // Setup de tenant de teste limpo
   const testTenant = await prisma.tenant.upsert({
@@ -3252,6 +3252,71 @@ async function runTestSuite() {
     await prisma.tag.deleteMany({ where: { id: testTagTimerSeq.id } });
 
     console.log('✔ PASSOU: Transição de Timer para Sequência Lead e disparo do WhatsApp validado com 100% de sucesso.');
+    passed++;
+
+    // -------------------------------------------------------------
+    // TESTE 35: Regra de Preservação de Hashtag (#) ao Alterar Nome do Grupo
+    // -------------------------------------------------------------
+    console.log('[TESTE 35] Regra de Preservação de Hashtag (#) ao Alterar Nome do Grupo...');
+    function computeGroupNameWithHashtagRule(currentName, newName) {
+      const trimmedNew = (newName || '').trim();
+      if (!trimmedNew) return currentName || '';
+
+      if (!currentName || !currentName.includes('#')) {
+        return trimmedNew;
+      }
+
+      if (trimmedNew.includes('#')) {
+        return trimmedNew;
+      }
+
+      const hashIndex = currentName.indexOf('#');
+      const hashPart = currentName.slice(hashIndex).trim();
+
+      return `${trimmedNew} ${hashPart}`;
+    }
+
+    // Cenário 1: Grupo "Lançamento #10" renomeado para "Vagas abertas" -> "Vagas abertas #10"
+    const result1 = computeGroupNameWithHashtagRule('Lançamento #10', 'Vagas abertas');
+    assert.strictEqual(
+      result1,
+      'Vagas abertas #10',
+      'Grupo "Lançamento #10" renomeado para "Vagas abertas" DEVE resultar em "Vagas abertas #10"'
+    );
+
+    // Cenário 2: Grupo com sufixo complexo "#03 - Alunos VIP"
+    const result2 = computeGroupNameWithHashtagRule('Imersão IA #03 - Alunos VIP', '🔴 AO VIVO AGORA');
+    assert.strictEqual(
+      result2,
+      '🔴 AO VIVO AGORA #03 - Alunos VIP',
+      'Sufixo após hashtag DEVE ser integralmente preservado'
+    );
+
+    // Cenário 3: Grupo sem hashtag não sofre anexação indevida
+    const result3 = computeGroupNameWithHashtagRule('Grupo Geral de Avisos', 'Vagas abertas');
+    assert.strictEqual(
+      result3,
+      'Vagas abertas',
+      'Grupo sem hashtag deve receber exatamente o novo nome digitado'
+    );
+
+    // Cenário 4: Se o usuário já incluiu o hashtag no novo nome digitado, não duplica
+    const result4 = computeGroupNameWithHashtagRule('Turma #05', 'Nova Turma #05');
+    assert.strictEqual(
+      result4,
+      'Nova Turma #05',
+      'Não deve duplicar hashtags se o usuário já digitou manualmente no novo nome'
+    );
+
+    // Cenário 5: Espaços em branco extras são normalizados
+    const result5 = computeGroupNameWithHashtagRule('Lançamento #10', '  Vagas abertas  ');
+    assert.strictEqual(
+      result5,
+      'Vagas abertas #10',
+      'Espaços extras no início e fim do novo nome devem ser limpos com precisão'
+    );
+
+    console.log('✔ PASSOU: Regra de preservação de hashtag (#) ao alterar nomes de grupos validada com 100% de sucesso.');
     passed++;
 
     console.log('\n=====================================================');

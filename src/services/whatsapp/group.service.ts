@@ -650,6 +650,54 @@ export class WhatsappGroupService {
       return { success: false, error: err.message };
     }
   }
+
+  /**
+   * Altera a imagem / foto de perfil de um grupo
+   */
+  async updateGroupPicture(instanceName: string, groupJid: string, image: string) {
+    try {
+      const url = `${this.apiUrl}/group/updateGroupPicture/${encodeURIComponent(instanceName)}?groupJid=${encodeURIComponent(groupJid)}`;
+      const res = await fetch(url, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json', apikey: this.apiKey },
+        body: JSON.stringify({ image }),
+      });
+      return { success: res.ok };
+    } catch (err: any) {
+      console.error('[Group Service] updateGroupPicture error:', err);
+      return { success: false, error: err.message };
+    }
+  }
+}
+
+/**
+ * Regra do Hashtag (#) para alteração de nomes de grupos:
+ * Caso o nome do seu grupo contenha o seguinte caractere especial '#' (hashtag),
+ * quando você alterar o nome do seu grupo, o caractere especial, '#' (hashtag)
+ * permanecerá junto com os elementos que o seguem.
+ * 
+ * Exemplo:
+ * Nome do grupo: Lançamento #10
+ * Novo nome digitado: Vagas abertas
+ * Resultado final: Vagas abertas #10
+ */
+export function computeGroupNameWithHashtagRule(currentName: string, newName: string): string {
+  const trimmedNew = (newName || '').trim();
+  if (!trimmedNew) return currentName || '';
+
+  if (!currentName || !currentName.includes('#')) {
+    return trimmedNew;
+  }
+
+  // Se o novo nome digitado pelo usuário já contém '#', respeita a digitação
+  if (trimmedNew.includes('#')) {
+    return trimmedNew;
+  }
+
+  const hashIndex = currentName.indexOf('#');
+  const hashPart = currentName.slice(hashIndex).trim(); // ex: "#10" ou "#05 - VIP"
+
+  return `${trimmedNew} ${hashPart}`;
 }
 
 export const whatsappGroupService = new WhatsappGroupService();

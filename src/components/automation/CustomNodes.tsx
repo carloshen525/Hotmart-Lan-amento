@@ -550,17 +550,31 @@ export const EditarGrupoNode = memo(({ data, selected }: any) => {
   const label = data.label || 'Editar grupos';
 
   const getActionBadge = () => {
+    if (data.config?.enableUpdateSubject && data.config?.newSubject) {
+      return { text: `✏️ ${data.config.newSubject}`, color: 'text-sky-400 bg-sky-950/60 border-sky-800/60' };
+    }
+    if (data.config?.enableUpdatePicture) {
+      return { text: '🖼️ Mudar Imagem', color: 'text-indigo-400 bg-indigo-950/60 border-indigo-800/60' };
+    }
+    if (data.config?.enableUpdateDescription) {
+      return { text: '📝 Mudar Descrição', color: 'text-purple-400 bg-purple-950/60 border-purple-800/60' };
+    }
+    if (data.config?.enableUpdateSetting) {
+      return data.config.groupSetting === 'announcement'
+        ? { text: '🔒 Fechar Grupo', color: 'text-amber-400 bg-amber-950/60 border-amber-800/60' }
+        : { text: '🔓 Abrir Grupo', color: 'text-emerald-400 bg-emerald-950/60 border-emerald-800/60' };
+    }
     switch (actionType) {
       case 'close_group':
         return { text: '🔒 Fechar Grupo', color: 'text-amber-400 bg-amber-950/60 border-amber-800/60' };
       case 'open_group':
         return { text: '🔓 Abrir Grupo', color: 'text-emerald-400 bg-emerald-950/60 border-emerald-800/60' };
       case 'update_subject':
-        return { text: '✏️ Mudar Nome', color: 'text-sky-400 bg-sky-950/60 border-sky-800/60' };
+        return { text: `✏️ ${data.config?.newSubject || 'Mudar Nome'}`, color: 'text-sky-400 bg-sky-950/60 border-sky-800/60' };
       case 'update_description':
         return { text: '📝 Mudar Descrição', color: 'text-purple-400 bg-purple-950/60 border-purple-800/60' };
       default:
-        return { text: '💬 Mensagem no Grupo', color: 'text-emerald-400 bg-emerald-950/60 border-emerald-800/60' };
+        return { text: '⚙️ Configurar Grupos', color: 'text-emerald-400 bg-emerald-950/60 border-emerald-800/60' };
     }
   };
 
