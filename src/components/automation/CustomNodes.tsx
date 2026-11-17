@@ -539,3 +539,79 @@ export const WarmupNode = memo(({ data, selected }: any) => {
   );
 });
 WarmupNode.displayName = 'WarmupNode';
+
+// 8. Nó de Ação / Edição de Grupos - Configurações e Disparos em Grupos
+export const EditarGrupoNode = memo(({ data, selected }: any) => {
+  const count = data.config?.leadsCount ?? data.leadsCount ?? 0;
+  const waiting = data.config?.waitingCount ?? 0;
+  const success = data.config?.successCount ?? 0;
+  const failed = data.config?.failedCount ?? 0;
+  const actionType = data.config?.groupActionType || 'message';
+  const label = data.label || 'Editar grupos';
+
+  const getActionBadge = () => {
+    switch (actionType) {
+      case 'close_group':
+        return { text: '🔒 Fechar Grupo', color: 'text-amber-400 bg-amber-950/60 border-amber-800/60' };
+      case 'open_group':
+        return { text: '🔓 Abrir Grupo', color: 'text-emerald-400 bg-emerald-950/60 border-emerald-800/60' };
+      case 'update_subject':
+        return { text: '✏️ Mudar Nome', color: 'text-sky-400 bg-sky-950/60 border-sky-800/60' };
+      case 'update_description':
+        return { text: '📝 Mudar Descrição', color: 'text-purple-400 bg-purple-950/60 border-purple-800/60' };
+      default:
+        return { text: '💬 Mensagem no Grupo', color: 'text-emerald-400 bg-emerald-950/60 border-emerald-800/60' };
+    }
+  };
+
+  const badge = getActionBadge();
+
+  return (
+    <div className="flex flex-col items-center group cursor-pointer select-none">
+      <div
+        className={`relative w-14 h-14 rounded-2xl flex items-center justify-center transition-all duration-200 ${
+          selected
+            ? 'bg-purple-700 ring-2 ring-purple-400 shadow-xl shadow-purple-950/40'
+            : 'bg-[#2b2d3d] hover:bg-[#34374a] border border-purple-500/40 shadow-lg'
+        }`}
+      >
+        <Handle
+          type="target"
+          position={Position.Left}
+          className="!w-3 !h-3 !bg-slate-300 !border-2 !border-[#181a20] -ml-1 hover:!bg-white"
+        />
+
+        <Settings className="w-6 h-6 text-purple-300 stroke-[2] group-hover:rotate-45 transition-transform" />
+
+        <Handle
+          type="source"
+          position={Position.Right}
+          className="!w-3 !h-3 !bg-slate-300 !border-2 !border-[#181a20] -mr-1 hover:!bg-white"
+        />
+      </div>
+
+      <div className="text-center mt-1.5 max-w-[170px]">
+        <span className="text-[12px] font-medium text-slate-200 tracking-wide block truncate">
+          {label} | {count} {count === 1 ? 'grupo' : 'grupos'}
+        </span>
+        <span className={`text-[10px] font-semibold px-2 py-0.5 rounded-full border inline-block mt-0.5 ${badge.color}`}>
+          {badge.text}
+        </span>
+
+        {/* Pílulas de status */}
+        <div className="flex items-center justify-center gap-1 mt-1">
+          <span className="px-2 py-0.2 rounded-md bg-[#848c26] text-black font-bold text-[10px] min-w-[20px] text-center">
+            {waiting}
+          </span>
+          <span className="px-2 py-0.2 rounded-md bg-[#1db954] text-black font-bold text-[10px] min-w-[20px] text-center">
+            {success}
+          </span>
+          <span className="px-2 py-0.2 rounded-md bg-[#b83b3b] text-white font-bold text-[10px] min-w-[20px] text-center">
+            {failed}
+          </span>
+        </div>
+      </div>
+    </div>
+  );
+});
+EditarGrupoNode.displayName = 'EditarGrupoNode';

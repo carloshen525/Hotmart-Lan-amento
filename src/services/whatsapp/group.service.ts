@@ -596,6 +596,60 @@ export class WhatsappGroupService {
 
     return { updated: validGroupIds.length };
   }
+
+  /**
+   * Altera configurações de envio de mensagens no grupo (apenas admins ou todos)
+   */
+  async updateGroupSetting(instanceName: string, groupJid: string, action: 'announcement' | 'not_announcement') {
+    try {
+      const url = `${this.apiUrl}/group/updateSetting/${encodeURIComponent(instanceName)}?groupJid=${encodeURIComponent(groupJid)}`;
+      const res = await fetch(url, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json', apikey: this.apiKey },
+        body: JSON.stringify({ action }),
+      });
+      return { success: res.ok };
+    } catch (err: any) {
+      console.error('[Group Service] updateGroupSetting error:', err);
+      return { success: false, error: err.message };
+    }
+  }
+
+  /**
+   * Altera o assunto / nome de um grupo
+   */
+  async updateGroupSubject(instanceName: string, groupJid: string, subject: string) {
+    try {
+      const url = `${this.apiUrl}/group/updateGroupSubject/${encodeURIComponent(instanceName)}?groupJid=${encodeURIComponent(groupJid)}`;
+      const res = await fetch(url, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json', apikey: this.apiKey },
+        body: JSON.stringify({ groupJid, subject }),
+      });
+      return { success: res.ok };
+    } catch (err: any) {
+      console.error('[Group Service] updateGroupSubject error:', err);
+      return { success: false, error: err.message };
+    }
+  }
+
+  /**
+   * Altera a descrição de um grupo
+   */
+  async updateGroupDescription(instanceName: string, groupJid: string, description: string) {
+    try {
+      const url = `${this.apiUrl}/group/updateGroupDescription/${encodeURIComponent(instanceName)}?groupJid=${encodeURIComponent(groupJid)}`;
+      const res = await fetch(url, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json', apikey: this.apiKey },
+        body: JSON.stringify({ groupJid, description }),
+      });
+      return { success: res.ok };
+    } catch (err: any) {
+      console.error('[Group Service] updateGroupDescription error:', err);
+      return { success: false, error: err.message };
+    }
+  }
 }
 
 export const whatsappGroupService = new WhatsappGroupService();

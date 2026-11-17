@@ -76,6 +76,7 @@ import {
   StartNode,
   WhatsAppNode,
   EmailNode,
+  EditarGrupoNode,
   formatTimerSummary,
 } from '@/components/automation/CustomNodes';
 import { EmailBuilderModal } from '@/components/email-builder/EmailBuilderModal';
@@ -223,6 +224,15 @@ export default function AutomationCanvasPage() {
   const [loadingGroupStats, setLoadingGroupStats] = useState(false);
   const [syncingGroups, setSyncingGroups] = useState(false);
 
+  // Modal de Ação / Edição de Grupos
+  const [isEditarGrupoModalOpen, setIsEditarGrupoModalOpen] = useState(false);
+  const [groupActionType, setGroupActionType] = useState<
+    'message' | 'close_group' | 'open_group' | 'update_subject' | 'update_description'
+  >('close_group');
+  const [groupActionSubject, setGroupActionSubject] = useState('');
+  const [groupActionDescription, setGroupActionDescription] = useState('');
+  const [groupActionMessage, setGroupActionMessage] = useState('');
+
   // Construtor Visual de E-mails
   const [isVisualEmailBuilderOpen, setIsVisualEmailBuilderOpen] = useState(false);
 
@@ -295,6 +305,8 @@ export default function AutomationCanvasPage() {
       start: StartNode,
       whatsapp: WhatsAppNode,
       email: EmailNode,
+      editar_grupo: EditarGrupoNode,
+      group_action: EditarGrupoNode,
       // Retrocompatibilidade
       trigger: TagNode,
       action: WhatsAppNode,
@@ -801,8 +813,8 @@ export default function AutomationCanvasPage() {
     setViewMode('MACRO');
   };
 
-  // Adicionar blocos no Macro (Tag, Timer, Sequência Lead)
-  const addMacroBlock = (type: 'tag' | 'timer' | 'sequence_lead') => {
+  // Adicionar blocos no Macro (Tag, Timer, Sequência Lead, Editar Grupos, WhatsApp)
+  const addMacroBlock = (type: 'tag' | 'timer' | 'sequence_lead' | 'editar_grupo' | 'whatsapp') => {
     if (status === 'ACTIVE') {
       const wantsToPause = confirm(
         'Regra de Edição: Este fluxo está ATIVO em produção.\n\nPara adicionar novos blocos ou editar etapas, a automação precisa ser pausada.\n\nDeseja pausar o fluxo agora para prosseguir com a edição?'
@@ -824,6 +836,47 @@ export default function AutomationCanvasPage() {
           type: 'tag',
           leadsCount: 0,
           config: { tagName: '', tagNames: [], matchMode: 'ALL', tagColor: '#a855f7', leadsCount: 0 },
+        },
+      };
+    } else if (type === 'editar_grupo') {
+      newN = {
+        id,
+        type: 'editar_grupo',
+        position: { x: 380 + Math.random() * 50, y: 140 + macroNodes.length * 40 },
+        data: {
+          label: 'Editar grupos',
+          type: 'editar_grupo',
+          targetType: 'GROUP',
+          leadsCount: 0,
+          config: {
+            groupActionType: 'close_group',
+            actionLabel: 'Fechar Grupo (Apenas Admins)',
+            newSubject: '',
+            newDescription: '',
+            message: '',
+            leadsCount: 0,
+            waitingCount: 0,
+            successCount: 0,
+            failedCount: 0,
+          },
+        },
+      };
+    } else if (type === 'whatsapp') {
+      newN = {
+        id,
+        type: 'whatsapp',
+        position: { x: 420 + Math.random() * 50, y: 140 + macroNodes.length * 40 },
+        data: {
+          label: 'WhatsApp',
+          type: 'whatsapp',
+          targetType: 'GROUP',
+          config: {
+            message: '',
+            leadsCount: 0,
+            waitingCount: 0,
+            successCount: 0,
+            failedCount: 0,
+          },
         },
       };
     } else if (type === 'sequence_lead') {
@@ -876,6 +929,10 @@ export default function AutomationCanvasPage() {
       openTagModal(newN);
     } else if (type === 'timer') {
       openTimerModal(newN);
+    } else if (type === 'editar_grupo') {
+      openEditarGrupoModal(newN);
+    } else if (type === 'whatsapp') {
+      openMessageModal(newN);
     }
   };
 
@@ -1336,6 +1393,11 @@ export default function AutomationCanvasPage() {
   const onNodeClick = (_: any, node: Node) => {
     setSelectedNode(node);
 
+    if (node.type === 'editar_grupo' || node.type === 'group_action') {
+      openEditarGrupoModal(node);
+      return;
+    }
+
     if (viewMode === 'MACRO') {
       if (node.type === 'sequence_lead') {
         openSequenceSubflow(node);
@@ -1343,6 +1405,8 @@ export default function AutomationCanvasPage() {
         openTagModal(node);
       } else if (node.type === 'timer') {
         openTimerModal(node);
+      } else if (node.type === 'whatsapp') {
+        openMessageModal(node);
       }
     } else {
       if (node.type === 'whatsapp' || node.type === 'email') {
@@ -1852,6 +1916,69 @@ export default function AutomationCanvasPage() {
         setIsCreateTagOpen(false);
       }
     } catch {}
+  };
+
+  // Abertura e configuração do modal Editar Grupos
+  const openEditarGrupoModal = (nodeToConfigure?: Node) => {
+    const target = nodeToConfigure || selectedNode;
+    if (!target) return;
+    setSelectedNode(target);
+    const cfg = (target.data?.config as any) || {};
+    setGroupActionType(cfg.groupActionType || 'close_group');
+    setGroupActionSubject(cfg.newSubject || '');
+    setGroupActionDescription(cfg.newDescription || '');
+    setGroupActionMessage(cfg.message || cfg.text || '');
+    setIsEditarGrupoModalOpen(true);
+  };
+
+  const handleSaveEditarGrupoConfig = () => {
+    if (!selectedNode) return;
+
+    if (status === 'ACTIVE') {
+      const wantsToPause = confirm(
+        'Regra de Edição: O fluxo está ATIVO em produção.\n\nPara alterar a configuração desta etapa de grupo, a automação precisa ser pausada.\n\nDeseja pausar o fluxo agora para prosseguir com a edição?'
+      );
+      if (!wantsToPause) return;
+      handleSave('PAUSED');
+    }
+
+    const actionLabels: Record<string, string> = {
+      close_group: 'Fechar Grupo (Apenas Admins)',
+      open_group: 'Abrir Grupo (Todos)',
+      update_subject: `Mudar Nome: ${groupActionSubject || 'Novo Assunto'}`,
+      update_description: 'Mudar Descrição do Grupo',
+      message: 'Disparo de Mensagem no Grupo',
+    };
+
+    const updatedCfg: any = {
+      ...((selectedNode.data.config as object) || {}),
+      groupActionType,
+      actionLabel: actionLabels[groupActionType] || 'Editar grupos',
+      newSubject: groupActionSubject.trim(),
+      newDescription: groupActionDescription.trim(),
+      message: groupActionMessage.trim(),
+      text: groupActionMessage.trim(),
+      targetType: 'GROUP',
+    };
+
+    const updateNodesList = (nodesList: Node[]) =>
+      nodesList.map((n) =>
+        n.id === selectedNode.id
+          ? {
+              ...n,
+              data: {
+                ...n.data,
+                label: 'Editar grupos',
+                targetType: 'GROUP',
+                config: updatedCfg,
+              },
+            }
+          : n
+      );
+
+    setMacroNodes(updateNodesList);
+    setSequenceNodes(updateNodesList);
+    setIsEditarGrupoModalOpen(false);
   };
 
   // Abertura e configuração do modal de WhatsApp / E-mail
@@ -2492,8 +2619,66 @@ export default function AutomationCanvasPage() {
               Arraste os ícones
             </span>
 
-            {/* SE ESTIVER NO NÍVEL 1 (MACRO): TAG, TIMER E SEQUÊNCIA LEAD */}
-            {viewMode === 'MACRO' ? (
+            {/* SE FOR AUTOMAÇÃO DE GRUPOS: APENAS TAG, TIMER, EDITAR GRUPOS E GERENCIAR GRUPOS */}
+            {targetType === 'GROUP' ? (
+              <div className="space-y-4">
+                {/* Entrada */}
+                <div>
+                  <div className="flex items-center gap-1.5 px-1 pb-1.5 text-[10px] text-slate-500 font-medium">
+                    <div className="w-2 h-[1px] bg-slate-700" />
+                    <span>Entrada</span>
+                    <div className="flex-1 h-[1px] bg-slate-700" />
+                  </div>
+                  {/* Tag */}
+                  <div
+                    onClick={() => addMacroBlock('tag')}
+                    className="flex flex-col items-center justify-center p-3 rounded-xl bg-[#1b1e27] hover:bg-[#232733] border border-slate-800 hover:border-purple-500/60 cursor-pointer transition-all group shadow-sm"
+                    title="Gatilho de entrada: seleciona grupos e comunidades através das tags"
+                  >
+                    <TagIcon className="w-6 h-6 text-slate-300 group-hover:text-purple-400 mb-1.5 transition-colors" />
+                    <span className="text-xs font-medium text-slate-300 group-hover:text-white">Tag</span>
+                  </div>
+                </div>
+
+                {/* Agendamento */}
+                <div>
+                  <div className="flex items-center gap-1.5 px-1 pb-1.5 text-[10px] text-slate-500 font-medium">
+                    <div className="w-2 h-[1px] bg-slate-700" />
+                    <span>Agendamento</span>
+                    <div className="flex-1 h-[1px] bg-slate-700" />
+                  </div>
+                  {/* Timer */}
+                  <div
+                    onClick={() => addMacroBlock('timer')}
+                    className="flex flex-col items-center justify-center p-3 rounded-xl bg-[#1b1e27] hover:bg-[#232733] border border-slate-800 hover:border-cyan-500/60 cursor-pointer transition-all group shadow-sm"
+                    title="Temporizador: aguardar tempo ou agendar data e hora de disparo"
+                  >
+                    <Clock className="w-6 h-6 text-slate-300 group-hover:text-cyan-400 mb-1.5 transition-colors" />
+                    <span className="text-xs font-medium text-slate-300 group-hover:text-white">Timer</span>
+                  </div>
+                </div>
+
+                {/* Disparos */}
+                <div>
+                  <div className="flex items-center gap-1.5 px-1 pb-1.5 text-[10px] text-slate-500 font-medium">
+                    <div className="w-2 h-[1px] bg-slate-700" />
+                    <span>Disparos</span>
+                    <div className="flex-1 h-[1px] bg-slate-700" />
+                  </div>
+                  {/* Editar grupos */}
+                  <div
+                    onClick={() => addMacroBlock('editar_grupo')}
+                    className="flex flex-col items-center justify-center p-3 rounded-xl bg-[#1b1e27] hover:bg-[#232733] border border-slate-800 hover:border-purple-500/60 cursor-pointer transition-all group shadow-sm"
+                    title="Editar grupos: abrir/fechar grupo para mensagens, alterar nome, descrição ou enviar mensagens"
+                  >
+                    <Settings className="w-6 h-6 text-slate-300 group-hover:text-purple-300 mb-1.5 transition-colors group-hover:rotate-45" />
+                    <span className="text-xs font-medium text-slate-300 group-hover:text-white">
+                      Editar grupos
+                    </span>
+                  </div>
+                </div>
+              </div>
+            ) : viewMode === 'MACRO' ? (
               <div className="space-y-4">
                 {/* Tag */}
                 <div
@@ -2585,17 +2770,15 @@ export default function AutomationCanvasPage() {
                     </div>
 
                     {/* E-mail (Apenas para Automações Individuais) */}
-                    {targetType !== 'GROUP' && (
-                      <div
-                        onClick={() => addSequenceBlock('email')}
-                        className="flex flex-col items-center justify-center p-3 rounded-xl bg-[#1b1e27] hover:bg-[#232733] border border-slate-800 hover:border-orange-600/60 cursor-pointer transition-all group"
-                      >
-                        <Mail className="w-6 h-6 text-orange-400 group-hover:scale-110 mb-1.5 transition-all" />
-                        <span className="text-xs font-medium text-slate-300 group-hover:text-white">
-                          E-mail
-                        </span>
-                      </div>
-                    )}
+                    <div
+                      onClick={() => addSequenceBlock('email')}
+                      className="flex flex-col items-center justify-center p-3 rounded-xl bg-[#1b1e27] hover:bg-[#232733] border border-slate-800 hover:border-orange-600/60 cursor-pointer transition-all group"
+                    >
+                      <Mail className="w-6 h-6 text-orange-400 group-hover:scale-110 mb-1.5 transition-all" />
+                      <span className="text-xs font-medium text-slate-300 group-hover:text-white">
+                        E-mail
+                      </span>
+                    </div>
 
                     {/* Botão Configurar WhatsApp do Fluxo */}
                     <div
@@ -2614,14 +2797,40 @@ export default function AutomationCanvasPage() {
             )}
           </div>
 
-          {/* Dica no rodapé da barra */}
-          <div className="p-2.5 rounded-lg bg-[#181a20] border border-slate-800/80 text-[10px] text-slate-400 leading-relaxed">
-            {viewMode === 'MACRO' ? (
-              <span>💡 Clique na <b>Sequência Lead</b> para entrar e montar os disparos internos.</span>
-            ) : (
-              <span>💡 Clique em <b>Voltar</b> no topo para salvar e retornar ao fluxo principal.</span>
-            )}
-          </div>
+          {/* Rodapé da Barra: GERENCIAR GRUPOS (Se for grupo) ou Dica */}
+          {targetType === 'GROUP' ? (
+            <div className="pt-2 border-t border-slate-800 mt-auto">
+              <div className="flex items-center gap-1.5 px-1 pb-2 text-[10px] text-slate-500 font-medium">
+                <div className="w-2 h-[1px] bg-slate-700" />
+                <span>Grupos</span>
+                <div className="flex-1 h-[1px] bg-slate-700" />
+              </div>
+              <button
+                type="button"
+                onClick={() => {
+                  setIsGroupPanelOpen(true);
+                  fetchGroupStats();
+                }}
+                className="w-full py-3 px-2 rounded-xl bg-[#00a884] hover:bg-[#008f6f] text-white flex flex-col items-center justify-center gap-1.5 shadow-lg shadow-emerald-950/40 cursor-pointer transition-all active:scale-95 group"
+                title="Abrir painel de acompanhamento e sincronização dos grupos do WhatsApp"
+              >
+                <div className="w-7 h-7 rounded-full bg-white/20 flex items-center justify-center">
+                  <MessageSquare className="w-4 h-4 text-white" />
+                </div>
+                <span className="text-[11px] font-black uppercase tracking-wider text-white">
+                  GERENCIAR GRUPOS
+                </span>
+              </button>
+            </div>
+          ) : (
+            <div className="p-2.5 rounded-lg bg-[#181a20] border border-slate-800/80 text-[10px] text-slate-400 leading-relaxed">
+              {viewMode === 'MACRO' ? (
+                <span>💡 Clique na <b>Sequência Lead</b> para entrar e montar os disparos internos.</span>
+              ) : (
+                <span>💡 Clique em <b>Voltar</b> no topo para salvar e retornar ao fluxo principal.</span>
+              )}
+            </div>
+          )}
         </div>
 
         {/* CANVAS REACT FLOW */}
@@ -4480,6 +4689,207 @@ export default function AutomationCanvasPage() {
                 className="px-4 py-2 bg-slate-800 hover:bg-slate-700 text-slate-300 text-xs font-semibold rounded-xl transition-colors cursor-pointer"
               >
                 Fechar
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* Modal de Configuração de Ação / Edição de Grupos */}
+      {isEditarGrupoModalOpen && selectedNode && (
+        <div className="fixed inset-0 z-50 bg-black/80 backdrop-blur-sm flex items-center justify-center p-4">
+          <div className="bg-[#14161f] border border-slate-800 rounded-2xl w-full max-w-xl max-h-[90vh] flex flex-col shadow-2xl animate-in zoom-in-95 duration-150">
+            {/* Cabeçalho */}
+            <div className="p-5 border-b border-slate-800 flex items-center justify-between">
+              <div className="flex items-center gap-3">
+                <div className="w-10 h-10 rounded-xl bg-purple-600/20 border border-purple-500/30 flex items-center justify-center text-purple-400">
+                  <Settings className="w-5 h-5" />
+                </div>
+                <div>
+                  <h3 className="font-bold text-white text-base">Editar Grupos do WhatsApp</h3>
+                  <p className="text-xs text-slate-400">
+                    Defina a ação que será executada nos grupos e comunidades quando chegarem nesta etapa.
+                  </p>
+                </div>
+              </div>
+              <button
+                type="button"
+                onClick={() => setIsEditarGrupoModalOpen(false)}
+                className="p-1.5 text-slate-400 hover:text-white rounded-lg hover:bg-slate-800 transition-colors cursor-pointer"
+              >
+                <X className="w-5 h-5" />
+              </button>
+            </div>
+
+            {/* Conteúdo */}
+            <div className="p-6 overflow-y-auto space-y-5">
+              <div>
+                <label className="text-xs font-semibold text-slate-300 block mb-2">
+                  Selecione a Ação para os Grupos:
+                </label>
+                <div className="grid grid-cols-1 sm:grid-cols-2 gap-2.5">
+                  {/* Fechar Grupo */}
+                  <div
+                    onClick={() => setGroupActionType('close_group')}
+                    className={`p-3 rounded-xl border cursor-pointer transition-all ${
+                      groupActionType === 'close_group'
+                        ? 'bg-amber-950/40 border-amber-500 text-white shadow-md shadow-amber-950/40'
+                        : 'bg-[#181a24] border-slate-800 text-slate-300 hover:border-slate-700'
+                    }`}
+                  >
+                    <div className="flex items-center gap-2 mb-1">
+                      <span className="text-base">🔒</span>
+                      <span className="font-bold text-xs">Fechar Grupo</span>
+                    </div>
+                    <p className="text-[11px] text-slate-400">
+                      Apenas administradores podem enviar mensagens no grupo.
+                    </p>
+                  </div>
+
+                  {/* Abrir Grupo */}
+                  <div
+                    onClick={() => setGroupActionType('open_group')}
+                    className={`p-3 rounded-xl border cursor-pointer transition-all ${
+                      groupActionType === 'open_group'
+                        ? 'bg-emerald-950/40 border-emerald-500 text-white shadow-md shadow-emerald-950/40'
+                        : 'bg-[#181a24] border-slate-800 text-slate-300 hover:border-slate-700'
+                    }`}
+                  >
+                    <div className="flex items-center gap-2 mb-1">
+                      <span className="text-base">🔓</span>
+                      <span className="font-bold text-xs">Abrir Grupo</span>
+                    </div>
+                    <p className="text-[11px] text-slate-400">
+                      Todos os participantes podem enviar mensagens e tirar dúvidas.
+                    </p>
+                  </div>
+
+                  {/* Alterar Nome / Assunto */}
+                  <div
+                    onClick={() => setGroupActionType('update_subject')}
+                    className={`p-3 rounded-xl border cursor-pointer transition-all ${
+                      groupActionType === 'update_subject'
+                        ? 'bg-sky-950/40 border-sky-500 text-white shadow-md shadow-sky-950/40'
+                        : 'bg-[#181a24] border-slate-800 text-slate-300 hover:border-slate-700'
+                    }`}
+                  >
+                    <div className="flex items-center gap-2 mb-1">
+                      <span className="text-base">✏️</span>
+                      <span className="font-bold text-xs">Alterar Nome do Grupo</span>
+                    </div>
+                    <p className="text-[11px] text-slate-400">
+                      Altera o título/assunto exibido nos grupos sincronizados.
+                    </p>
+                  </div>
+
+                  {/* Alterar Descrição */}
+                  <div
+                    onClick={() => setGroupActionType('update_description')}
+                    className={`p-3 rounded-xl border cursor-pointer transition-all ${
+                      groupActionType === 'update_description'
+                        ? 'bg-purple-950/40 border-purple-500 text-white shadow-md shadow-purple-950/40'
+                        : 'bg-[#181a24] border-slate-800 text-slate-300 hover:border-slate-700'
+                    }`}
+                  >
+                    <div className="flex items-center gap-2 mb-1">
+                      <span className="text-base">📝</span>
+                      <span className="font-bold text-xs">Alterar Descrição</span>
+                    </div>
+                    <p className="text-[11px] text-slate-400">
+                      Atualiza o texto descritivo e links dos grupos.
+                    </p>
+                  </div>
+
+                  {/* Disparar Mensagem */}
+                  <div
+                    onClick={() => setGroupActionType('message')}
+                    className={`p-3 rounded-xl border cursor-pointer transition-all sm:col-span-2 ${
+                      groupActionType === 'message'
+                        ? 'bg-emerald-950/40 border-emerald-500 text-white shadow-md shadow-emerald-950/40'
+                        : 'bg-[#181a24] border-slate-800 text-slate-300 hover:border-slate-700'
+                    }`}
+                  >
+                    <div className="flex items-center gap-2 mb-1">
+                      <span className="text-base">💬</span>
+                      <span className="font-bold text-xs">Enviar Mensagem no Grupo</span>
+                    </div>
+                    <p className="text-[11px] text-slate-400">
+                      Dispara uma mensagem de texto com formatação para os grupos da automação.
+                    </p>
+                  </div>
+                </div>
+              </div>
+
+              {/* Campos condicionais baseados na Ação selecionada */}
+              {groupActionType === 'update_subject' && (
+                <div className="space-y-1.5 bg-[#181c25] p-4 rounded-xl border border-slate-800">
+                  <label className="text-xs font-semibold text-slate-300 block">Novo Nome / Assunto do Grupo:</label>
+                  <input
+                    type="text"
+                    value={groupActionSubject}
+                    onChange={(e) => setGroupActionSubject(e.target.value)}
+                    placeholder="Ex: 🔴 VAGAS ABERTAS | Grupo VIP"
+                    className="w-full p-2.5 bg-[#101217] border border-slate-700 rounded-lg text-xs text-white focus:outline-none focus:border-purple-500"
+                  />
+                  <p className="text-[11px] text-slate-400">
+                    O WhatsApp atualizará o nome de todos os grupos elegíveis vinculados a esta automação.
+                  </p>
+                </div>
+              )}
+
+              {groupActionType === 'update_description' && (
+                <div className="space-y-1.5 bg-[#181c25] p-4 rounded-xl border border-slate-800">
+                  <label className="text-xs font-semibold text-slate-300 block">Nova Descrição do Grupo:</label>
+                  <textarea
+                    rows={4}
+                    value={groupActionDescription}
+                    onChange={(e) => setGroupActionDescription(e.target.value)}
+                    placeholder="Ex: Acesse o link oficial com desconto exclusivo: https://..."
+                    className="w-full p-2.5 bg-[#101217] border border-slate-700 rounded-lg text-xs text-white focus:outline-none focus:border-purple-500 resize-none"
+                  />
+                </div>
+              )}
+
+              {groupActionType === 'message' && (
+                <div className="space-y-2 bg-[#181c25] p-4 rounded-xl border border-slate-800">
+                  <label className="text-xs font-semibold text-slate-300 block">Texto da Mensagem:</label>
+                  <textarea
+                    rows={5}
+                    value={groupActionMessage}
+                    onChange={(e) => setGroupActionMessage(e.target.value)}
+                    placeholder="Digite a mensagem que será enviada aos grupos..."
+                    className="w-full p-2.5 bg-[#101217] border border-slate-700 rounded-lg text-xs text-white focus:outline-none focus:border-purple-500 resize-none"
+                  />
+                </div>
+              )}
+
+              {(groupActionType === 'close_group' || groupActionType === 'open_group') && (
+                <div className="p-3.5 rounded-xl bg-[#101217] border border-slate-800 flex items-center gap-3">
+                  <Info className="w-5 h-5 text-purple-400 shrink-0" />
+                  <p className="text-xs text-slate-300 leading-relaxed">
+                    {groupActionType === 'close_group'
+                      ? 'Ao chegar neste nó, o robô enviará um comando para a Evolution API alterando as permissões do grupo para "Somente Administradores podem enviar mensagens".'
+                      : 'Ao chegar neste nó, o robô enviará um comando para a Evolution API liberando o grupo para que todos os membros conversem.'}
+                  </p>
+                </div>
+              )}
+            </div>
+
+            {/* Rodapé */}
+            <div className="p-4 border-t border-slate-800 flex items-center justify-end gap-2 bg-[#101217] rounded-b-2xl">
+              <button
+                type="button"
+                onClick={() => setIsEditarGrupoModalOpen(false)}
+                className="px-4 py-2 bg-slate-800 hover:bg-slate-700 text-slate-300 text-xs font-semibold rounded-xl transition-colors cursor-pointer"
+              >
+                Cancelar
+              </button>
+              <button
+                type="button"
+                onClick={handleSaveEditarGrupoConfig}
+                className="px-5 py-2 bg-purple-600 hover:bg-purple-500 text-white text-xs font-semibold rounded-xl transition-colors shadow-lg shadow-purple-600/20 cursor-pointer"
+              >
+                Salvar Configurações
               </button>
             </div>
           </div>

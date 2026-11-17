@@ -2081,6 +2081,86 @@ export class AutomationEngine {
       return; // A conclusão e avanço acontecem quando a mensagem é enviada pela fila
     }
 
+    // 2.2. Ação / Edição de Grupos (Abrir/Fechar mensagens, Alterar Nome/Assunto, Alterar Descrição)
+    if (nodeType === 'editar_grupo' || nodeType === 'group_action') {
+      const cfg = node.data?.config || {};
+      const actionType = cfg.groupActionType || 'message';
+
+      const instance = await prisma.whatsappInstance.findUnique({
+        where: { id: (automation as any).whatsappInstanceId || group.whatsappInstanceId },
+      });
+      const instanceName = instance?.instanceName;
+
+      try {
+        if (actionType === 'close_group' && instanceName) {
+          await whatsappGroupService.updateGroupSetting(instanceName, group.jid, 'announcement');
+        } else if (actionType === 'open_group' && instanceName) {
+          await whatsappGroupService.updateGroupSetting(instanceName, group.jid, 'not_announcement');
+        } else if (actionType === 'update_subject' && instanceName && cfg.newSubject) {
+          await whatsappGroupService.updateGroupSubject(instanceName, group.jid, cfg.newSubject);
+        } else if (actionType === 'update_description' && instanceName && cfg.newDescription) {
+          await whatsappGroupService.updateGroupDescription(instanceName, group.jid, cfg.newDescription);
+        }
+      } catch (err: any) {
+        console.error('[Automation Engine] Error executing group action:', err);
+      }
+
+      // Se houver mensagem configurada junto ou for do tipo message
+      const hasMessage = actionType === 'message' || Boolean(cfg.message || cfg.text || (cfg.blocks && cfg.blocks.length > 0));
+      if (hasMessage) {
+        await WhatsappQueueService.enqueue({
+          tenantId,
+          whatsappInstanceId: (automation as any).whatsappInstanceId || group.whatsappInstanceId,
+          phone: group.jid,
+          contactName: group.name,
+          recipientType: 'GROUP',
+          groupJid: group.jid,
+          groupEnrollmentId: enrollmentId,
+          nodeId,
+          automationId: automation.id,
+          text: cfg.message || cfg.text || cfg.caption || '',
+          messageType: cfg.mediaUrl ? (cfg.messageType || 'image') : 'text',
+          mediaUrl: cfg.mediaUrl,
+          mediaFileName: cfg.mediaFileName,
+          caption: cfg.caption,
+          blocks: cfg.blocks,
+          fixedDelaySeconds: (automation as any).delayBetweenGroups ?? 30,
+          useRandomDelay: (automation as any).useRandomDelay ?? true,
+          minDelaySeconds: (automation as any).minDelaySeconds ?? 20,
+          maxDelaySeconds: (automation as any).maxDelaySeconds ?? 45,
+        });
+        return; // A fila concluirá o passo e avançará para os nós seguintes
+      }
+
+      // Se não enviou mensagem (apenas configurou o grupo), registra log de sucesso
+      await prisma.automationGroupStepLog.create({
+        data: {
+          enrollmentId,
+          groupId: group.id,
+          tenantId,
+          nodeId,
+          nodeType: 'editar_grupo',
+          action: actionType,
+          status: 'SUCCESS',
+          details: JSON.stringify({ actionType, label: node.data?.label || 'Editar grupos' }),
+        },
+      });
+
+      const outgoingEdges = edges.filter((e) => e.source === nodeId);
+      if (outgoingEdges.length === 0) {
+        await prisma.automationGroupEnrollment.update({
+          where: { id: enrollmentId },
+          data: { status: 'COMPLETED', completedAt: new Date() },
+        });
+        return;
+      }
+
+      for (const edge of outgoingEdges) {
+        await this.executeGroupNode(enrollmentId, edge.target, tenantId);
+      }
+      return;
+    }
+
     // 3. Outros nós (Ações, Tags de Grupos, etc.)
     await prisma.automationGroupStepLog.create({
       data: {

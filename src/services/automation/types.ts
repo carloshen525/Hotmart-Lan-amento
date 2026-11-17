@@ -10,7 +10,9 @@ export type NodeType =
   | 'warmup'
   | 'whatsapp'
   | 'email'
-  | 'start';
+  | 'start'
+  | 'editar_grupo'
+  | 'group_action';
 
 export interface WorkflowNodeData {
   label: string;
