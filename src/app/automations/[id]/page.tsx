@@ -179,6 +179,10 @@ export default function AutomationCanvasPage() {
   // Tags disponíveis no expert
   const [availableTags, setAvailableTags] = useState<TagItem[]>([]);
   const [tagSearchQuery, setTagSearchQuery] = useState('');
+  const [entryTagSearch, setEntryTagSearch] = useState('');
+  const [isEntryTagDropdownOpen, setIsEntryTagDropdownOpen] = useState(false);
+  const [exclusionTagSearch, setExclusionTagSearch] = useState('');
+  const [isExclusionTagDropdownOpen, setIsExclusionTagDropdownOpen] = useState(false);
 
   // Seleção de nó e modais
   const [selectedNode, setSelectedNode] = useState<Node | null>(null);
@@ -1975,17 +1979,23 @@ export default function AutomationCanvasPage() {
     setCurrentEntrySelect('');
     setCurrentExclusionSelect('');
     setTagSearchQuery('');
+    setEntryTagSearch('');
+    setIsEntryTagDropdownOpen(false);
+    setExclusionTagSearch('');
+    setIsExclusionTagDropdownOpen(false);
     setIsCreateTagOpen(false);
     setIsTagModalOpen(true);
   };
 
   const handleAddEntryTag = (tagNameToAdd?: string) => {
-    const val = (tagNameToAdd || currentEntrySelect || '').trim();
+    const val = (tagNameToAdd || entryTagSearch || currentEntrySelect || '').trim();
     if (!val) return;
     if (!tagEntryTags.includes(val)) {
       setTagEntryTags((prev) => [...prev, val]);
     }
     setCurrentEntrySelect('');
+    setEntryTagSearch('');
+    setIsEntryTagDropdownOpen(false);
   };
 
   const handleRemoveEntryTag = (name: string) => {
@@ -1993,16 +2003,43 @@ export default function AutomationCanvasPage() {
   };
 
   const handleAddExclusionTag = (tagNameToAdd?: string) => {
-    const val = (tagNameToAdd || currentExclusionSelect || '').trim();
+    const val = (tagNameToAdd || exclusionTagSearch || currentExclusionSelect || '').trim();
     if (!val) return;
     if (!tagExclusionTags.includes(val)) {
       setTagExclusionTags((prev) => [...prev, val]);
     }
     setCurrentExclusionSelect('');
+    setExclusionTagSearch('');
+    setIsExclusionTagDropdownOpen(false);
   };
 
   const handleRemoveExclusionTag = (name: string) => {
     setTagExclusionTags((prev) => prev.filter((t) => t !== name));
+  };
+
+  const handleQuickCreateAndAddTag = async (name: string, isExclusion: boolean = false) => {
+    if (!name.trim()) return;
+    try {
+      const res = await fetch('/api/tags', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ name: name.trim(), color: isExclusion ? '#ef4444' : '#8b5cf6' }),
+      });
+      const data = await res.json();
+      if (res.ok && data.tag) {
+        setAvailableTags((prev) => {
+          if (prev.some((t) => t.id === data.tag.id)) return prev;
+          return [...prev, data.tag];
+        });
+        if (isExclusion) {
+          handleAddExclusionTag(data.tag.name);
+        } else {
+          handleAddEntryTag(data.tag.name);
+        }
+      }
+    } catch (err) {
+      console.error('Erro ao criar tag rápida:', err);
+    }
   };
 
   const handleSaveTagConfig = () => {
@@ -3156,9 +3193,9 @@ export default function AutomationCanvasPage() {
       {/* ============================================================ */}
       {isTagModalOpen && (
         <div className="fixed inset-0 bg-black/75 backdrop-blur-sm z-50 flex items-center justify-center p-4">
-          <div className="bg-[#12141a] rounded-2xl shadow-2xl border border-[#232734] max-w-lg w-full p-6 text-xs text-slate-200">
+          <div className="bg-[#12141a] rounded-2xl shadow-2xl border border-[#232734] max-w-xl w-full p-6 text-xs text-slate-200 box-border overflow-hidden flex flex-col max-h-[92vh]">
             {/* Header: ID - xxx | Configurar Tag + Ícones à direita */}
-            <div className="flex items-start justify-between pb-4 border-b border-slate-800/80">
+            <div className="flex items-start justify-between pb-4 border-b border-slate-800/80 shrink-0">
               <div>
                 <h3 className="font-bold text-white text-base tracking-wide">
                   ID - {selectedNode?.id?.replace(/[^0-9]/g, '').slice(-7) || '8719590'}
@@ -3202,325 +3239,567 @@ export default function AutomationCanvasPage() {
               </div>
             </div>
 
-            {/* Card: Agendar data e hora limite? */}
-            <div className="mt-4 p-3.5 rounded-xl bg-[#0e1726]/70 border border-cyan-900/40">
-              <div className="flex items-center justify-between">
-                <div className="flex items-center gap-3">
-                  <div className="w-8 h-8 rounded-full bg-cyan-950/80 border border-cyan-800/50 flex items-center justify-center text-cyan-400">
-                    <Clock className="w-4 h-4" />
+            {/* Conteúdo Rolável sem Vazamento de Margem */}
+            <div className="overflow-y-auto pr-1 flex-1 space-y-4 pt-3 custom-scrollbar">
+              {/* Card: Agendar data e hora limite? */}
+              <div className="p-3.5 rounded-xl bg-[#0e1726]/70 border border-cyan-900/40">
+                <div className="flex items-center justify-between">
+                  <div className="flex items-center gap-3">
+                    <div className="w-8 h-8 rounded-full bg-cyan-950/80 border border-cyan-800/50 flex items-center justify-center text-cyan-400">
+                      <Clock className="w-4 h-4" />
+                    </div>
+                    <div>
+                      <h4 className="font-semibold text-white text-xs">Agendar data e hora limite?</h4>
+                      <p className="text-slate-400 text-[11px] mt-0.5">
+                        A etapa vai liberar os leads até uma data e hora determinada.
+                      </p>
+                    </div>
                   </div>
-                  <div>
-                    <h4 className="font-semibold text-white text-xs">Agendar data e hora limite?</h4>
-                    <p className="text-slate-400 text-[11px] mt-0.5">
-                      A etapa vai liberar os leads até uma data e hora determinada.
-                    </p>
-                  </div>
+                  <label className="relative inline-flex items-center cursor-pointer">
+                    <input
+                      type="checkbox"
+                      checked={tagHasDateLimit}
+                      onChange={(e) => setTagHasDateLimit(e.target.checked)}
+                      className="sr-only peer"
+                    />
+                    <div className="w-11 h-6 bg-slate-800 peer-focus:outline-none rounded-full peer peer-checked:after:translate-x-full peer-checked:after:border-white after:content-[''] after:absolute after:top-[2px] after:left-[2px] after:bg-white after:rounded-full after:h-5 after:w-5 after:transition-all peer-checked:bg-cyan-600"></div>
+                  </label>
                 </div>
-                <label className="relative inline-flex items-center cursor-pointer">
-                  <input
-                    type="checkbox"
-                    checked={tagHasDateLimit}
-                    onChange={(e) => setTagHasDateLimit(e.target.checked)}
-                    className="sr-only peer"
-                  />
-                  <div className="w-11 h-6 bg-slate-800 peer-focus:outline-none rounded-full peer peer-checked:after:translate-x-full peer-checked:after:border-white after:content-[''] after:absolute after:top-[2px] after:left-[2px] after:bg-white after:rounded-full after:h-5 after:w-5 after:transition-all peer-checked:bg-cyan-600"></div>
-                </label>
+
+                {tagHasDateLimit && (
+                  <div className="mt-3 pt-3 border-t border-cyan-900/40">
+                    <label className="text-[11px] text-slate-300 block mb-1">Data e hora limite de liberação:</label>
+                    <input
+                      type="datetime-local"
+                      value={tagDateLimit}
+                      onChange={(e) => setTagDateLimit(e.target.value)}
+                      className="w-full p-2 bg-[#101217] border border-cyan-900/50 rounded-lg text-xs text-white focus:outline-none focus:border-cyan-500"
+                    />
+                  </div>
+                )}
               </div>
 
-              {tagHasDateLimit && (
-                <div className="mt-3 pt-3 border-t border-cyan-900/40">
-                  <label className="text-[11px] text-slate-300 block mb-1">Data e hora limite de liberação:</label>
-                  <input
-                    type="datetime-local"
-                    value={tagDateLimit}
-                    onChange={(e) => setTagDateLimit(e.target.value)}
-                    className="w-full p-2 bg-[#101217] border border-cyan-900/50 rounded-lg text-xs text-white focus:outline-none focus:border-cyan-500"
-                  />
+              {/* Seção 1: Tag(s) de entrada */}
+              <div className="space-y-1.5 w-full min-w-0 box-border">
+                <div className="flex items-center justify-between">
+                  <h4 className="font-bold text-white text-xs">
+                    {targetType === 'GROUP'
+                      ? 'Tag(s) de entrada dos grupos e comunidades'
+                      : 'Tag(s) de entrada dos leads'}
+                  </h4>
+                  {targetType === 'GROUP' && (
+                    <span className="text-[10px] font-semibold text-emerald-400 bg-emerald-950/60 border border-emerald-800/60 px-2 py-0.5 rounded-full">
+                      👥 Automação de Grupos
+                    </span>
+                  )}
                 </div>
-              )}
-            </div>
-
-            {/* Seção 1: Tag(s) de entrada */}
-            <div className="mt-5 space-y-1.5">
-              <div className="flex items-center justify-between">
-                <h4 className="font-bold text-white text-xs">
+                <p className="text-slate-400 text-[11px]">
                   {targetType === 'GROUP'
-                    ? 'Tag(s) de entrada dos grupos e comunidades'
-                    : 'Tag(s) de entrada dos leads'}
-                </h4>
-                {targetType === 'GROUP' && (
-                  <span className="text-[10px] font-semibold text-emerald-400 bg-emerald-950/60 border border-emerald-800/60 px-2 py-0.5 rounded-full">
-                    👥 Automação de Grupos
-                  </span>
-                )}
-              </div>
-              <p className="text-slate-400 text-[11px]">
-                {targetType === 'GROUP'
-                  ? 'Os grupos e comunidades que possuírem as tags selecionadas entrarão nesta automação.'
-                  : 'Para o lead entrar nesta tag, o mesmo deve possuir TODAS as tags abaixo, simultaneamente.'}
-              </p>
+                    ? 'Os grupos e comunidades que possuírem as tags selecionadas entrarão nesta automação.'
+                    : 'Para o lead entrar nesta tag, o mesmo deve possuir TODAS as tags abaixo, simultaneamente.'}
+                </p>
 
-              {/* Campo de Pesquisa em Tempo Real */}
-              <div className="relative pt-1">
-                <Search className="w-4 h-4 absolute left-3 top-1/2 -translate-y-1/2 text-slate-400 pointer-events-none" />
-                <input
-                  type="text"
-                  placeholder={
-                    targetType === 'GROUP'
-                      ? 'Pesquisar tag de grupo ou comunidade...'
-                      : 'Pesquisar tag pelo nome...'
-                  }
-                  value={tagSearchQuery}
-                  onChange={(e) => setTagSearchQuery(e.target.value)}
-                  className="w-full pl-9 pr-8 py-2 bg-[#101217] border border-[#2b2b3b] hover:border-slate-600 rounded-xl text-xs text-white placeholder-slate-500 focus:outline-none focus:border-purple-500 transition-colors"
-                />
-                {tagSearchQuery && (
-                  <button
-                    type="button"
-                    onClick={() => setTagSearchQuery('')}
-                    className="absolute right-2.5 top-1/2 -translate-y-1/2 text-slate-400 hover:text-white p-0.5"
-                    title="Limpar pesquisa"
-                  >
-                    <X className="w-3.5 h-3.5" />
-                  </button>
-                )}
-              </div>
-
-              {/* Sugestões de Tags Filtradas / Chips Rápidos para Clicar */}
-              {availableTags.length > 0 && (
-                <div className="flex flex-wrap gap-1.5 pt-1 max-h-28 overflow-y-auto custom-scrollbar">
-                  {availableTags
-                    .filter((t) => !tagSearchQuery || t.name.toLowerCase().includes(tagSearchQuery.toLowerCase()))
-                    .map((t) => {
-                      const isSelected = tagEntryTags.includes(t.name);
-                      const unitCount = targetType === 'GROUP' ? (t._count?.groups ?? 0) : (t._count?.contacts ?? 0);
-                      const unitLabel = targetType === 'GROUP' ? (unitCount === 1 ? 'grupo' : 'grupos') : (unitCount === 1 ? 'lead' : 'leads');
-                      return (
+                {/* Combobox Pesquisável de Tag de Entrada */}
+                <div className="relative w-full min-w-0 box-border pt-1">
+                  <div className="flex items-center gap-2 w-full min-w-0">
+                    <div className="relative flex-1 min-w-0">
+                      <Search className="w-4 h-4 absolute left-3 top-1/2 -translate-y-1/2 text-purple-400 pointer-events-none" />
+                      <input
+                        type="text"
+                        placeholder={
+                          targetType === 'GROUP'
+                            ? 'Pesquisar tag de grupo ou comunidade...'
+                            : 'Pesquisar tag pelo nome...'
+                        }
+                        value={entryTagSearch}
+                        onFocus={() => setIsEntryTagDropdownOpen(true)}
+                        onChange={(e) => {
+                          setEntryTagSearch(e.target.value);
+                          setIsEntryTagDropdownOpen(true);
+                        }}
+                        onKeyDown={(e) => {
+                          if (e.key === 'Enter') {
+                            e.preventDefault();
+                            const filtered = availableTags.filter(
+                              (t) =>
+                                !entryTagSearch ||
+                                t.name.toLowerCase().includes(entryTagSearch.toLowerCase())
+                            );
+                            if (filtered.length > 0) {
+                              handleAddEntryTag(filtered[0].name);
+                            } else if (entryTagSearch.trim()) {
+                              handleQuickCreateAndAddTag(entryTagSearch, false);
+                            }
+                          } else if (e.key === 'Escape') {
+                            setIsEntryTagDropdownOpen(false);
+                          }
+                        }}
+                        className="w-full pl-9 pr-8 py-2.5 bg-[#101217] border border-[#2b2b3b] hover:border-purple-500/60 focus:border-purple-500 rounded-xl text-xs text-white placeholder-slate-500 focus:outline-none transition-all shadow-inner box-border"
+                      />
+                      {entryTagSearch ? (
                         <button
-                          key={t.id}
                           type="button"
                           onClick={() => {
-                            if (isSelected) {
-                              handleRemoveEntryTag(t.name);
-                            } else {
-                              handleAddEntryTag(t.name);
-                            }
+                            setEntryTagSearch('');
+                            setIsEntryTagDropdownOpen(false);
                           }}
-                          className={`inline-flex items-center gap-1.5 px-2.5 py-1 rounded-lg text-xs font-semibold transition-all border ${
-                            isSelected
-                              ? 'bg-purple-900/60 border-purple-500 text-white shadow-sm'
-                              : 'bg-[#14161f] border-slate-700/70 text-slate-300 hover:border-purple-400 hover:text-white'
-                          }`}
+                          className="absolute right-2.5 top-1/2 -translate-y-1/2 text-slate-400 hover:text-white p-0.5 cursor-pointer"
+                          title="Limpar pesquisa"
                         >
-                          <span
-                            className="w-2 h-2 rounded-full"
-                            style={{ backgroundColor: t.color || '#a855f7' }}
-                          />
-                          <span>{t.name}</span>
-                          <span className="text-[10px] text-slate-400 font-normal">
-                            ({unitCount} {unitLabel})
-                          </span>
-                          {isSelected && <Check className="w-3 h-3 text-purple-300 ml-0.5" />}
+                          <X className="w-3.5 h-3.5" />
                         </button>
-                      );
-                    })}
-                </div>
-              )}
-
-              <div className="flex items-center gap-2 pt-1">
-                <select
-                  value={currentEntrySelect}
-                  onChange={(e) => setCurrentEntrySelect(e.target.value)}
-                  className="flex-1 bg-[#101217] border border-[#2b2b3b] hover:border-slate-600 rounded-xl px-3 py-2.5 text-xs text-white focus:outline-none focus:border-purple-500 transition-colors"
-                >
-                  <option value="" disabled>
-                    {targetType === 'GROUP'
-                      ? 'Selecione uma tag de grupo para adicionar...'
-                      : 'Selecione uma tag para adicionar...'}
-                  </option>
-                  {availableTags
-                    .filter((t) => !tagSearchQuery || t.name.toLowerCase().includes(tagSearchQuery.toLowerCase()))
-                    .map((t) => (
-                      <option key={t.id} value={t.name}>
-                        {t.name} (
-                        {targetType === 'GROUP'
-                          ? `${t._count?.groups ?? 0} grupos`
-                          : `${t._count?.contacts ?? 0} leads`}
-                        )
-                      </option>
-                    ))}
-                </select>
-
-                <button
-                  type="button"
-                  onClick={() => handleAddEntryTag()}
-                  disabled={!currentEntrySelect}
-                  className="w-10 h-10 border border-[#2b2b3b] hover:border-purple-500 hover:bg-[#1a1c24] rounded-xl flex items-center justify-center text-slate-200 hover:text-white text-lg font-bold bg-[#101217] transition-all disabled:opacity-40 disabled:cursor-not-allowed"
-                >
-                  +
-                </button>
-              </div>
-
-              {/* Tags de entrada adicionadas */}
-              {tagEntryTags.length > 0 && (
-                <div className="flex flex-wrap gap-1.5 pt-2">
-                  {tagEntryTags.map((name) => {
-                    const tagObj = availableTags.find((t) => t.name === name);
-                    return (
-                      <span
-                        key={name}
-                        className="inline-flex items-center gap-1.5 px-2.5 py-1 rounded-lg bg-[#181c25] text-purple-200 border border-purple-800/60 text-xs font-semibold shadow-sm"
-                      >
-                        <span
-                          className="w-2 h-2 rounded-full"
-                          style={{ backgroundColor: tagObj?.color || '#a855f7' }}
-                        />
-                        <span>{name}</span>
+                      ) : (
                         <button
                           type="button"
-                          onClick={() => handleRemoveEntryTag(name)}
-                          className="text-slate-400 hover:text-red-400 transition-colors ml-1"
+                          onClick={() => setIsEntryTagDropdownOpen(!isEntryTagDropdownOpen)}
+                          className="absolute right-2.5 top-1/2 -translate-y-1/2 text-slate-400 hover:text-white p-0.5 cursor-pointer"
+                          title="Ver tags disponíveis"
+                        >
+                          <ChevronDown
+                            className={`w-3.5 h-3.5 transition-transform ${
+                              isEntryTagDropdownOpen ? 'rotate-180 text-purple-400' : ''
+                            }`}
+                          />
+                        </button>
+                      )}
+                    </div>
+
+                    <button
+                      type="button"
+                      onClick={() => {
+                        if (entryTagSearch.trim()) {
+                          const match = availableTags.find(
+                            (t) => t.name.toLowerCase() === entryTagSearch.trim().toLowerCase()
+                          );
+                          if (match) {
+                            handleAddEntryTag(match.name);
+                          } else {
+                            handleQuickCreateAndAddTag(entryTagSearch, false);
+                          }
+                        } else {
+                          setIsEntryTagDropdownOpen(!isEntryTagDropdownOpen);
+                        }
+                      }}
+                      className="w-10 h-10 shrink-0 border border-purple-500/50 hover:border-purple-400 bg-purple-950/40 hover:bg-purple-900/60 rounded-xl flex items-center justify-center text-purple-200 hover:text-white text-lg font-bold transition-all shadow-xs cursor-pointer"
+                      title="Adicionar tag"
+                    >
+                      +
+                    </button>
+                  </div>
+
+                  {/* Dropdown Flutuante de Tags Filtradas */}
+                  {isEntryTagDropdownOpen && (
+                    <>
+                      <div
+                        className="fixed inset-0 z-20"
+                        onClick={() => setIsEntryTagDropdownOpen(false)}
+                      />
+                      <div className="absolute left-0 right-0 top-full mt-1.5 z-30 bg-[#101217] border border-purple-500/60 rounded-xl shadow-2xl max-h-56 overflow-y-auto custom-scrollbar p-1.5 space-y-1 animate-in fade-in-50 duration-150 box-border">
+                        {(() => {
+                          const filtered = availableTags.filter(
+                            (t) =>
+                              !entryTagSearch ||
+                              t.name.toLowerCase().includes(entryTagSearch.toLowerCase())
+                          );
+
+                          if (filtered.length === 0) {
+                            return (
+                              <div className="p-3 text-center space-y-2">
+                                <p className="text-slate-400 text-xs">
+                                  Nenhuma tag encontrada para &quot;{entryTagSearch}&quot;
+                                </p>
+                                {entryTagSearch.trim() && (
+                                  <button
+                                    type="button"
+                                    onClick={() => handleQuickCreateAndAddTag(entryTagSearch, false)}
+                                    className="px-3 py-1.5 bg-purple-600 hover:bg-purple-500 text-white rounded-lg text-xs font-semibold inline-flex items-center gap-1.5 transition-colors cursor-pointer"
+                                  >
+                                    <Plus className="w-3.5 h-3.5" />
+                                    <span>Criar e vincular &quot;{entryTagSearch.trim()}&quot;</span>
+                                  </button>
+                                )}
+                              </div>
+                            );
+                          }
+
+                          return filtered.map((t) => {
+                            const isSelected = tagEntryTags.includes(t.name);
+                            const unitCount =
+                              targetType === 'GROUP'
+                                ? (t._count?.groups ?? 0)
+                                : (t._count?.contacts ?? 0);
+                            const unitLabel =
+                              targetType === 'GROUP'
+                                ? unitCount === 1
+                                  ? 'grupo'
+                                  : 'grupos'
+                                : unitCount === 1
+                                ? 'lead'
+                                : 'leads';
+
+                            return (
+                              <button
+                                key={t.id}
+                                type="button"
+                                onClick={() => {
+                                  if (isSelected) {
+                                    handleRemoveEntryTag(t.name);
+                                  } else {
+                                    handleAddEntryTag(t.name);
+                                  }
+                                }}
+                                className={`w-full flex items-center justify-between px-3 py-2 rounded-lg text-xs transition-colors cursor-pointer text-left ${
+                                  isSelected
+                                    ? 'bg-purple-950/70 border border-purple-500/60 text-white'
+                                    : 'hover:bg-[#1a1d26] text-slate-200'
+                                }`}
+                              >
+                                <div className="flex items-center gap-2 min-w-0">
+                                  <span
+                                    className="w-2.5 h-2.5 rounded-full shrink-0"
+                                    style={{ backgroundColor: t.color || '#a855f7' }}
+                                  />
+                                  <span className="font-semibold truncate">{t.name}</span>
+                                </div>
+                                <div className="flex items-center gap-2 shrink-0 ml-2">
+                                  <span className="text-[11px] text-slate-400 font-mono">
+                                    {unitCount} {unitLabel}
+                                  </span>
+                                  {isSelected && (
+                                    <span className="text-[10px] font-bold text-purple-300 bg-purple-900/60 px-1.5 py-0.5 rounded border border-purple-500/50">
+                                      Adicionada
+                                    </span>
+                                  )}
+                                </div>
+                              </button>
+                            );
+                          });
+                        })()}
+                      </div>
+                    </>
+                  )}
+                </div>
+
+                {/* Tags de entrada adicionadas (Badges) */}
+                {tagEntryTags.length > 0 && (
+                  <div className="flex flex-wrap gap-1.5 pt-2 w-full min-w-0">
+                    {tagEntryTags.map((name) => {
+                      const tagObj = availableTags.find((t) => t.name === name);
+                      const unitCount = tagObj
+                        ? targetType === 'GROUP'
+                          ? (tagObj._count?.groups ?? 0)
+                          : (tagObj._count?.contacts ?? 0)
+                        : null;
+                      const unitLabel = targetType === 'GROUP' ? 'grupos' : 'leads';
+
+                      return (
+                        <span
+                          key={name}
+                          className="inline-flex items-center gap-1.5 px-2.5 py-1 rounded-lg bg-purple-950/40 text-purple-200 border border-purple-700/60 text-xs font-semibold shadow-xs"
+                        >
+                          <span
+                            className="w-2 h-2 rounded-full shrink-0"
+                            style={{ backgroundColor: tagObj?.color || '#a855f7' }}
+                          />
+                          <span className="truncate max-w-[200px]">{name}</span>
+                          {unitCount !== null && (
+                            <span className="text-[10px] text-purple-300/70 font-normal">
+                              ({unitCount} {unitLabel})
+                            </span>
+                          )}
+                          <button
+                            type="button"
+                            onClick={() => handleRemoveEntryTag(name)}
+                            className="text-slate-400 hover:text-red-400 transition-colors ml-0.5 cursor-pointer p-0.5"
+                            title={`Remover tag ${name}`}
+                          >
+                            <X className="w-3.5 h-3.5" />
+                          </button>
+                        </span>
+                      );
+                    })}
+                  </div>
+                )}
+              </div>
+
+              {/* Seção 2: Tag(s) que impossibilitam a entrada */}
+              <div className="space-y-1.5 w-full min-w-0 box-border pt-1">
+                <h4 className="font-bold text-white text-xs">
+                  {targetType === 'GROUP'
+                    ? 'Tag(s) que impossibilitam a entrada dos grupos'
+                    : 'Tag(s) que impossibilitam a entrada dos leads'}
+                </h4>
+                <p className="text-slate-400 text-[11px]">
+                  {targetType === 'GROUP'
+                    ? 'Se o grupo possuir as tags abaixo, ele não entrará nesta etapa.'
+                    : 'Se o lead possuir TODAS as tags abaixo, ele não entrará nesta etapa.'}
+                </p>
+
+                {/* Combobox Pesquisável de Tag de Bloqueio */}
+                <div className="relative w-full min-w-0 box-border pt-1">
+                  <div className="flex items-center gap-2 w-full min-w-0">
+                    <div className="relative flex-1 min-w-0">
+                      <Search className="w-4 h-4 absolute left-3 top-1/2 -translate-y-1/2 text-rose-400 pointer-events-none" />
+                      <input
+                        type="text"
+                        placeholder="Pesquisar tag de bloqueio pelo nome..."
+                        value={exclusionTagSearch}
+                        onFocus={() => setIsExclusionTagDropdownOpen(true)}
+                        onChange={(e) => {
+                          setExclusionTagSearch(e.target.value);
+                          setIsExclusionTagDropdownOpen(true);
+                        }}
+                        onKeyDown={(e) => {
+                          if (e.key === 'Enter') {
+                            e.preventDefault();
+                            const filtered = availableTags.filter(
+                              (t) =>
+                                !exclusionTagSearch ||
+                                t.name.toLowerCase().includes(exclusionTagSearch.toLowerCase())
+                            );
+                            if (filtered.length > 0) {
+                              handleAddExclusionTag(filtered[0].name);
+                            } else if (exclusionTagSearch.trim()) {
+                              handleQuickCreateAndAddTag(exclusionTagSearch, true);
+                            }
+                          } else if (e.key === 'Escape') {
+                            setIsExclusionTagDropdownOpen(false);
+                          }
+                        }}
+                        className="w-full pl-9 pr-8 py-2.5 bg-[#101217] border border-[#2b2b3b] hover:border-rose-500/60 focus:border-rose-500 rounded-xl text-xs text-white placeholder-slate-500 focus:outline-none transition-all shadow-inner box-border"
+                      />
+                      {exclusionTagSearch ? (
+                        <button
+                          type="button"
+                          onClick={() => {
+                            setExclusionTagSearch('');
+                            setIsExclusionTagDropdownOpen(false);
+                          }}
+                          className="absolute right-2.5 top-1/2 -translate-y-1/2 text-slate-400 hover:text-white p-0.5 cursor-pointer"
+                          title="Limpar pesquisa"
+                        >
+                          <X className="w-3.5 h-3.5" />
+                        </button>
+                      ) : (
+                        <button
+                          type="button"
+                          onClick={() => setIsExclusionTagDropdownOpen(!isExclusionTagDropdownOpen)}
+                          className="absolute right-2.5 top-1/2 -translate-y-1/2 text-slate-400 hover:text-white p-0.5 cursor-pointer"
+                          title="Ver tags disponíveis"
+                        >
+                          <ChevronDown
+                            className={`w-3.5 h-3.5 transition-transform ${
+                              isExclusionTagDropdownOpen ? 'rotate-180 text-rose-400' : ''
+                            }`}
+                          />
+                        </button>
+                      )}
+                    </div>
+
+                    <button
+                      type="button"
+                      onClick={() => {
+                        if (exclusionTagSearch.trim()) {
+                          const match = availableTags.find(
+                            (t) => t.name.toLowerCase() === exclusionTagSearch.trim().toLowerCase()
+                          );
+                          if (match) {
+                            handleAddExclusionTag(match.name);
+                          } else {
+                            handleQuickCreateAndAddTag(exclusionTagSearch, true);
+                          }
+                        } else {
+                          setIsExclusionTagDropdownOpen(!isExclusionTagDropdownOpen);
+                        }
+                      }}
+                      className="w-10 h-10 shrink-0 border border-rose-500/50 hover:border-rose-400 bg-rose-950/40 hover:bg-rose-900/60 rounded-xl flex items-center justify-center text-rose-200 hover:text-white text-lg font-bold transition-all shadow-xs cursor-pointer"
+                      title="Adicionar tag de bloqueio"
+                    >
+                      +
+                    </button>
+                  </div>
+
+                  {/* Dropdown Flutuante de Tags de Bloqueio */}
+                  {isExclusionTagDropdownOpen && (
+                    <>
+                      <div
+                        className="fixed inset-0 z-20"
+                        onClick={() => setIsExclusionTagDropdownOpen(false)}
+                      />
+                      <div className="absolute left-0 right-0 top-full mt-1.5 z-30 bg-[#101217] border border-rose-500/60 rounded-xl shadow-2xl max-h-56 overflow-y-auto custom-scrollbar p-1.5 space-y-1 animate-in fade-in-50 duration-150 box-border">
+                        {(() => {
+                          const filtered = availableTags.filter(
+                            (t) =>
+                              !exclusionTagSearch ||
+                              t.name.toLowerCase().includes(exclusionTagSearch.toLowerCase())
+                          );
+
+                          if (filtered.length === 0) {
+                            return (
+                              <div className="p-3 text-center space-y-2">
+                                <p className="text-slate-400 text-xs">
+                                  Nenhuma tag encontrada para &quot;{exclusionTagSearch}&quot;
+                                </p>
+                                {exclusionTagSearch.trim() && (
+                                  <button
+                                    type="button"
+                                    onClick={() => handleQuickCreateAndAddTag(exclusionTagSearch, true)}
+                                    className="px-3 py-1.5 bg-rose-600 hover:bg-rose-500 text-white rounded-lg text-xs font-semibold inline-flex items-center gap-1.5 transition-colors cursor-pointer"
+                                  >
+                                    <Plus className="w-3.5 h-3.5" />
+                                    <span>Criar e bloquear &quot;{exclusionTagSearch.trim()}&quot;</span>
+                                  </button>
+                                )}
+                              </div>
+                            );
+                          }
+
+                          return filtered.map((t) => {
+                            const isSelected = tagExclusionTags.includes(t.name);
+                            const unitCount =
+                              targetType === 'GROUP'
+                                ? (t._count?.groups ?? 0)
+                                : (t._count?.contacts ?? 0);
+                            const unitLabel =
+                              targetType === 'GROUP'
+                                ? unitCount === 1
+                                  ? 'grupo'
+                                  : 'grupos'
+                                : unitCount === 1
+                                ? 'lead'
+                                : 'leads';
+
+                            return (
+                              <button
+                                key={t.id}
+                                type="button"
+                                onClick={() => {
+                                  if (isSelected) {
+                                    handleRemoveExclusionTag(t.name);
+                                  } else {
+                                    handleAddExclusionTag(t.name);
+                                  }
+                                }}
+                                className={`w-full flex items-center justify-between px-3 py-2 rounded-lg text-xs transition-colors cursor-pointer text-left ${
+                                  isSelected
+                                    ? 'bg-rose-950/70 border border-rose-500/60 text-white'
+                                    : 'hover:bg-[#1a1d26] text-slate-200'
+                                }`}
+                              >
+                                <div className="flex items-center gap-2 min-w-0">
+                                  <span
+                                    className="w-2.5 h-2.5 rounded-full shrink-0"
+                                    style={{ backgroundColor: t.color || '#ef4444' }}
+                                  />
+                                  <span className="font-semibold truncate">{t.name}</span>
+                                </div>
+                                <div className="flex items-center gap-2 shrink-0 ml-2">
+                                  <span className="text-[11px] text-slate-400 font-mono">
+                                    {unitCount} {unitLabel}
+                                  </span>
+                                  {isSelected && (
+                                    <span className="text-[10px] font-bold text-rose-300 bg-rose-900/60 px-1.5 py-0.5 rounded border border-rose-500/50">
+                                      Bloqueada
+                                    </span>
+                                  )}
+                                </div>
+                              </button>
+                            );
+                          });
+                        })()}
+                      </div>
+                    </>
+                  )}
+                </div>
+
+                {/* Tags de exclusão adicionadas (Badges) */}
+                {tagExclusionTags.length > 0 && (
+                  <div className="flex flex-wrap gap-1.5 pt-2 w-full min-w-0">
+                    {tagExclusionTags.map((name) => (
+                      <span
+                        key={name}
+                        className="inline-flex items-center gap-1.5 px-2.5 py-1 rounded-lg bg-rose-950/40 text-rose-200 border border-rose-800/60 text-xs font-semibold shadow-xs"
+                      >
+                        <span className="truncate max-w-[200px]">Bloquear se possuir: {name}</span>
+                        <button
+                          type="button"
+                          onClick={() => handleRemoveExclusionTag(name)}
+                          className="text-slate-400 hover:text-white transition-colors ml-1 cursor-pointer p-0.5"
+                          title={`Remover bloqueio ${name}`}
                         >
                           <X className="w-3.5 h-3.5" />
                         </button>
                       </span>
-                    );
-                  })}
-                </div>
-              )}
-            </div>
-
-            {/* Seção 2: Tag(s) que impossibilitam a entrada */}
-            <div className="mt-5 space-y-1.5">
-              <h4 className="font-bold text-white text-xs">
-                {targetType === 'GROUP'
-                  ? 'Tag(s) que impossibilitam a entrada dos grupos'
-                  : 'Tag(s) que impossibilitam a entrada dos leads'}
-              </h4>
-              <p className="text-slate-400 text-[11px]">
-                {targetType === 'GROUP'
-                  ? 'Se o grupo possuir as tags abaixo, ele não entrará nesta etapa.'
-                  : 'Se o lead possuir TODAS as tags abaixo, ele não entrará nesta etapa.'}
-              </p>
-
-              <div className="flex items-center gap-2 pt-1">
-                <select
-                  value={currentExclusionSelect}
-                  onChange={(e) => setCurrentExclusionSelect(e.target.value)}
-                  className="flex-1 bg-[#101217] border border-[#2b2b3b] hover:border-slate-600 rounded-xl px-3 py-2.5 text-xs text-white focus:outline-none focus:border-red-500 transition-colors"
-                >
-                  <option value="" disabled>
-                    Selecione uma tag que impossibilita a entrada...
-                  </option>
-                  {availableTags
-                    .filter((t) => !tagSearchQuery || t.name.toLowerCase().includes(tagSearchQuery.toLowerCase()))
-                    .map((t) => (
-                      <option key={t.id} value={t.name}>
-                        {t.name} (
-                        {targetType === 'GROUP'
-                          ? `${t._count?.groups ?? 0} grupos`
-                          : `${t._count?.contacts ?? 0} leads`}
-                        )
-                      </option>
                     ))}
-                </select>
-
-                <button
-                  type="button"
-                  onClick={() => handleAddExclusionTag()}
-                  disabled={!currentExclusionSelect}
-                  className="w-10 h-10 border border-[#2b2b3b] hover:border-red-500 hover:bg-[#1a1c24] rounded-xl flex items-center justify-center text-slate-200 hover:text-white text-lg font-bold bg-[#101217] transition-all disabled:opacity-40 disabled:cursor-not-allowed"
-                >
-                  +
-                </button>
+                  </div>
+                )}
               </div>
 
-              {/* Tags de exclusão adicionadas */}
-              {tagExclusionTags.length > 0 && (
-                <div className="flex flex-wrap gap-1.5 pt-2">
-                  {tagExclusionTags.map((name) => (
-                    <span
-                      key={name}
-                      className="inline-flex items-center gap-1.5 px-2.5 py-1 rounded-lg bg-red-950/40 text-red-200 border border-red-800/60 text-xs font-semibold shadow-sm"
-                    >
-                      <span>Bloquear se possuir: {name}</span>
-                      <button
-                        type="button"
-                        onClick={() => handleRemoveExclusionTag(name)}
-                        className="text-slate-400 hover:text-white transition-colors ml-1"
-                      >
-                        <X className="w-3.5 h-3.5" />
-                      </button>
-                    </span>
-                  ))}
-                </div>
-              )}
+              {/* Criar Nova Tag Rápida */}
+              <div className="pt-2">
+                {!isCreateTagOpen ? (
+                  <button
+                    type="button"
+                    onClick={() => setIsCreateTagOpen(true)}
+                    className="w-full py-2.5 border border-dashed border-slate-700 hover:border-purple-500 text-purple-300 rounded-xl text-xs font-semibold flex items-center justify-center gap-1.5 transition-colors cursor-pointer"
+                  >
+                    <Plus className="w-3.5 h-3.5" />
+                    <span>Cadastrar Nova Tag no Sistema</span>
+                  </button>
+                ) : (
+                  <form
+                    onSubmit={handleQuickCreateTag}
+                    className="p-3 rounded-xl bg-[#101217] border border-slate-800 space-y-2.5"
+                  >
+                    <span className="text-[11px] font-bold text-slate-300 block">Criar Nova Tag:</span>
+                    <input
+                      type="text"
+                      required
+                      value={newTagName}
+                      onChange={(e) => setNewTagName(e.target.value)}
+                      placeholder="Nome da tag (ex: Boleto Gerado, Cliente VIP)"
+                      className="w-full p-2 bg-[#181c25] border border-slate-700 rounded-lg text-xs text-white focus:outline-none focus:border-purple-500"
+                    />
+                    <div className="flex items-center justify-between">
+                      <div className="flex items-center gap-1.5">
+                        {['#8b5cf6', '#10b981', '#f59e0b', '#ef4444', '#3b82f6'].map((c) => (
+                          <div
+                            key={c}
+                            onClick={() => setNewTagColor(c)}
+                            style={{ backgroundColor: c }}
+                            className={`w-5 h-5 rounded-full cursor-pointer transition-transform ${
+                              newTagColor === c ? 'scale-125 ring-2 ring-white' : ''
+                            }`}
+                          />
+                        ))}
+                      </div>
+                      <div className="flex items-center gap-1.5">
+                        <button
+                          type="button"
+                          onClick={() => setIsCreateTagOpen(false)}
+                          className="px-2.5 py-1 text-slate-400 hover:text-white cursor-pointer"
+                        >
+                          Cancelar
+                        </button>
+                        <button
+                          type="submit"
+                          className="px-3 py-1 bg-purple-600 hover:bg-purple-500 text-white rounded-lg font-semibold cursor-pointer"
+                        >
+                          Salvar e Selecionar
+                        </button>
+                      </div>
+                    </div>
+                  </form>
+                )}
+              </div>
             </div>
 
-            {/* Criar Nova Tag Rápida */}
-            <div className="mt-4 pt-3 border-t border-slate-800/70">
-              {!isCreateTagOpen ? (
-                <button
-                  type="button"
-                  onClick={() => setIsCreateTagOpen(true)}
-                  className="w-full py-2 border border-dashed border-slate-700 hover:border-purple-500 text-purple-300 rounded-xl text-xs font-semibold flex items-center justify-center gap-1.5 transition-colors"
-                >
-                  <Plus className="w-3.5 h-3.5" />
-                  <span>Cadastrar Nova Tag no Sistema</span>
-                </button>
-              ) : (
-                <form
-                  onSubmit={handleQuickCreateTag}
-                  className="p-3 rounded-xl bg-[#101217] border border-slate-800 space-y-2.5"
-                >
-                  <span className="text-[11px] font-bold text-slate-300 block">Criar Nova Tag:</span>
-                  <input
-                    type="text"
-                    required
-                    value={newTagName}
-                    onChange={(e) => setNewTagName(e.target.value)}
-                    placeholder="Nome da tag (ex: Boleto Gerado, Cliente VIP)"
-                    className="w-full p-2 bg-[#181c25] border border-slate-700 rounded-lg text-xs text-white focus:outline-none focus:border-purple-500"
-                  />
-                  <div className="flex items-center justify-between">
-                    <div className="flex items-center gap-1.5">
-                      {['#8b5cf6', '#10b981', '#f59e0b', '#ef4444', '#3b82f6'].map((c) => (
-                        <div
-                          key={c}
-                          onClick={() => setNewTagColor(c)}
-                          style={{ backgroundColor: c }}
-                          className={`w-5 h-5 rounded-full cursor-pointer transition-transform ${
-                            newTagColor === c ? 'scale-125 ring-2 ring-white' : ''
-                          }`}
-                        />
-                      ))}
-                    </div>
-                    <div className="flex items-center gap-1.5">
-                      <button
-                        type="button"
-                        onClick={() => setIsCreateTagOpen(false)}
-                        className="px-2.5 py-1 text-slate-400 hover:text-white"
-                      >
-                        Cancelar
-                      </button>
-                      <button
-                        type="submit"
-                        className="px-3 py-1 bg-purple-600 hover:bg-purple-500 text-white rounded-lg font-semibold"
-                      >
-                        Salvar e Selecionar
-                      </button>
-                    </div>
-                  </div>
-                </form>
-              )}
-            </div>
-
-            {/* Rodapé com Ações */}
-            <div className="pt-4 mt-4 border-t border-slate-800 flex items-center justify-between">
+            {/* Rodapé com Ações (Fixo) */}
+            <div className="pt-4 mt-3 border-t border-slate-800 flex items-center justify-between shrink-0">
               <button
                 type="button"
                 onClick={handleDeleteCurrentNode}
-                className="text-red-400 hover:text-red-300 flex items-center gap-1 text-xs"
+                className="text-red-400 hover:text-red-300 flex items-center gap-1 text-xs cursor-pointer"
               >
                 <Trash2 className="w-3.5 h-3.5" />
                 <span>Excluir Gatilho</span>
@@ -3529,14 +3808,14 @@ export default function AutomationCanvasPage() {
                 <button
                   type="button"
                   onClick={() => setIsTagModalOpen(false)}
-                  className="px-4 py-2 border border-slate-700 hover:bg-slate-800 rounded-xl text-slate-300 font-semibold text-xs"
+                  className="px-4 py-2 border border-slate-700 hover:bg-slate-800 rounded-xl text-slate-300 font-semibold text-xs cursor-pointer transition-colors"
                 >
                   Cancelar
                 </button>
                 <button
                   type="button"
                   onClick={handleSaveTagConfig}
-                  className="px-5 py-2 bg-purple-600 hover:bg-purple-500 text-white rounded-xl font-bold text-xs shadow-lg shadow-purple-600/30"
+                  className="px-5 py-2 bg-purple-600 hover:bg-purple-500 text-white rounded-xl font-bold text-xs shadow-lg shadow-purple-600/30 cursor-pointer transition-colors"
                 >
                   Salvar
                 </button>
