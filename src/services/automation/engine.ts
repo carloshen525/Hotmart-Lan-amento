@@ -1489,6 +1489,19 @@ export class AutomationEngine {
         },
       });
 
+      // Cancela inscrições ativas ou aguardando de contatos que não possuem mais as tags de entrada deste fluxo
+      const eligibleContactIds = new Set(contactsWithTag.map((c) => c.id));
+      if (eligibleContactIds.size > 0) {
+        await prisma.automationEnrollment.updateMany({
+          where: {
+            automationId,
+            contactId: { notIn: Array.from(eligibleContactIds) },
+            status: { in: ['ACTIVE', 'WAITING'] },
+          },
+          data: { status: 'CANCELLED' },
+        });
+      }
+
       for (const contact of contactsWithTag) {
         const contactTagNames = new Set(contact.tags.map((t) => t.tag.name.toLowerCase().trim()));
 

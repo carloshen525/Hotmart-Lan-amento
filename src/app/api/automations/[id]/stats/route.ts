@@ -141,15 +141,17 @@ export async function GET(request: Request, { params }: { params: { id: string }
     }
     const distinctEnrollments = Array.from(enrollmentsByContact.values());
     const totalEnrollments = distinctEnrollments.length;
+    const validContactIds = new Set(distinctEnrollments.map((e) => e.contactId));
 
     // 4. Mapeamento por nós com contatos únicos (Set<string>) combinando step logs e fila persistente do WhatsApp
     const nodeSuccessContacts = new Map<string, Set<string>>();
     const nodeWaitingContacts = new Map<string, Set<string>>();
     const nodeFailedContacts = new Map<string, Set<string>>();
 
-    // 4.1. Processa StepLogs
+    // 4.1. Processa StepLogs (apenas de contatos válidos da automação)
     for (const log of allStepLogs) {
       if (!log.nodeId || !log.contactId) continue;
+      if (validContactIds.size > 0 && !validContactIds.has(log.contactId)) continue;
       const key = log.contactId;
 
       if (log.status === 'SUCCESS') {
@@ -164,9 +166,10 @@ export async function GET(request: Request, { params }: { params: { id: string }
       }
     }
 
-    // 4.2. Processa Fila do WhatsApp (garante precisão absoluta das mensagens disparadas e na fila)
+    // 4.2. Processa Fila do WhatsApp (apenas de contatos válidos da automação)
     for (const item of allQueueItems) {
       if (!item.nodeId) continue;
+      if (item.contactId && validContactIds.size > 0 && !validContactIds.has(item.contactId)) continue;
       const key = item.contactId || item.phone;
       if (!key) continue;
 
@@ -187,9 +190,10 @@ export async function GET(request: Request, { params }: { params: { id: string }
       }
     }
 
-    // 4.3. Processa agendamentos de jobs pendentes (timers e delays)
+    // 4.3. Processa agendamentos de jobs pendentes (timers e delays de contatos válidos)
     for (const job of pendingJobs) {
       if (!job.contactId) continue;
+      if (validContactIds.size > 0 && !validContactIds.has(job.contactId)) continue;
 
       // Descobre se o job é originado por um nó de Timer/Delay
       let waitingNodeId = job.targetNodeId;
@@ -317,16 +321,60 @@ export async function GET(request: Request, { params }: { params: { id: string }
       }
     }
 
-    // 6. Calcula as estatísticas de cada Sequência e seus nós internos (Start, WhatsApp, etc) de acordo com a Tag conectada
+    // Função auxiliar para rastrear todos os nós ancestrais (a montante) de um nó no fluxo
+    const getUpstreamNodes = (targetNodeId: string): any[] => {
+      const visited = new Set<string>();
+      const queue = [targetNodeId];
+      const upstream: any[] = [];
+
+      while (queue.length > 0) {
+        const current = queue.shift()!;
+        const incoming = parsedEdges.filter((e) => e.target === current);
+        for (const edge of incoming) {
+          if (!visited.has(edge.source)) {
+            visited.add(edge.source);
+            queue.push(edge.source);
+            const sourceNode = parsedNodes.find((n) => n.id === edge.source);
+            if (sourceNode) {
+              upstream.push(sourceNode);
+            }
+          }
+        }
+      }
+
+      return upstream;
+    };
+
+    // 6. Harmoniza as estatísticas de nós de Timer/Delay e de Sequências de acordo com as Tags que os alimentam
     for (const n of parsedNodes) {
-      if (n.type === 'sequence_lead') {
+      if (n.type === 'timer' || n.type === 'delay') {
+        const timerStat = getNodeStat(n.id);
+        const upstreamNodes = getUpstreamNodes(n.id);
+        let sourceTagNodes = upstreamNodes.filter((pn) => pn.type === 'tag' || pn.type === 'trigger');
+        if (sourceTagNodes.length === 0) {
+          sourceTagNodes = parsedNodes.filter((pn) => pn.type === 'tag' || pn.type === 'trigger');
+        }
+        let timerCap = Infinity;
+        sourceTagNodes.forEach((tn) => {
+          const tnStat = getNodeStat(tn.id);
+          if (tnStat.leadsCount !== undefined && tnStat.leadsCount < timerCap) {
+            timerCap = tnStat.leadsCount;
+          }
+        });
+        if (timerCap !== Infinity) {
+          if (timerStat.leadsCount > timerCap) timerStat.leadsCount = timerCap;
+          if (timerStat.waitingCount > timerCap) timerStat.waitingCount = timerCap;
+          if (timerStat.successCount > timerCap) timerStat.successCount = timerCap;
+        }
+      } else if (n.type === 'sequence_lead') {
         const seqStat = getNodeStat(n.id);
 
-        // Identifica os nós de Tag de entrada que se conectam a esta sequência
-        const incomingEdges = parsedEdges.filter((e) => e.target === n.id);
-        const sourceTagNodes = parsedNodes.filter(
-          (pn) => (pn.type === 'tag' || pn.type === 'trigger') && incomingEdges.some((e) => e.source === pn.id)
-        );
+        // Identifica os nós de Tag de entrada que alimentam esta sequência (direta ou indiretamente)
+        const upstreamNodes = getUpstreamNodes(n.id);
+        let sourceTagNodes = upstreamNodes.filter((pn) => pn.type === 'tag' || pn.type === 'trigger');
+        if (sourceTagNodes.length === 0) {
+          sourceTagNodes = parsedNodes.filter((pn) => pn.type === 'tag' || pn.type === 'trigger');
+        }
 
         const sourceTagNames = new Set<string>();
         let targetTagLeadsCap = Infinity;
@@ -352,7 +400,7 @@ export async function GET(request: Request, { params }: { params: { id: string }
             })
           : distinctEnrollments.filter((e) => e.contact && e.contact.status !== 'UNSUBSCRIBED');
 
-        const computedCount = sourceTagNodes.length > 0 && targetTagLeadsCap !== Infinity
+        const computedCount = targetTagLeadsCap !== Infinity
           ? Math.min(seqEnrollments.length, targetTagLeadsCap)
           : seqEnrollments.length;
 
@@ -380,25 +428,22 @@ export async function GET(request: Request, { params }: { params: { id: string }
             subStat.waitingCount = 0;
             subStat.failedCount = 0;
           } else {
-            // Garante que o nó da etapa reflita fielmente os disparos reais efetuados
+            // Garante que o nó da etapa reflita fielmente os disparos reais efetuados limitados ao teto da tag
             const realTotal = subStat.successCount + subStat.waitingCount + subStat.failedCount;
             if (realTotal > 0) {
-              subStat.leadsCount = realTotal;
+              subStat.leadsCount = Math.min(realTotal, computedCount);
             } else if (subStat.leadsCount > computedCount) {
               subStat.leadsCount = computedCount;
             }
+            if (subStat.successCount > computedCount) subStat.successCount = computedCount;
+            if (subStat.waitingCount > computedCount) subStat.waitingCount = computedCount;
           }
         }
 
-        const maxSubLeadCount = Math.max(0, ...subNodes.map((sn) => getNodeStat(sn.id).leadsCount));
-        if (maxSubLeadCount > seqStat.leadsCount) {
-          seqStat.leadsCount = maxSubLeadCount;
-          startStat.leadsCount = maxSubLeadCount;
-        }
-
-        // Garante que o seq_start padrão reflita a contagem da sequência
-        startStat.leadsCount = seqStat.leadsCount;
-        startStat.successCount = seqStat.leadsCount;
+        // Garante que o seq_start padrão e a contagem da sequência reflitam a contagem da tag
+        seqStat.leadsCount = computedCount;
+        startStat.leadsCount = computedCount;
+        startStat.successCount = computedCount;
       }
     }
 
