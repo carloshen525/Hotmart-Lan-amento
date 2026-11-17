@@ -2615,31 +2615,95 @@ export default function AutomationCanvasPage() {
     setIsMessageDrawerOpen(false);
   };
 
-  // Deletar nó selecionado
+  // Exclusão de nó (etapa) por ID com limpeza de conexões e confirmação se o fluxo estiver ativo
+  const handleDeleteNode = useCallback(
+    (nodeId: string) => {
+      if (status === 'ACTIVE') {
+        const wantsToPause = confirm(
+          'Regra de Edição: Este fluxo está ATIVO em produção.\n\nPara excluir etapas, a automação precisa ser pausada.\n\nDeseja pausar o fluxo agora para prosseguir com a exclusão?'
+        );
+        if (!wantsToPause) return;
+        handleSave('PAUSED');
+      }
+
+      if (viewMode === 'MACRO') {
+        setMacroNodes((nds) => nds.filter((n) => n.id !== nodeId));
+        setMacroEdges((eds) => eds.filter((e) => e.source !== nodeId && e.target !== nodeId));
+      } else {
+        // Não deleta o nó inicial fixo (start)
+        setSequenceNodes((nds) => nds.filter((n) => n.id !== nodeId || n.type === 'start'));
+        setSequenceEdges((eds) => eds.filter((e) => e.source !== nodeId && e.target !== nodeId));
+      }
+
+      if (selectedNode?.id === nodeId) {
+        setSelectedNode(null);
+        setIsMessageDrawerOpen(false);
+        setIsTagModalOpen(false);
+        setIsEditarGrupoModalOpen(false);
+        setIsTimerModalOpen(false);
+        setIsWarmupModalOpen(false);
+      }
+    },
+    [status, viewMode, selectedNode, handleSave]
+  );
+
+  // Duplicação rápida de nó (etapa) com clonagem de configuração e offset visual
+  const handleDuplicateNode = useCallback(
+    (nodeId: string) => {
+      if (status === 'ACTIVE') {
+        const wantsToPause = confirm(
+          'Regra de Edição: Este fluxo está ATIVO em produção.\n\nPara duplicar etapas, a automação precisa ser pausada.\n\nDeseja pausar o fluxo agora para prosseguir com a duplicação?'
+        );
+        if (!wantsToPause) return;
+        handleSave('PAUSED');
+      }
+
+      const isMacro = viewMode === 'MACRO';
+      const currentNodes = isMacro ? macroNodes : sequenceNodes;
+      const original = currentNodes.find((n) => n.id === nodeId);
+      if (!original) return;
+      if (original.type === 'start') return; // nó start é único e fixo
+
+      const newId = `node_${original.type || 'step'}_${Date.now()}`;
+      const clonedData = JSON.parse(JSON.stringify(original.data || {}));
+
+      // Reseta contadores e estatísticas de execução no novo nó duplicado
+      if (clonedData.stats) {
+        clonedData.stats = { waiting: 0, success: 0, failed: 0 };
+      }
+      if (clonedData.leadsCount !== undefined) clonedData.leadsCount = 0;
+      if (clonedData.config) {
+        if (clonedData.config.waitingCount !== undefined) clonedData.config.waitingCount = 0;
+        if (clonedData.config.successCount !== undefined) clonedData.config.successCount = 0;
+        if (clonedData.config.failedCount !== undefined) clonedData.config.failedCount = 0;
+        if (clonedData.config.leadsCount !== undefined) clonedData.config.leadsCount = 0;
+      }
+
+      const newNode: Node = {
+        ...original,
+        id: newId,
+        position: {
+          x: (original.position?.x ?? 0) + 60,
+          y: (original.position?.y ?? 0) + 60,
+        },
+        selected: true,
+        data: clonedData,
+      };
+
+      if (isMacro) {
+        setMacroNodes((nds) => [...nds.map((n) => ({ ...n, selected: false })), newNode]);
+      } else {
+        setSequenceNodes((nds) => [...nds.map((n) => ({ ...n, selected: false })), newNode]);
+      }
+      setSelectedNode(newNode);
+    },
+    [status, viewMode, macroNodes, sequenceNodes, handleSave]
+  );
+
+  // Deletar nó selecionado atualmente
   const handleDeleteCurrentNode = () => {
     if (!selectedNode) return;
-    if (status === 'ACTIVE') {
-      const wantsToPause = confirm(
-        'Regra de Edição: Este fluxo está ATIVO em produção.\n\nPara excluir etapas, a automação precisa ser pausada.\n\nDeseja pausar o fluxo agora para prosseguir com a exclusão?'
-      );
-      if (!wantsToPause) return;
-      handleSave('PAUSED');
-    }
-    if (viewMode === 'MACRO') {
-      setMacroNodes((nds) => nds.filter((n) => n.id !== selectedNode.id));
-      setMacroEdges((eds) =>
-        eds.filter((e) => e.source !== selectedNode.id && e.target !== selectedNode.id)
-      );
-    } else {
-      if (selectedNode.type === 'start') return; // não deleta o nó start
-      setSequenceNodes((nds) => nds.filter((n) => n.id !== selectedNode.id));
-      setSequenceEdges((eds) =>
-        eds.filter((e) => e.source !== selectedNode.id && e.target !== selectedNode.id)
-      );
-    }
-    setSelectedNode(null);
-    setIsMessageDrawerOpen(false);
-    setIsTagModalOpen(false);
+    handleDeleteNode(selectedNode.id);
   };
 
   // Conexões estilizadas conforme o status da automação (ATIVO: pontilhado verde em movimento; DESATIVADO: linha branca contínua)
@@ -2688,6 +2752,19 @@ export default function AutomationCanvasPage() {
     const currentList = viewMode === 'MACRO' ? macroEdges : sequenceEdges;
     return formatEdgesWithFlowState(currentList);
   }, [viewMode, macroEdges, sequenceEdges, formatEdgesWithFlowState]);
+
+  // Nós formatados com injeção dos handlers de Ações Rápidas (Duplicar e Lixeira)
+  const displayNodes = useMemo(() => {
+    const currentNodes = viewMode === 'MACRO' ? macroNodes : sequenceNodes;
+    return currentNodes.map((node) => ({
+      ...node,
+      data: {
+        ...node.data,
+        onDuplicateNode: () => handleDuplicateNode(node.id),
+        onDeleteNode: () => handleDeleteNode(node.id),
+      },
+    }));
+  }, [viewMode, macroNodes, sequenceNodes, handleDuplicateNode, handleDeleteNode]);
 
   if (loading) {
     return (
@@ -3171,7 +3248,7 @@ export default function AutomationCanvasPage() {
         {/* CANVAS REACT FLOW */}
         <div className="flex-1 h-full relative">
           <ReactFlow
-            nodes={viewMode === 'MACRO' ? macroNodes : sequenceNodes}
+            nodes={displayNodes}
             edges={displayEdges}
             onNodesChange={viewMode === 'MACRO' ? onMacroNodesChange : onSequenceNodesChange}
             onEdgesChange={viewMode === 'MACRO' ? onMacroEdgesChange : onSequenceEdgesChange}

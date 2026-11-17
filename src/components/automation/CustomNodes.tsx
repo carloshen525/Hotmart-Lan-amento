@@ -20,7 +20,71 @@ import {
   Flame,
   Globe,
   Trash2,
+  Copy,
 } from 'lucide-react';
+
+// ============================================================
+// BARRA DE AÇÕES RÁPIDAS ACIMA DOS NÓS (DUPLICAR E LIXEIRA)
+// ============================================================
+export const NodeActionToolbar = ({
+  selected,
+  onDuplicate,
+  onDelete,
+  canDelete = true,
+  canDuplicate = true,
+}: {
+  selected?: boolean;
+  onDuplicate?: () => void;
+  onDelete?: () => void;
+  canDelete?: boolean;
+  canDuplicate?: boolean;
+}) => {
+  if (!canDelete && !canDuplicate) return null;
+
+  return (
+    <div
+      className={`absolute -top-8 left-1/2 -translate-x-1/2 flex items-center gap-1 bg-[#181a20]/95 backdrop-blur-md border border-slate-700/80 px-1.5 py-0.5 rounded-lg shadow-xl shadow-black/80 z-40 transition-all duration-150 nodrag nopan ${
+        selected
+          ? 'opacity-100 scale-100 pointer-events-auto'
+          : 'opacity-0 scale-90 group-hover:opacity-100 group-hover:scale-100 pointer-events-none group-hover:pointer-events-auto'
+      }`}
+    >
+      {canDuplicate && (
+        <button
+          type="button"
+          onClick={(e) => {
+            e.stopPropagation();
+            onDuplicate?.();
+          }}
+          title="Duplicar etapa"
+          aria-label="Duplicar etapa"
+          className="w-5 h-5 rounded flex items-center justify-center text-slate-300 hover:text-white hover:bg-slate-700/70 transition-all active:scale-90 cursor-pointer"
+        >
+          <Copy className="w-3 h-3" />
+        </button>
+      )}
+
+      {canDuplicate && canDelete && (
+        <div className="w-[1px] h-3 bg-slate-700/80 my-auto" />
+      )}
+
+      {canDelete && (
+        <button
+          type="button"
+          onClick={(e) => {
+            e.stopPropagation();
+            onDelete?.();
+          }}
+          title="Excluir etapa"
+          aria-label="Excluir etapa"
+          className="w-5 h-5 rounded flex items-center justify-center text-rose-400 hover:text-rose-200 hover:bg-rose-500/25 transition-all active:scale-90 cursor-pointer"
+        >
+          <Trash2 className="w-3 h-3" />
+        </button>
+      )}
+    </div>
+  );
+};
 
 // ============================================================
 // NÍVEL 1: NÓS DO FLUXO PRINCIPAL (MACRO)
@@ -49,6 +113,13 @@ export const TagNode = memo(({ data, selected }: any) => {
             : 'bg-[#555861] hover:bg-[#60636d] shadow-md'
         }`}
       >
+        {/* Ações rápidas (Duplicar e Lixeira) */}
+        <NodeActionToolbar
+          selected={selected}
+          onDuplicate={data?.onDuplicateNode}
+          onDelete={data?.onDeleteNode}
+        />
+
         {/* Handle de Entrada (Esquerda) */}
         <Handle
           type="target"
@@ -142,6 +213,13 @@ export const SequenceLeadNode = memo(({ data, selected }: any) => {
             : 'bg-[#b83b3b] hover:bg-[#c24141] shadow-lg'
         }`}
       >
+        {/* Ações rápidas (Duplicar e Lixeira) */}
+        <NodeActionToolbar
+          selected={selected}
+          onDuplicate={data?.onDuplicateNode}
+          onDelete={data?.onDeleteNode}
+        />
+
         {/* Handle Entrada (Esquerda) */}
         <Handle
           type="target"
@@ -249,6 +327,13 @@ export const TimerNode = memo(({ data, selected }: any) => {
             : 'bg-[#181a20] border border-slate-700/60 hover:border-slate-500 shadow-lg'
         }`}
       >
+        {/* Ações rápidas (Duplicar e Lixeira) */}
+        <NodeActionToolbar
+          selected={selected}
+          onDuplicate={data?.onDuplicateNode}
+          onDelete={data?.onDeleteNode}
+        />
+
         <Handle
           type="target"
           position={Position.Left}
@@ -359,6 +444,13 @@ export const WhatsAppNode = memo(({ data, selected }: any) => {
             : 'bg-[#1e7c3b] hover:bg-[#238b43] shadow-lg'
         }`}
       >
+        {/* Ações rápidas (Duplicar e Lixeira) */}
+        <NodeActionToolbar
+          selected={selected}
+          onDuplicate={data?.onDuplicateNode}
+          onDelete={data?.onDeleteNode}
+        />
+
         <Handle
           type="target"
           position={Position.Left}
@@ -440,6 +532,13 @@ export const EmailNode = memo(({ data, selected }: any) => {
             : 'bg-[#8d4f2f] hover:bg-[#9a5b3a] shadow-lg'
         }`}
       >
+        {/* Ações rápidas (Duplicar e Lixeira) */}
+        <NodeActionToolbar
+          selected={selected}
+          onDuplicate={data?.onDuplicateNode}
+          onDelete={data?.onDeleteNode}
+        />
+
         <Handle
           type="target"
           position={Position.Left}
@@ -512,6 +611,13 @@ export const WarmupNode = memo(({ data, selected }: any) => {
             : 'bg-[#d94d5c] hover:bg-[#e05260] shadow-lg'
         }`}
       >
+        {/* Ações rápidas (Duplicar e Lixeira) */}
+        <NodeActionToolbar
+          selected={selected}
+          onDuplicate={data?.onDuplicateNode}
+          onDelete={data?.onDeleteNode}
+        />
+
         <Handle
           type="target"
           position={Position.Left}
@@ -613,6 +719,13 @@ export const EditarGrupoNode = memo(({ data, selected }: any) => {
             : 'bg-[#2b2d3d] hover:bg-[#34374a] border border-purple-500/40 shadow-lg'
         }`}
       >
+        {/* Ações rápidas (Duplicar e Lixeira) */}
+        <NodeActionToolbar
+          selected={selected}
+          onDuplicate={data?.onDuplicateNode}
+          onDelete={data?.onDeleteNode}
+        />
+
         <Handle
           type="target"
           position={Position.Left}
