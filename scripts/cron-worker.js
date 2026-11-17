@@ -6,18 +6,17 @@
 const http = require('http');
 
 const port = process.env.PORT || '3000';
-const url = `http://localhost:${port}/api/jobs/process`;
+// Em ambientes Linux/Docker, 127.0.0.1 garante conexão IPv4 imediata sem falhas de resolução IPv6 ::1
+const primaryUrl = `http://127.0.0.1:${port}/api/jobs/process`;
+const fallbackUrl = `http://localhost:${port}/api/jobs/process`;
 
-console.log(`[CRON WORKER] Iniciando loop contínuo apontando para ${url}...`);
+console.log(`[CRON WORKER] Iniciando loop contínuo apontando para ${primaryUrl}...`);
 
 let isRunning = false;
 
-async function triggerProcess() {
-  if (isRunning) return;
-  isRunning = true;
-
-  try {
-    const req = http.request(url, { method: 'POST', timeout: 8000 }, (res) => {
+function doRequest(targetUrl) {
+  return new Promise((resolve) => {
+    const req = http.request(targetUrl, { method: 'POST', timeout: 8000 }, (res) => {
       let data = '';
       res.on('data', (chunk) => { data += chunk; });
       res.on('end', () => {
@@ -30,18 +29,32 @@ async function triggerProcess() {
             }
           } catch {}
         }
+        resolve(true);
       });
     });
 
-    req.on('error', () => {
-      // Falhas silenciosas durante inicialização do Next.js
+    req.on('error', (err) => {
+      resolve(false);
     });
 
     req.on('timeout', () => {
       req.destroy();
+      resolve(false);
     });
 
     req.end();
+  });
+}
+
+async function triggerProcess() {
+  if (isRunning) return;
+  isRunning = true;
+
+  try {
+    const ok = await doRequest(primaryUrl);
+    if (!ok) {
+      await doRequest(fallbackUrl);
+    }
   } catch {}
   finally {
     isRunning = false;

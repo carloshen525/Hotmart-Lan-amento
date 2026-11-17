@@ -1111,24 +1111,20 @@ export class EvolutionApiService {
 
     let instance: any = null;
 
-    // 1. Instância explicitamente configurada no nó do fluxo (filtrando por tenantId)
+    // 1. Instância explicitamente configurada no nó do fluxo (ID é chave primária global)
     if (params.whatsappInstanceId) {
       instance = await prisma.whatsappInstance.findFirst({
-        where: {
-          id: params.whatsappInstanceId,
-          ...(params.tenantId ? { tenantId: params.tenantId } : {}),
-        },
+        where: { id: params.whatsappInstanceId },
       });
     }
 
-    // 2. Busca por número do remetente caso informado (filtrando por tenantId)
+    // 2. Busca por número do remetente caso informado
     if ((!instance || instance.status !== 'CONNECTED') && params.senderPhone) {
       const cleanSender = params.senderPhone.replace(/\D/g, '');
       instance = await prisma.whatsappInstance.findFirst({
         where: {
           phone: { contains: cleanSender.slice(-8) },
           status: 'CONNECTED',
-          ...(params.tenantId ? { tenantId: params.tenantId } : {}),
         },
       });
     }
@@ -1137,6 +1133,14 @@ export class EvolutionApiService {
     if ((!instance || instance.status !== 'CONNECTED') && params.tenantId) {
       instance = await prisma.whatsappInstance.findFirst({
         where: { tenantId: params.tenantId, status: 'CONNECTED' },
+        orderBy: [{ isDefault: 'desc' }, { createdAt: 'desc' }],
+      });
+    }
+
+    // 4. Fallback global: utiliza qualquer instância operacional conectada na plataforma
+    if (!instance || instance.status !== 'CONNECTED') {
+      instance = await prisma.whatsappInstance.findFirst({
+        where: { status: 'CONNECTED' },
         orderBy: [{ isDefault: 'desc' }, { createdAt: 'desc' }],
       });
     }

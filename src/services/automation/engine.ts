@@ -437,6 +437,7 @@ export class AutomationEngine {
           const nowMs = Date.now();
           if (executeAt.getTime() <= nowMs) {
             // Se o horário agendado já chegou ou passou, avança imediatamente sem criar agendamento pendente
+            stepStatus = 'SUCCESS';
             stepDetails = { scheduledUntil: executeAt, passedImmediately: true, summary: summaryText };
             // Continua o fluxo para os nós seguintes sem pausar
           } else {
@@ -457,9 +458,10 @@ export class AutomationEngine {
 
             await prisma.automationEnrollment.update({
               where: { id: enrollmentId },
-              data: { status: 'WAITING' },
+              data: { status: 'WAITING', currentNodeId: node.id },
             });
 
+            stepStatus = 'WAITING';
             stepDetails = { scheduledUntil: executeAt, summary: summaryText, cancelCondition: config.cancelCondition || 'PURCHASE_APPROVED' };
             shouldHaltExecution = true; // A execução pausa aqui até o job vencer
           }
@@ -1053,13 +1055,29 @@ export class AutomationEngine {
             try {
               const auto = await prisma.automation.findUnique({
                 where: { id: autoId },
-                select: { triggerConfig: true },
+                select: { triggerConfig: true, whatsappInstanceId: true },
               });
-              if (auto?.triggerConfig) {
-                const parsedTrigger = typeof auto.triggerConfig === 'string'
-                  ? JSON.parse(auto.triggerConfig)
-                  : auto.triggerConfig;
-                wppInstanceId = parsedTrigger?.whatsappInstanceId;
+              if (auto) {
+                wppInstanceId = auto.whatsappInstanceId;
+                if (!wppInstanceId && auto.triggerConfig) {
+                  const parsedTrigger = typeof auto.triggerConfig === 'string'
+                    ? JSON.parse(auto.triggerConfig)
+                    : auto.triggerConfig;
+                  wppInstanceId = parsedTrigger?.whatsappInstanceId;
+                }
+              }
+            } catch {}
+          }
+
+          // Fallback resiliente: se ainda não houver instância definida, busca a primeira conectada
+          if (!wppInstanceId) {
+            try {
+              const defaultInst = await prisma.whatsappInstance.findFirst({
+                where: { status: 'CONNECTED' },
+                orderBy: [{ isDefault: 'desc' }, { createdAt: 'desc' }],
+              });
+              if (defaultInst) {
+                wppInstanceId = defaultInst.id;
               }
             } catch {}
           }
@@ -1522,6 +1540,35 @@ export class AutomationEngine {
           } else {
             // Lead já cadastrado:
             if (!isSequence) {
+              const isTimerNode = targetNode.type === 'timer' || targetNode.type === 'delay';
+              if (isTimerNode) {
+                const cfg = targetNode.data?.config || {};
+                const tDate = parseTargetDate(cfg.specificDate || cfg.targetDate || cfg.targetTime);
+                const nowMs = Date.now();
+                if (!isNaN(tDate) && tDate > nowMs) {
+                  // Se é um timer configurado para o futuro, verifica se já há um job pendente sincronizado com ele
+                  const existingFutureJob = await prisma.scheduledJob.findFirst({
+                    where: {
+                      enrollmentId: existingEnrollment.id,
+                      status: 'PENDING',
+                      executeAt: { gte: new Date(tDate - 2000), lte: new Date(tDate + 2000) },
+                    },
+                  });
+                  if (!existingFutureJob) {
+                    // Reconfigura o timer para a nova data futura selecionada pelo usuário
+                    await prisma.scheduledJob.updateMany({
+                      where: { enrollmentId: existingEnrollment.id, status: 'PENDING' },
+                      data: { status: 'CANCELLED', lastError: 'Timer reconfigurado para nova data futura' },
+                    });
+                    await prisma.automationStepLog.deleteMany({
+                      where: { enrollmentId: existingEnrollment.id, nodeId: targetNode.id },
+                    });
+                    await this.executeNode(existingEnrollment.id, targetNode.id, tenantId);
+                    continue;
+                  }
+                }
+              }
+
               const successLog = await prisma.automationStepLog.findFirst({
                 where: { contactId: contact.id, nodeId: targetNode.id, status: 'SUCCESS', enrollment: { automationId } },
               });

@@ -1796,7 +1796,12 @@ export default function AutomationCanvasPage() {
 
     const cfg = (target.data?.config as any) || {};
     if (target.type === 'whatsapp') {
-      setSelectedWppInstanceId(cfg.whatsappInstanceId || '');
+      let instId = cfg.whatsappInstanceId || flowWhatsappInstanceId;
+      if (!instId && availableWppInstances.length > 0) {
+        const firstOnline = availableWppInstances.find((i) => i.connected || i.status === 'CONNECTED');
+        if (firstOnline) instId = firstOnline.id;
+      }
+      setSelectedWppInstanceId(instId || '');
       fetchWppInstances();
       if (Array.isArray(cfg.blocks) && cfg.blocks.length > 0) {
         setWppBlocks(cfg.blocks);
@@ -2018,6 +2023,14 @@ export default function AutomationCanvasPage() {
   // Salvar mensagem de WhatsApp ou E-mail (Regra 5 e 7: salva apenas referências, sem Base64)
   const handleSaveMessage = (legacyMessageText?: string, emailSubject?: string) => {
     if (!selectedNode) return;
+
+    if (selectedNode.type === 'whatsapp') {
+      const chosenId = selectedWppInstanceId || flowWhatsappInstanceId;
+      if (!chosenId) {
+        alert('É obrigatório selecionar um número de WhatsApp operacional para este bloco antes de salvar.');
+        return;
+      }
+    }
 
     if (status === 'ACTIVE') {
       const wantsToPause = confirm(

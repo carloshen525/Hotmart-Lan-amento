@@ -187,12 +187,41 @@ export async function GET(request: Request, { params }: { params: { id: string }
       }
     }
 
-    // 4.3. Processa agendamentos de jobs pendentes (timers)
+    // 4.3. Processa agendamentos de jobs pendentes (timers e delays)
     for (const job of pendingJobs) {
-      if (!job.targetNodeId || !job.contactId) continue;
-      if (!nodeSuccessContacts.get(job.targetNodeId)?.has(job.contactId)) {
-        if (!nodeWaitingContacts.has(job.targetNodeId)) nodeWaitingContacts.set(job.targetNodeId, new Set());
-        nodeWaitingContacts.get(job.targetNodeId)!.add(job.contactId);
+      if (!job.contactId) continue;
+
+      // Descobre se o job é originado por um nó de Timer/Delay
+      let waitingNodeId = job.targetNodeId;
+
+      // 1. Procura no fluxo Macro nó timer que conecta a targetNodeId
+      const incomingMacroEdge = parsedEdges.find(
+        (e) => e.target === job.targetNodeId && parsedNodes.some((n) => n.id === e.source && (n.type === 'timer' || n.type === 'delay'))
+      );
+      if (incomingMacroEdge) {
+        waitingNodeId = incomingMacroEdge.source;
+      } else {
+        // 2. Procura nos subfluxos de sequências se há timer conectando internamente
+        for (const pn of parsedNodes) {
+          const subflow = (pn.data as any)?.subflow;
+          if (subflow?.nodes && Array.isArray(subflow.nodes)) {
+            const subEdges: any[] = subflow.edges || [];
+            const incomingSubEdge = subEdges.find(
+              (e) => e.target === job.targetNodeId && subflow.nodes.some((sn: any) => sn.id === e.source && (sn.type === 'timer' || sn.type === 'delay'))
+            );
+            if (incomingSubEdge) {
+              waitingNodeId = incomingSubEdge.source;
+              break;
+            }
+          }
+        }
+      }
+
+      if (waitingNodeId) {
+        if (!nodeWaitingContacts.has(waitingNodeId)) nodeWaitingContacts.set(waitingNodeId, new Set());
+        nodeWaitingContacts.get(waitingNodeId)!.add(job.contactId);
+        // Garante que o nó de timer não conste como sucesso enquanto o job estiver aguardando o tempo vencer
+        nodeSuccessContacts.get(waitingNodeId)?.delete(job.contactId);
       }
     }
 
@@ -200,10 +229,9 @@ export async function GET(request: Request, { params }: { params: { id: string }
     for (const enr of distinctEnrollments) {
       if (!enr.currentNodeId) continue;
       if (enr.status === 'WAITING') {
-        if (!nodeSuccessContacts.get(enr.currentNodeId)?.has(enr.contactId)) {
-          if (!nodeWaitingContacts.has(enr.currentNodeId)) nodeWaitingContacts.set(enr.currentNodeId, new Set());
-          nodeWaitingContacts.get(enr.currentNodeId)!.add(enr.contactId);
-        }
+        if (!nodeWaitingContacts.has(enr.currentNodeId)) nodeWaitingContacts.set(enr.currentNodeId, new Set());
+        nodeWaitingContacts.get(enr.currentNodeId)!.add(enr.contactId);
+        nodeSuccessContacts.get(enr.currentNodeId)?.delete(enr.contactId);
       } else if (enr.status === 'FAILED') {
         if (!nodeSuccessContacts.get(enr.currentNodeId)?.has(enr.contactId)) {
           if (!nodeFailedContacts.has(enr.currentNodeId)) nodeFailedContacts.set(enr.currentNodeId, new Set());
