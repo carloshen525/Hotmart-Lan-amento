@@ -43,12 +43,16 @@ export const NodeActionToolbar = ({
 
   return (
     <div
-      className={`absolute -top-8 left-1/2 -translate-x-1/2 flex items-center gap-1 bg-[#181a20]/95 backdrop-blur-md border border-slate-700/80 px-1.5 py-0.5 rounded-lg shadow-xl shadow-black/80 z-40 transition-all duration-150 nodrag nopan ${
+      className={`absolute -top-7 left-1/2 -translate-x-1/2 flex items-center gap-1 bg-[#181a20]/95 backdrop-blur-md border border-slate-700/80 px-1.5 py-0.5 rounded-lg shadow-xl shadow-black/80 z-40 transition-all duration-150 nodrag nopan ${
         selected
           ? 'opacity-100 scale-100 pointer-events-auto'
           : 'opacity-0 scale-90 group-hover:opacity-100 group-hover:scale-100 pointer-events-none group-hover:pointer-events-auto'
       }`}
     >
+      {/* Ponte e hitbox ampliada conectando diretamente a barra ao topo do nó para evitar perda de hover */}
+      <div className="absolute -bottom-3.5 -inset-x-3 h-5 bg-transparent pointer-events-auto" />
+      <div className="absolute -inset-1.5 bg-transparent pointer-events-auto -z-10" />
+
       {canDuplicate && (
         <button
           type="button"
@@ -58,14 +62,14 @@ export const NodeActionToolbar = ({
           }}
           title="Duplicar etapa"
           aria-label="Duplicar etapa"
-          className="w-5 h-5 rounded flex items-center justify-center text-slate-300 hover:text-white hover:bg-slate-700/70 transition-all active:scale-90 cursor-pointer"
+          className="relative z-10 w-5 h-5 rounded flex items-center justify-center text-slate-300 hover:text-white hover:bg-slate-700/70 transition-all active:scale-90 cursor-pointer"
         >
           <Copy className="w-3 h-3" />
         </button>
       )}
 
       {canDuplicate && canDelete && (
-        <div className="w-[1px] h-3 bg-slate-700/80 my-auto" />
+        <div className="relative z-10 w-[1px] h-3 bg-slate-700/80 my-auto" />
       )}
 
       {canDelete && (
@@ -77,7 +81,7 @@ export const NodeActionToolbar = ({
           }}
           title="Excluir etapa"
           aria-label="Excluir etapa"
-          className="w-5 h-5 rounded flex items-center justify-center text-rose-400 hover:text-rose-200 hover:bg-rose-500/25 transition-all active:scale-90 cursor-pointer"
+          className="relative z-10 w-5 h-5 rounded flex items-center justify-center text-rose-400 hover:text-rose-200 hover:bg-rose-500/25 transition-all active:scale-90 cursor-pointer"
         >
           <Trash2 className="w-3 h-3" />
         </button>
@@ -119,6 +123,9 @@ export const TagNode = memo(({ data, selected }: any) => {
           onDuplicate={data?.onDuplicateNode}
           onDelete={data?.onDeleteNode}
         />
+
+        {/* Hitbox estendida para manter o hover contínuo ao mover o mouse até a barra superior */}
+        <div className="absolute -top-8 -inset-x-2 bottom-0 pointer-events-auto bg-transparent -z-10" />
 
         {/* Handle de Entrada (Esquerda) */}
         <Handle
@@ -219,6 +226,9 @@ export const SequenceLeadNode = memo(({ data, selected }: any) => {
           onDuplicate={data?.onDuplicateNode}
           onDelete={data?.onDeleteNode}
         />
+
+        {/* Hitbox estendida para manter o hover contínuo ao mover o mouse até a barra superior */}
+        <div className="absolute -top-8 -inset-x-2 bottom-0 pointer-events-auto bg-transparent -z-10" />
 
         {/* Handle Entrada (Esquerda) */}
         <Handle
@@ -333,6 +343,9 @@ export const TimerNode = memo(({ data, selected }: any) => {
           onDuplicate={data?.onDuplicateNode}
           onDelete={data?.onDeleteNode}
         />
+
+        {/* Hitbox estendida para manter o hover contínuo ao mover o mouse até a barra superior */}
+        <div className="absolute -top-8 -inset-x-2 bottom-0 pointer-events-auto bg-transparent -z-10" />
 
         <Handle
           type="target"
@@ -451,6 +464,9 @@ export const WhatsAppNode = memo(({ data, selected }: any) => {
           onDelete={data?.onDeleteNode}
         />
 
+        {/* Hitbox estendida para manter o hover contínuo ao mover o mouse até a barra superior */}
+        <div className="absolute -top-8 -inset-x-2 bottom-0 pointer-events-auto bg-transparent -z-10" />
+
         <Handle
           type="target"
           position={Position.Left}
@@ -539,6 +555,9 @@ export const EmailNode = memo(({ data, selected }: any) => {
           onDelete={data?.onDeleteNode}
         />
 
+        {/* Hitbox estendida para manter o hover contínuo ao mover o mouse até a barra superior */}
+        <div className="absolute -top-8 -inset-x-2 bottom-0 pointer-events-auto bg-transparent -z-10" />
+
         <Handle
           type="target"
           position={Position.Left}
@@ -617,6 +636,9 @@ export const WarmupNode = memo(({ data, selected }: any) => {
           onDuplicate={data?.onDuplicateNode}
           onDelete={data?.onDeleteNode}
         />
+
+        {/* Hitbox estendida para manter o hover contínuo ao mover o mouse até a barra superior */}
+        <div className="absolute -top-8 -inset-x-2 bottom-0 pointer-events-auto bg-transparent -z-10" />
 
         <Handle
           type="target"
@@ -725,6 +747,9 @@ export const EditarGrupoNode = memo(({ data, selected }: any) => {
           onDuplicate={data?.onDuplicateNode}
           onDelete={data?.onDeleteNode}
         />
+
+        {/* Hitbox estendida para manter o hover contínuo ao mover o mouse até a barra superior */}
+        <div className="absolute -top-8 -inset-x-2 bottom-0 pointer-events-auto bg-transparent -z-10" />
 
         <Handle
           type="target"
