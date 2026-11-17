@@ -500,6 +500,7 @@ model CheckoutIntegration {
   status          String                 @default("ACTIVE") // ACTIVE, INACTIVE
   secretKey       String?                @map("secret_key")
   webhookUrl      String?                @map("webhook_url")
+  fieldMapping    String?                @map("field_mapping") // JSON com mapeamento de propriedades {name, email, phone}
   allowedEvents   String                 @default("[\"purchase_approved\",\"purchase_waiting_payment\",\"billet_printed\",\"pix_generated\",\"cart_abandoned\",\"canceled\",\"refunded\",\"chargeback\"]") @map("allowed_events")
   productName     String?                @map("product_name")
   productId       String?                @map("product_id")

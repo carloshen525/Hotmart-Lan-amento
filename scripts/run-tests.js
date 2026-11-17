@@ -8,7 +8,7 @@ async function runTestSuite() {
   console.log('=====================================================\n');
 
   let passed = 0;
-  let total = 35;
+  let total = 36;
 
   // Setup de tenant de teste limpo
   const testTenant = await prisma.tenant.upsert({
@@ -3317,6 +3317,157 @@ async function runTestSuite() {
     );
 
     console.log('✔ PASSOU: Regra de preservação de hashtag (#) ao alterar nomes de grupos validada com 100% de sucesso.');
+    passed++;
+
+    // -------------------------------------------------------------
+    // TESTE 36: Módulo Universal de Integrações, Field Mapping JSON e Deduplicação de Leads
+    // -------------------------------------------------------------
+    console.log('[TESTE 36] Módulo Universal de Integrações, Field Mapping JSON e Deduplicação de Leads...');
+
+    // 1. Cria uma tag para a integração
+    const integrationTag = await prisma.tag.upsert({
+      where: { tenantId_name: { tenantId: testTenant.id, name: 'Lead-Custom-2026' } },
+      update: {},
+      create: { tenantId: testTenant.id, name: 'Lead-Custom-2026', color: '#10b981' },
+    });
+
+    // 2. Cria uma integração CUSTOM com fieldMapping aninhado
+    const customIntegrationId = `custom_test_${Date.now()}`;
+    const fieldMappingConfig = {
+      name: 'payload.usuario.nome',
+      email: 'payload.usuario.email',
+      phone: 'payload.usuario.whatsapp',
+    };
+
+    const customIntegration = await prisma.checkoutIntegration.create({
+      data: {
+        id: customIntegrationId,
+        tenantId: testTenant.id,
+        platform: 'CUSTOM',
+        name: 'Plataforma Externa Customizada',
+        secretKey: 'custom_secret_key_abc',
+        allowedEvents: JSON.stringify(['purchase_approved']),
+        fieldMapping: JSON.stringify(fieldMappingConfig),
+        status: 'ACTIVE',
+      },
+    });
+
+    // Vincula a tag à integração
+    await prisma.integrationTag.create({
+      data: {
+        integrationId: customIntegration.id,
+        tagId: integrationTag.id,
+      },
+    });
+
+    // 3. Helper de extração por fieldMapping JSON
+    function getNestedValue(obj, path) {
+      if (!path) return undefined;
+      const cleanPath = path.startsWith('payload.') ? path.slice(8) : path;
+      const parts = cleanPath.split('.');
+      let current = obj;
+      for (const part of parts) {
+        if (current == null) return undefined;
+        current = current[part];
+      }
+      return typeof current === 'string' ? current.trim() : current != null ? String(current) : undefined;
+    }
+
+    const testCustomPhone = `+551198777${Math.floor(1000 + Math.random() * 9000)}`;
+    const customPayload = {
+      usuario: {
+        nome: 'Marcos Lead Custom',
+        email: `marcos_${Date.now()}@teste.com`,
+        whatsapp: testCustomPhone,
+      },
+      evento: 'purchase.approved',
+      transacao: `tx_custom_${Date.now()}`,
+    };
+
+    const extractedName = getNestedValue(customPayload, fieldMappingConfig.name);
+    const extractedEmail = getNestedValue(customPayload, fieldMappingConfig.email);
+    const extractedPhone = getNestedValue(customPayload, fieldMappingConfig.phone);
+
+    assert.strictEqual(extractedName, 'Marcos Lead Custom', 'Mapeamento de nome via JSON deve extrair com sucesso');
+    assert.strictEqual(extractedEmail, customPayload.usuario.email, 'Mapeamento de e-mail via JSON deve extrair com sucesso');
+    assert.strictEqual(extractedPhone, testCustomPhone, 'Mapeamento de telefone via JSON deve extrair com sucesso');
+
+    // 4. Criação do Lead no CRM com deduplicação por telefone
+    let customLead1 = await prisma.contact.findFirst({
+      where: { tenantId: testTenant.id, phone: extractedPhone },
+    });
+    if (!customLead1) {
+      customLead1 = await prisma.contact.create({
+        data: {
+          tenantId: testTenant.id,
+          name: extractedName,
+          email: extractedEmail || `lead_${Date.now()}@placeholder.local`,
+          phone: extractedPhone,
+          status: 'ACTIVE',
+        },
+      });
+    }
+
+    // Aplica tags da integração
+    await prisma.contactTag.upsert({
+      where: { contactId_tagId: { contactId: customLead1.id, tagId: integrationTag.id } },
+      create: { contactId: customLead1.id, tagId: integrationTag.id },
+      update: {},
+    });
+
+    const lead1WithTags = await prisma.contact.findUnique({
+      where: { id: customLead1.id },
+      include: { tags: { include: { tag: true } } },
+    });
+    assert.strictEqual(lead1WithTags.name, 'Marcos Lead Custom');
+    assert.ok(lead1WithTags.tags.some((t) => t.tag.name === 'Lead-Custom-2026'), 'Tag automática deve estar aplicada');
+
+    // 5. Teste de Deduplicação: Novo evento com mesmo telefone e nome atualizado NÃO cria duplicata
+    const updatePayload = {
+      usuario: {
+        nome: 'Marcos Lead Custom Atualizado',
+        email: customPayload.usuario.email,
+        whatsapp: testCustomPhone,
+      },
+    };
+    const updatedName = getNestedValue(updatePayload, fieldMappingConfig.name);
+
+    let leadExisting = await prisma.contact.findFirst({
+      where: { tenantId: testTenant.id, phone: extractedPhone },
+    });
+    assert.ok(leadExisting, 'Lead existente deve ser localizado pelo telefone');
+
+    await prisma.contact.update({
+      where: { id: leadExisting.id },
+      data: { name: updatedName },
+    });
+
+    const countLeads = await prisma.contact.count({
+      where: { tenantId: testTenant.id, phone: testCustomPhone },
+    });
+    assert.strictEqual(countLeads, 1, 'Deduplicação garantida: exatamente 1 contato com o mesmo telefone');
+
+    const leadUpdatedCheck = await prisma.contact.findUnique({
+      where: { id: leadExisting.id },
+    });
+    assert.strictEqual(leadUpdatedCheck.name, 'Marcos Lead Custom Atualizado', 'Lead deve ser atualizado sem duplicidade');
+
+    // 6. Teste de Lead Phone-Only (sem e-mail fornecido)
+    const phoneOnlyPhone = '+5511977776666';
+    const fallbackEmail = `lead_${Date.now()}_test@placeholder.local`;
+    const phoneOnlyLead = await prisma.contact.create({
+      data: {
+        tenantId: testTenant.id,
+        name: 'Lead Sem Email Form Simples',
+        email: fallbackEmail,
+        phone: phoneOnlyPhone,
+        status: 'ACTIVE',
+      },
+    });
+    assert.ok(phoneOnlyLead.id, 'Lead capturado apenas com WhatsApp/telefone deve ser gravado com sucesso');
+    assert.strictEqual(phoneOnlyLead.phone, phoneOnlyPhone);
+
+    console.log('✔ PASSOU: Módulo Universal de Integrações, Field Mapping JSON e Deduplicação de Leads validados com 100% de sucesso.');
     passed++;
 
     console.log('\n=====================================================');

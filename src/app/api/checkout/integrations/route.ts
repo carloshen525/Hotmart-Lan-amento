@@ -31,7 +31,7 @@ export async function POST(request: Request) {
     }
 
     const body = await request.json();
-    const { platform, name, secretKey, allowedEvents, productName, productId, tagIds, customId } = body;
+    const { platform, name, secretKey, allowedEvents, productName, productId, tagIds, customId, fieldMapping } = body;
 
     if (!platform || !name?.trim()) {
       return NextResponse.json(

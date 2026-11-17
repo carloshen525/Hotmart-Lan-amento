@@ -205,14 +205,34 @@ export class CheckoutWebhookProcessor {
     // 5. Normalização do Evento para o Formato Padrão do LaunchFlow
     const normalizedEvent: StandardCheckoutEvent = adapter.normalize(payload, headers);
 
-    const buyerEmail = normalizedEvent.customer.email;
-    const buyerName = normalizedEvent.customer.name || 'Cliente';
-    const buyerPhone = normalizedEvent.customer.phone;
+    let buyerEmail = normalizedEvent.customer.email;
+    let buyerName = normalizedEvent.customer.name || 'Cliente';
+    let buyerPhone = normalizedEvent.customer.phone;
+
+    // Suporte a Mapeamento JSON customizado se configurado na integração
+    if (integration && (integration as any).fieldMapping) {
+      try {
+        const mapping =
+          typeof (integration as any).fieldMapping === 'string'
+            ? JSON.parse((integration as any).fieldMapping)
+            : (integration as any).fieldMapping;
+        const getNestedVal = (obj: any, path: string) => {
+          if (!path) return undefined;
+          const cleanPath = path.replace(/^payload\./, '');
+          return cleanPath.split('.').reduce((acc, part) => acc && acc[part], obj);
+        };
+
+        if (mapping.name) buyerName = getNestedVal(payload, mapping.name) || buyerName;
+        if (mapping.email) buyerEmail = getNestedVal(payload, mapping.email) || buyerEmail;
+        if (mapping.phone) buyerPhone = getNestedVal(payload, mapping.phone) || buyerPhone;
+      } catch {}
+    }
+
     const productName = normalizedEvent.product.name || integration?.productName || 'Produto';
     const transactionId = normalizedEvent.transactionId || `tx_${Date.now()}`;
     const eventType = normalizedEvent.event;
 
-    if (!buyerEmail) {
+    if (!buyerEmail && !buyerPhone) {
       // Se for um ping de validação de URL enviado pela Hotmart ou outra plataforma
       if (
         payload?.event === 'TEST' ||
@@ -227,7 +247,7 @@ export class CheckoutWebhookProcessor {
           duplicate: false,
           eventType: 'unknown',
           platform: platformToUse,
-          actionSummary: 'Ping de validação de URL verificado com sucesso pela Hotmart.',
+          actionSummary: 'Ping de validação de URL verificado com sucesso.',
         };
       }
 
@@ -236,8 +256,8 @@ export class CheckoutWebhookProcessor {
         duplicate: false,
         eventType,
         platform: platformToUse,
-        actionSummary: 'Payload rejeitado: dados do cliente sem e-mail válido',
-        error: 'E-mail do comprador obrigatório',
+        actionSummary: 'Payload rejeitado: dados do cliente sem e-mail ou telefone válido',
+        error: 'E-mail ou telefone do comprador obrigatório',
       };
     }
 
@@ -341,29 +361,43 @@ export class CheckoutWebhookProcessor {
       } catch {}
     }
 
-    // 9. Cria ou atualiza o contato no CRM com isolamento de Tenant
-    const contact = await prisma.contact.upsert({
-      where: {
-        tenantId_email: {
-          tenantId: tenant.id,
-          email: buyerEmail,
+    // 9. Cria ou atualiza o contato no CRM com controle rigoroso de duplicidade
+    let contact: any = null;
+    if (buyerPhone) {
+      contact = await prisma.contact.findFirst({
+        where: { tenantId: tenant.id, phone: buyerPhone },
+      });
+    }
+    if (!contact && buyerEmail) {
+      contact = await prisma.contact.findFirst({
+        where: { tenantId: tenant.id, email: buyerEmail },
+      });
+    }
+
+    if (contact) {
+      contact = await prisma.contact.update({
+        where: { id: contact.id },
+        data: {
+          name: buyerName || contact.name,
+          email: buyerEmail || contact.email,
+          phone: buyerPhone || contact.phone,
+          status: 'ACTIVE',
+          updatedAt: new Date(),
         },
-      },
-      update: {
-        name: buyerName,
-        phone: buyerPhone || undefined,
-        updatedAt: new Date(),
-      },
-      create: {
-        tenantId: tenant.id,
-        name: buyerName,
-        email: buyerEmail,
-        phone: buyerPhone,
-        utmSource: `${platformToUse.toLowerCase()}_checkout`,
-        consentGiven: true,
-        status: 'ACTIVE',
-      },
-    });
+      });
+    } else {
+      contact = await prisma.contact.create({
+        data: {
+          tenantId: tenant.id,
+          name: buyerName,
+          email: buyerEmail || `lead_${Date.now()}@placeholder.local`,
+          phone: buyerPhone,
+          utmSource: `${platformToUse.toLowerCase()}_checkout`,
+          consentGiven: true,
+          status: 'ACTIVE',
+        },
+      });
+    }
 
     const actionSummaries: string[] = [];
 
