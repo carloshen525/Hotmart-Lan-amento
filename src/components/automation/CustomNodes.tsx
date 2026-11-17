@@ -249,6 +249,11 @@ export const TimerNode = memo(({ data, selected }: any) => {
 
         <Clock className="w-6 h-6 text-white stroke-[1.8]" />
 
+        {/* Badge roxo no topo direito do relógio com contador de grupos aguardando */}
+        <div className="absolute -top-1.5 -right-1.5 min-w-[20px] h-5 px-1 rounded-full bg-[#5856d6] border-2 border-[#181a20] flex items-center justify-center text-white font-bold text-[10px] shadow-sm">
+          {waiting}
+        </div>
+
         <Handle
           type="source"
           position={Position.Right}
@@ -578,6 +583,17 @@ export const EditarGrupoNode = memo(({ data, selected }: any) => {
     }
   };
 
+  const hasConfig = Boolean(
+    data.config?.enableUpdateSubject ||
+    data.config?.enableUpdatePicture ||
+    data.config?.enableUpdateDescription ||
+    data.config?.enableUpdateSetting ||
+    (data.config?.newSubject && data.config.newSubject.trim().length > 0) ||
+    (data.config?.pictureUrl && data.config.pictureUrl.trim().length > 0) ||
+    (data.config?.newDescription && data.config.newDescription.trim().length > 0) ||
+    (actionType && actionType !== 'multi_config' && actionType !== 'message')
+  );
+
   const badge = getActionBadge();
 
   return (
@@ -596,6 +612,13 @@ export const EditarGrupoNode = memo(({ data, selected }: any) => {
         />
 
         <Settings className="w-6 h-6 text-purple-300 stroke-[2] group-hover:rotate-45 transition-transform" />
+
+        {/* Badge branco de alerta se não configurado */}
+        {!hasConfig && (
+          <div className="absolute -top-1.5 -right-1.5 w-5 h-5 rounded-full bg-slate-100 text-slate-900 border-2 border-[#181a20] flex items-center justify-center font-bold text-[11px] shadow-sm animate-pulse">
+            !
+          </div>
+        )}
 
         <Handle
           type="source"

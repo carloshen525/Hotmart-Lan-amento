@@ -213,7 +213,27 @@ export class AutomationScheduler {
 
           const cfg = currentNode.data?.config || {};
           const targetStr = cfg.specificDate || cfg.targetDate || cfg.targetTime;
-          const targetTime = parseTargetDate(targetStr);
+          let targetTime = parseTargetDate(targetStr);
+
+          if (isNaN(targetTime)) {
+            // Busca o horário agendado salvo no log WAIT_TIMER para este nó e inscrição de grupo
+            const lastWaitLog = await prisma.automationGroupStepLog.findFirst({
+              where: {
+                enrollmentId: enr.id,
+                nodeId: currentNode.id,
+                action: 'WAIT_TIMER',
+              },
+              orderBy: { executedAt: 'desc' },
+            });
+            if (lastWaitLog && lastWaitLog.details) {
+              try {
+                const parsed = JSON.parse(lastWaitLog.details);
+                if (parsed.scheduledFor || parsed.targetDate) {
+                  targetTime = new Date(parsed.scheduledFor || parsed.targetDate).getTime();
+                }
+              } catch {}
+            }
+          }
 
           // Se não há targetTime ou se o horário agendado já chegou
           if (isNaN(targetTime) || targetTime <= now) {

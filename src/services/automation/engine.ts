@@ -1725,11 +1725,10 @@ export class AutomationEngine {
 
     const tenantId = automation.tenantId;
 
-    // 1. Grupos elegíveis para este tenant (onde a instância conectada é administradora confirmada)
+    // 1. Grupos elegíveis para este tenant
     const where: any = {
       tenantId,
-      isEligible: true, // REGRA FUNDAMENTAL: Apenas grupos onde é admin confirmado!
-      status: 'ACTIVE',
+      status: { not: 'LEFT' },
     };
 
     if ((automation as any).whatsappInstanceId) {
@@ -1777,8 +1776,12 @@ export class AutomationEngine {
             OR: [
               { id: { in: targetTags } },
               { name: { in: targetTags } },
+              ...targetTags.map((t) => ({ name: t.toLowerCase() })),
+              ...targetTags.map((t) => ({ name: t.toUpperCase() })),
               ...targetTags.map((t) => ({ name: t.replace(/^#/, '') })),
               ...targetTags.map((t) => ({ name: `#${t.replace(/^#/, '')}` })),
+              ...targetTags.map((t) => ({ name: t.replace(/^#/, '').toLowerCase() })),
+              ...targetTags.map((t) => ({ name: t.replace(/^#/, '').toUpperCase() })),
             ],
           },
         },
@@ -1838,8 +1841,8 @@ export class AutomationEngine {
     });
 
     if (!group) throw new Error('Grupo não encontrado');
-    if (!group.isEligible || group.status !== 'ACTIVE') {
-      return { skipped: true, reason: 'Grupo não é elegível (instância não é administradora ou saiu do grupo)' };
+    if (group.status === 'LEFT') {
+      return { skipped: true, reason: 'A instância saiu do grupo' };
     }
 
     // Regra: Não duplicar execuções para o mesmo grupo no mesmo fluxo
@@ -1873,7 +1876,16 @@ export class AutomationEngine {
     const nodes: WorkflowNode[] = JSON.parse(automation.nodes || '[]');
     const edges: WorkflowEdge[] = JSON.parse(automation.edges || '[]');
 
-    const triggerNode = nodes.find((n) => n.data?.type === 'trigger') || nodes[0];
+    const triggerNode =
+      nodes.find(
+        (n) =>
+          n.type === 'tag' ||
+          n.data?.type === 'tag' ||
+          n.type === 'trigger' ||
+          n.data?.type === 'trigger' ||
+          n.type === 'start' ||
+          !edges.some((e) => e.target === n.id)
+      ) || nodes[0];
     if (!triggerNode) {
       await prisma.automationGroupEnrollment.update({
         where: { id: enrollment.id },
@@ -1959,8 +1971,18 @@ export class AutomationEngine {
     // 1. Nó do tipo TIMER
     if (nodeType === 'timer' || nodeType === 'delay') {
       const config = node.data?.config || {};
+      let targetTimestamp: number;
       const targetTimeStr = config.specificDate || config.targetDate || config.targetTime;
-      const targetTimestamp = parseTargetDate(targetTimeStr);
+
+      if (targetTimeStr) {
+        targetTimestamp = parseTargetDate(targetTimeStr);
+      } else {
+        const unit = config.unit || 'minutes';
+        const val = Number(config.value) || 1;
+        const delayMs = unit === 'hours' ? val * 3600000 : unit === 'days' ? val * 86400000 : val * 60000;
+        targetTimestamp = Date.now() + delayMs;
+      }
+
       const now = Date.now();
 
       if (targetTimestamp && !isNaN(targetTimestamp) && targetTimestamp > now) {
@@ -1979,7 +2001,10 @@ export class AutomationEngine {
             nodeType: 'timer',
             action: 'WAIT_TIMER',
             status: 'SUCCESS',
-            details: JSON.stringify({ targetDate: targetTimeStr, scheduledFor: new Date(targetTimestamp).toISOString() }),
+            details: JSON.stringify({
+              targetDate: new Date(targetTimestamp).toISOString(),
+              scheduledFor: new Date(targetTimestamp).toISOString(),
+            }),
           },
         });
         return; // Aguarda o horário
@@ -2089,22 +2114,36 @@ export class AutomationEngine {
       const instance = await prisma.whatsappInstance.findUnique({
         where: { id: (automation as any).whatsappInstanceId || group.whatsappInstanceId },
       });
-      const instanceName = instance?.instanceName;
+      let instanceName: string | undefined = instance?.instanceName || group.whatsappInstance?.instanceName;
+      if (!instanceName) {
+        const anyActiveInstance = await prisma.whatsappInstance.findFirst({
+          where: { tenantId, status: 'CONNECTED' },
+        });
+        instanceName = anyActiveInstance?.instanceName;
+      }
 
       try {
         if (instanceName) {
           // 1. Alterar Permissão (Fechar / Abrir Grupo)
-          if (actionType === 'close_group' || (cfg.enableUpdateSetting && cfg.groupSetting === 'announcement')) {
-            await whatsappGroupService.updateGroupSetting(instanceName, group.jid, 'announcement');
-          } else if (actionType === 'open_group' || (cfg.enableUpdateSetting && cfg.groupSetting === 'not_announcement')) {
-            await whatsappGroupService.updateGroupSetting(instanceName, group.jid, 'not_announcement');
+          const shouldUpdateSetting = Boolean(
+            cfg.enableUpdateSetting ||
+            actionType === 'close_group' ||
+            actionType === 'open_group'
+          );
+          if (shouldUpdateSetting) {
+            const settingMode = cfg.groupSetting || (actionType === 'close_group' ? 'announcement' : 'not_announcement');
+            await whatsappGroupService.updateGroupSetting(instanceName, group.jid, settingMode);
           }
 
           // 2. Alterar Nome do Grupo com a Regra do Hashtag (#):
           // Caso o nome do seu grupo contenha '#' (hashtag), o caractere especial '#'
           // permanecerá junto com os elementos que o seguem.
           // Exemplo: Nome atual "Lançamento #10", Novo nome "Vagas abertas" -> "Vagas abertas #10"
-          const shouldUpdateSubject = actionType === 'update_subject' || cfg.enableUpdateSubject;
+          const shouldUpdateSubject = Boolean(
+            cfg.enableUpdateSubject ||
+            actionType === 'update_subject' ||
+            (cfg.newSubject && cfg.newSubject.trim().length > 0)
+          );
           const rawNewSubject = cfg.newSubject || cfg.subject;
 
           if (shouldUpdateSubject && rawNewSubject) {
@@ -2119,14 +2158,22 @@ export class AutomationEngine {
           }
 
           // 3. Alterar Descrição do Grupo
-          const shouldUpdateDescription = actionType === 'update_description' || cfg.enableUpdateDescription;
+          const shouldUpdateDescription = Boolean(
+            cfg.enableUpdateDescription ||
+            actionType === 'update_description' ||
+            (cfg.newDescription && cfg.newDescription.trim().length > 0)
+          );
           const newDesc = cfg.newDescription || cfg.description;
           if (shouldUpdateDescription && newDesc) {
             await whatsappGroupService.updateGroupDescription(instanceName, group.jid, newDesc);
           }
 
           // 4. Alterar Imagem do Grupo
-          const shouldUpdatePicture = actionType === 'update_picture' || cfg.enableUpdatePicture;
+          const shouldUpdatePicture = Boolean(
+            cfg.enableUpdatePicture ||
+            actionType === 'update_picture' ||
+            (cfg.pictureUrl && cfg.pictureUrl.trim().length > 0)
+          );
           const newPicture = cfg.pictureUrl || cfg.newPicture;
           if (shouldUpdatePicture && newPicture) {
             await whatsappGroupService.updateGroupPicture(instanceName, group.jid, newPicture);

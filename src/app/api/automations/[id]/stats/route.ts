@@ -359,16 +359,19 @@ export async function GET(request: Request, { params }: { params: { id: string }
             const count = await prisma.whatsappGroup.count({
               where: {
                 tenantId,
-                isEligible: true,
-                status: 'ACTIVE',
+                status: { not: 'LEFT' },
                 tags: {
                   some: {
                     tag: {
                       OR: [
                         { id: { in: tags } },
                         { name: { in: tags } },
+                        ...tags.map((t) => ({ name: t.toLowerCase() })),
+                        ...tags.map((t) => ({ name: t.toUpperCase() })),
                         ...tags.map((t) => ({ name: t.replace(/^#/, '') })),
                         ...tags.map((t) => ({ name: `#${t.replace(/^#/, '')}` })),
+                        ...tags.map((t) => ({ name: t.replace(/^#/, '').toLowerCase() })),
+                        ...tags.map((t) => ({ name: t.replace(/^#/, '').toUpperCase() })),
                       ],
                     },
                   },

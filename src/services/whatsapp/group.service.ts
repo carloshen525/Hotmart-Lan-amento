@@ -573,6 +573,25 @@ export class WhatsappGroupService {
       }
     }
 
+    // Dispara em background a inscrição de grupos para quaisquer automações ativas deste tenant
+    try {
+      const { automationEngine } = await import('@/services/automation/engine');
+      const activeGroupAutomations = await prisma.automation.findMany({
+        where: {
+          tenantId,
+          status: 'ACTIVE',
+          targetType: 'GROUP',
+        },
+        select: { id: true },
+      });
+
+      for (const auto of activeGroupAutomations) {
+        automationEngine.enrollGroupsByAutomation(auto.id).catch((err: any) => {
+          console.error('[AutomationEngine] Erro ao sincronizar grupos após adicionar tag:', err?.message);
+        });
+      }
+    } catch {}
+
     return { updated: validGroupIds.length };
   }
 
