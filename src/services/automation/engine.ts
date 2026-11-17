@@ -928,7 +928,7 @@ export class AutomationEngine {
     if (!node) return;
 
     // Se automationId não foi passado, descobre pela inscrição
-    let autoId = automationId;
+    let autoId: string = automationId || '';
     if (!autoId && enrollmentId) {
       const enr = await prisma.automationEnrollment.findUnique({
         where: { id: enrollmentId },
@@ -1200,7 +1200,7 @@ export class AutomationEngine {
                   tenantId,
                   enrollmentId,
                   contactId: contact.id,
-                  automationId: autoId,
+                  automationId: autoId || '',
                   targetNodeId: edge.target,
                   executeAt,
                   cancelCondition: cfg.cancelCondition || 'NONE',
@@ -1240,7 +1240,7 @@ export class AutomationEngine {
                 tenantId,
                 enrollmentId,
                 contactId: contact.id,
-                automationId: autoId,
+                automationId: autoId || '',
                 targetNodeId: edge.target,
                 executeAt,
                 cancelCondition: 'NONE',
