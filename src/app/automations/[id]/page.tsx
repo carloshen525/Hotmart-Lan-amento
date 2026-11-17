@@ -229,6 +229,12 @@ export default function AutomationCanvasPage() {
   const [isEditarGrupoModalOpen, setIsEditarGrupoModalOpen] = useState(false);
   const [enableUpdatePicture, setEnableUpdatePicture] = useState(false);
   const [groupActionPictureUrl, setGroupActionPictureUrl] = useState('');
+  const [groupActionPicturePreview, setGroupActionPicturePreview] = useState<string | null>(null);
+  const [groupPictureUploading, setGroupPictureUploading] = useState(false);
+  const [groupPictureProgress, setGroupPictureProgress] = useState(0);
+  const [groupPictureError, setGroupPictureError] = useState<string | null>(null);
+  const [isDraggingGroupPic, setIsDraggingGroupPic] = useState(false);
+
   const [enableUpdateSubject, setEnableUpdateSubject] = useState(false);
   const [groupActionSubject, setGroupActionSubject] = useState('');
   const [enableUpdateDescription, setEnableUpdateDescription] = useState(false);
@@ -1921,14 +1927,75 @@ export default function AutomationCanvasPage() {
     } catch {}
   };
 
+  // Upload da imagem do grupo com validação JPG/JPEG
+  const handleGroupPictureUpload = (file: File) => {
+    if (!file) return;
+
+    const isJpg = file.type === 'image/jpeg' || file.type === 'image/jpg' || /\.jpe?g$/i.test(file.name);
+    if (!isJpg) {
+      setGroupPictureError('Somente imagens em formato JPG ou JPEG são suportados!');
+      return;
+    }
+
+    setGroupPictureError(null);
+    setGroupPictureUploading(true);
+    setGroupPictureProgress(0);
+
+    const localPreview = URL.createObjectURL(file);
+    setGroupActionPicturePreview(localPreview);
+
+    const xhr = new XMLHttpRequest();
+    const formData = new FormData();
+    formData.append('file', file);
+
+    xhr.upload.onprogress = (evt) => {
+      if (evt.lengthComputable) {
+        const percent = Math.round((evt.loaded / evt.total) * 100);
+        setGroupPictureProgress(percent);
+      }
+    };
+
+    xhr.onload = () => {
+      try {
+        if (xhr.status >= 200 && xhr.status < 300) {
+          const data = JSON.parse(xhr.responseText);
+          if (data.success && data.url) {
+            setGroupActionPictureUrl(data.url);
+            setGroupActionPicturePreview(data.url);
+          } else {
+            setGroupPictureError(data.error || 'Falha no upload da imagem');
+          }
+        } else {
+          setGroupPictureError('Falha no upload da imagem');
+        }
+      } catch (err: any) {
+        setGroupPictureError(err.message || 'Erro ao carregar imagem');
+      } finally {
+        setGroupPictureUploading(false);
+      }
+    };
+
+    xhr.onerror = () => {
+      setGroupPictureError('Erro de conexão ao enviar imagem');
+      setGroupPictureUploading(false);
+    };
+
+    xhr.open('POST', '/api/whatsapp/upload');
+    xhr.send(formData);
+  };
+
   // Abertura e configuração do modal Configurar grupos de WhatsApp
   const openEditarGrupoModal = (nodeToConfigure?: Node) => {
     const target = nodeToConfigure || selectedNode;
     if (!target) return;
     setSelectedNode(target);
     const cfg = (target.data?.config as any) || {};
+    const existingPic = cfg.pictureUrl || cfg.newPicture || '';
     setEnableUpdatePicture(Boolean(cfg.enableUpdatePicture || cfg.groupActionType === 'update_picture'));
-    setGroupActionPictureUrl(cfg.pictureUrl || cfg.newPicture || '');
+    setGroupActionPictureUrl(existingPic);
+    setGroupActionPicturePreview(existingPic || null);
+    setGroupPictureError(null);
+    setGroupPictureUploading(false);
     setEnableUpdateSubject(Boolean(cfg.enableUpdateSubject || cfg.groupActionType === 'update_subject'));
     setGroupActionSubject(cfg.newSubject || cfg.subject || '');
     setEnableUpdateDescription(Boolean(cfg.enableUpdateDescription || cfg.groupActionType === 'update_description'));
@@ -4785,7 +4852,7 @@ export default function AutomationCanvasPage() {
               </div>
 
               {/* Opção 1: Alterar Imagem do Grupo */}
-              <div className="bg-[#0f1713] border border-emerald-950/80 rounded-xl p-4 space-y-3">
+              <div className="bg-[#0b100d] border border-emerald-950/80 rounded-2xl p-4 space-y-3">
                 <div className="flex items-center justify-between">
                   <div className="flex items-start gap-3">
                     <div className="w-7 h-7 rounded-full border border-emerald-500/40 text-emerald-400 flex items-center justify-center shrink-0 mt-0.5">
@@ -4796,12 +4863,12 @@ export default function AutomationCanvasPage() {
                       <p className="text-[11px] text-slate-400">Ative para alterar imagem do grupo.</p>
                     </div>
                   </div>
-                  {/* Toggle */}
+                  {/* Toggle Switch Roxo */}
                   <button
                     type="button"
                     onClick={() => setEnableUpdatePicture(!enableUpdatePicture)}
                     className={`relative inline-flex h-6 w-11 items-center rounded-full transition-colors cursor-pointer ${
-                      enableUpdatePicture ? 'bg-[#00a884]' : 'bg-slate-700'
+                      enableUpdatePicture ? 'bg-[#5856d6]' : 'bg-slate-700'
                     }`}
                   >
                     <span
@@ -4813,21 +4880,106 @@ export default function AutomationCanvasPage() {
                 </div>
 
                 {enableUpdatePicture && (
-                  <div className="pt-2 border-t border-emerald-950 space-y-1.5 animate-in fade-in-50">
-                    <label className="text-[11px] font-semibold text-slate-300 block">URL da Imagem / Foto do Grupo:</label>
+                  <div className="pt-3 border-t border-emerald-950/60 space-y-2 animate-in fade-in-50">
                     <input
-                      type="text"
-                      value={groupActionPictureUrl}
-                      onChange={(e) => setGroupActionPictureUrl(e.target.value)}
-                      placeholder="https://exemplo.com/avatar-grupo.jpg"
-                      className="w-full p-2.5 bg-[#0a0d12] border border-slate-700 rounded-lg text-xs text-white focus:outline-none focus:border-emerald-500"
+                      type="file"
+                      id="group_pic_input"
+                      accept=".jpg,.jpeg,image/jpeg"
+                      onChange={(e) => {
+                        const file = e.target.files?.[0];
+                        if (file) handleGroupPictureUpload(file);
+                      }}
+                      className="hidden"
                     />
+
+                    {groupActionPicturePreview || groupActionPictureUrl ? (
+                      <div className="flex flex-col items-center justify-center p-2">
+                        <div className="relative w-36 h-36 rounded-2xl overflow-hidden border-2 border-emerald-500/60 shadow-xl group">
+                          <img
+                            src={groupActionPicturePreview || groupActionPictureUrl}
+                            alt="Prévia do Grupo"
+                            className="w-full h-full object-cover"
+                          />
+                          {groupPictureUploading && (
+                            <div className="absolute inset-0 bg-black/75 flex flex-col items-center justify-center p-2 text-white">
+                              <RefreshCw className="w-6 h-6 animate-spin mb-1.5 text-emerald-400" />
+                              <span className="text-xs font-bold font-mono">{groupPictureProgress}%</span>
+                            </div>
+                          )}
+                          <button
+                            type="button"
+                            onClick={() => {
+                              setGroupActionPictureUrl('');
+                              setGroupActionPicturePreview(null);
+                              setGroupPictureError(null);
+                            }}
+                            className="absolute top-2 right-2 p-1.5 bg-black/70 hover:bg-rose-600 text-white rounded-full transition-colors cursor-pointer shadow-md"
+                            title="Remover imagem"
+                          >
+                            <X className="w-3.5 h-3.5" />
+                          </button>
+                        </div>
+                        <label
+                          htmlFor="group_pic_input"
+                          className="mt-2 text-xs text-emerald-400 hover:text-emerald-300 font-medium cursor-pointer transition-colors"
+                        >
+                          Substituir imagem
+                        </label>
+                      </div>
+                    ) : (
+                      <label
+                        htmlFor="group_pic_input"
+                        onDragOver={(e) => {
+                          e.preventDefault();
+                          setIsDraggingGroupPic(true);
+                        }}
+                        onDragLeave={() => setIsDraggingGroupPic(false)}
+                        onDrop={(e) => {
+                          e.preventDefault();
+                          setIsDraggingGroupPic(false);
+                          const file = e.dataTransfer.files?.[0];
+                          if (file) handleGroupPictureUpload(file);
+                        }}
+                        className={`w-56 h-44 mx-auto border border-dashed rounded-2xl flex flex-col items-center justify-center gap-2.5 p-4 cursor-pointer transition-all ${
+                          isDraggingGroupPic
+                            ? 'border-indigo-400 bg-indigo-950/30'
+                            : 'border-slate-700/80 hover:border-slate-500 bg-[#07090e] hover:bg-[#0d1017]'
+                        }`}
+                      >
+                        {groupPictureUploading ? (
+                          <div className="flex flex-col items-center gap-2">
+                            <RefreshCw className="w-7 h-7 animate-spin text-emerald-400" />
+                            <span className="text-xs font-mono font-bold text-white">{groupPictureProgress}%</span>
+                            <span className="text-[11px] text-slate-400">Enviando imagem...</span>
+                          </div>
+                        ) : (
+                          <>
+                            <div className="w-12 h-10 rounded-lg border-2 border-slate-400/80 flex items-center justify-center">
+                              <ImageIcon className="w-6 h-6 text-slate-300 stroke-1" />
+                            </div>
+                            <span className="text-xs text-slate-300 text-center font-medium leading-tight">
+                              Clique ou arraste uma<br />imagem
+                            </span>
+                          </>
+                        )}
+                      </label>
+                    )}
+
+                    {groupPictureError && (
+                      <p className="text-center text-xs text-rose-400 font-medium mt-1">
+                        {groupPictureError}
+                      </p>
+                    )}
+
+                    <p className="text-center text-[11px] text-slate-400 italic pt-1">
+                      Somente imagens em formato JPG ou JPEG são suportados!
+                    </p>
                   </div>
                 )}
               </div>
 
               {/* Opção 2: Alterar Nome do Grupo */}
-              <div className="bg-[#0f1713] border border-emerald-950/80 rounded-xl p-4 space-y-3">
+              <div className="bg-[#0b100d] border border-emerald-950/80 rounded-2xl p-4 space-y-3">
                 <div className="flex items-center justify-between">
                   <div className="flex items-start gap-3">
                     <div className="w-7 h-7 rounded-full border border-emerald-500/40 text-emerald-400 flex items-center justify-center shrink-0 mt-0.5">
@@ -4838,12 +4990,12 @@ export default function AutomationCanvasPage() {
                       <p className="text-[11px] text-slate-400">Ative para alterar o nome do grupo</p>
                     </div>
                   </div>
-                  {/* Toggle */}
+                  {/* Toggle Switch Roxo */}
                   <button
                     type="button"
                     onClick={() => setEnableUpdateSubject(!enableUpdateSubject)}
                     className={`relative inline-flex h-6 w-11 items-center rounded-full transition-colors cursor-pointer ${
-                      enableUpdateSubject ? 'bg-[#00a884]' : 'bg-slate-700'
+                      enableUpdateSubject ? 'bg-[#5856d6]' : 'bg-slate-700'
                     }`}
                   >
                     <span
@@ -4855,24 +5007,26 @@ export default function AutomationCanvasPage() {
                 </div>
 
                 {enableUpdateSubject && (
-                  <div className="pt-2 border-t border-emerald-950 space-y-2 animate-in fade-in-50">
-                    <label className="text-[11px] font-semibold text-slate-300 block">Novo Nome do Grupo:</label>
-                    <input
-                      type="text"
-                      value={groupActionSubject}
-                      onChange={(e) => setGroupActionSubject(e.target.value)}
-                      placeholder="Ex: Vagas abertas"
-                      className="w-full p-2.5 bg-[#0a0d12] border border-slate-700 rounded-lg text-xs text-white focus:outline-none focus:border-emerald-500"
-                    />
-                    <div className="p-2.5 rounded-lg bg-emerald-950/40 border border-emerald-900/50 text-[11px] text-emerald-300 leading-relaxed">
-                      💡 <strong>Exemplo da Regra de Hashtag:</strong> Se o seu grupo atual se chamar <code>&quot;Lançamento #10&quot;</code> e você digitar <code>&quot;{groupActionSubject.trim() || 'Vagas abertas'}&quot;</code>, o nome atualizado será <strong>&quot;{groupActionSubject.trim() || 'Vagas abertas'} #10&quot;</strong>, preservando automaticamente o número do grupo.
+                  <div className="pt-3 border-t border-emerald-950/60 animate-in fade-in-50">
+                    <div className="relative">
+                      <input
+                        type="text"
+                        maxLength={100}
+                        value={groupActionSubject}
+                        onChange={(e) => setGroupActionSubject(e.target.value)}
+                        placeholder="Novo nome"
+                        className="w-full py-3 px-3.5 pr-16 bg-[#07090e] border border-slate-800 rounded-xl text-xs text-white placeholder-slate-500 focus:outline-none focus:border-indigo-500 transition-colors"
+                      />
+                      <span className="absolute right-3.5 top-1/2 -translate-y-1/2 text-xs font-mono text-slate-400 pointer-events-none">
+                        {groupActionSubject.length}/100
+                      </span>
                     </div>
                   </div>
                 )}
               </div>
 
               {/* Opção 3: Alterar Descrição do Grupo */}
-              <div className="bg-[#0f1713] border border-emerald-950/80 rounded-xl p-4 space-y-3">
+              <div className="bg-[#0b100d] border border-emerald-950/80 rounded-2xl p-4 space-y-3">
                 <div className="flex items-center justify-between">
                   <div className="flex items-start gap-3">
                     <div className="w-7 h-7 rounded-full border border-emerald-500/40 text-emerald-400 flex items-center justify-center shrink-0 mt-0.5">
@@ -4883,12 +5037,12 @@ export default function AutomationCanvasPage() {
                       <p className="text-[11px] text-slate-400">Ative para alterar a descrição do grupo</p>
                     </div>
                   </div>
-                  {/* Toggle */}
+                  {/* Toggle Switch Roxo */}
                   <button
                     type="button"
                     onClick={() => setEnableUpdateDescription(!enableUpdateDescription)}
                     className={`relative inline-flex h-6 w-11 items-center rounded-full transition-colors cursor-pointer ${
-                      enableUpdateDescription ? 'bg-[#00a884]' : 'bg-slate-700'
+                      enableUpdateDescription ? 'bg-[#5856d6]' : 'bg-slate-700'
                     }`}
                   >
                     <span
@@ -4900,73 +5054,19 @@ export default function AutomationCanvasPage() {
                 </div>
 
                 {enableUpdateDescription && (
-                  <div className="pt-2 border-t border-emerald-950 space-y-1.5 animate-in fade-in-50">
-                    <label className="text-[11px] font-semibold text-slate-300 block">Nova Descrição do Grupo:</label>
-                    <textarea
-                      rows={3}
-                      value={groupActionDescription}
-                      onChange={(e) => setGroupActionDescription(e.target.value)}
-                      placeholder="Ex: Acesse o link oficial para garantir sua vaga com bônus exclusivos: https://..."
-                      className="w-full p-2.5 bg-[#0a0d12] border border-slate-700 rounded-lg text-xs text-white focus:outline-none focus:border-emerald-500 resize-none"
-                    />
-                  </div>
-                )}
-              </div>
-
-              {/* Opção 4: Permissões de Envio (Abrir / Fechar Grupo) */}
-              <div className="bg-[#0f1713] border border-emerald-950/80 rounded-xl p-4 space-y-3">
-                <div className="flex items-center justify-between">
-                  <div className="flex items-start gap-3">
-                    <div className="w-7 h-7 rounded-full border border-emerald-500/40 text-emerald-400 flex items-center justify-center shrink-0 mt-0.5">
-                      <Clock className="w-4 h-4" />
-                    </div>
-                    <div>
-                      <h4 className="text-xs font-semibold text-white">Permissões de Envio (Abrir / Fechar)</h4>
-                      <p className="text-[11px] text-slate-400">Ative para controlar quem pode enviar mensagens no grupo</p>
-                    </div>
-                  </div>
-                  {/* Toggle */}
-                  <button
-                    type="button"
-                    onClick={() => setEnableUpdateSetting(!enableUpdateSetting)}
-                    className={`relative inline-flex h-6 w-11 items-center rounded-full transition-colors cursor-pointer ${
-                      enableUpdateSetting ? 'bg-[#00a884]' : 'bg-slate-700'
-                    }`}
-                  >
-                    <span
-                      className={`inline-block h-4 w-4 transform rounded-full bg-white transition-transform ${
-                        enableUpdateSetting ? 'translate-x-6' : 'translate-x-1'
-                      }`}
-                    />
-                  </button>
-                </div>
-
-                {enableUpdateSetting && (
-                  <div className="pt-2 border-t border-emerald-950 space-y-2 animate-in fade-in-50">
-                    <label className="text-[11px] font-semibold text-slate-300 block">Modo de Permissão:</label>
-                    <div className="grid grid-cols-2 gap-2">
-                      <button
-                        type="button"
-                        onClick={() => setGroupActionSetting('announcement')}
-                        className={`p-2.5 rounded-lg border text-xs font-semibold flex items-center justify-center gap-1.5 transition-all cursor-pointer ${
-                          groupActionSetting === 'announcement'
-                            ? 'bg-amber-950/60 border-amber-500 text-amber-200'
-                            : 'bg-[#0a0d12] border-slate-700 text-slate-400 hover:text-white'
-                        }`}
-                      >
-                        <span>🔒 Fechar (Apenas Admins)</span>
-                      </button>
-                      <button
-                        type="button"
-                        onClick={() => setGroupActionSetting('not_announcement')}
-                        className={`p-2.5 rounded-lg border text-xs font-semibold flex items-center justify-center gap-1.5 transition-all cursor-pointer ${
-                          groupActionSetting === 'not_announcement'
-                            ? 'bg-emerald-950/60 border-emerald-500 text-emerald-200'
-                            : 'bg-[#0a0d12] border-slate-700 text-slate-400 hover:text-white'
-                        }`}
-                      >
-                        <span>🔓 Abrir (Todos Podem Falar)</span>
-                      </button>
+                  <div className="pt-3 border-t border-emerald-950/60 animate-in fade-in-50">
+                    <div className="relative">
+                      <textarea
+                        rows={3}
+                        maxLength={2048}
+                        value={groupActionDescription}
+                        onChange={(e) => setGroupActionDescription(e.target.value)}
+                        placeholder="Nova descrição"
+                        className="w-full py-3 px-3.5 pr-20 bg-[#07090e] border border-slate-800 rounded-xl text-xs text-white placeholder-slate-500 focus:outline-none focus:border-indigo-500 resize-none transition-colors"
+                      />
+                      <span className="absolute right-3.5 bottom-3 text-xs font-mono text-slate-400 pointer-events-none">
+                        {groupActionDescription.length}/2048
+                      </span>
                     </div>
                   </div>
                 )}
