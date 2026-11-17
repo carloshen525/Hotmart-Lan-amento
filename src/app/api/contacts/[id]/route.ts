@@ -1,6 +1,7 @@
 import { NextResponse } from 'next/server';
 import { prisma } from '@/lib/prisma';
 import { getActiveTenantId } from '@/lib/tenancy';
+import { automationEngine } from '@/services/automation/engine';
 
 export async function GET(request: Request, { params }: { params: { id: string } }) {
   try {
@@ -87,6 +88,9 @@ export async function PATCH(request: Request, { params }: { params: { id: string
 
     // 4. Se forneceu lista de tagIds para sincronizar
     if (Array.isArray(body.tagIds)) {
+      const previousTagIds = new Set(existing.tags.map((t) => t.tagId));
+      const newlyAddedTagIds = body.tagIds.filter((tId: string) => !previousTagIds.has(tId));
+
       await prisma.contactTag.deleteMany({
         where: {
           contactId: params.id,
@@ -102,6 +106,19 @@ export async function PATCH(request: Request, { params }: { params: { id: string
           create: { contactId: params.id, tagId: tId },
           update: {},
         });
+      }
+
+      // Dispara automações ativas imediatamente para as tags recém-adicionadas
+      if (newlyAddedTagIds.length > 0) {
+        const addedTags = await prisma.tag.findMany({
+          where: { id: { in: newlyAddedTagIds } },
+          select: { name: true },
+        });
+        for (const t of addedTags) {
+          await automationEngine.handleContactTagAdded(tenantId, params.id, t.name).catch((err) => {
+            console.warn('[ContactUpdate] Erro ao disparar automações:', err.message);
+          });
+        }
       }
     }
 

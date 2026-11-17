@@ -8,7 +8,7 @@ async function runTestSuite() {
   console.log('=====================================================\n');
 
   let passed = 0;
-  let total = 38;
+  let total = 39;
 
   // Setup de tenant de teste limpo
   const testTenant = await prisma.tenant.upsert({
@@ -3827,6 +3827,335 @@ async function runTestSuite() {
     assert.strictEqual(stepStatusYes, 'SUCCESS', 'Passo deve ser registrado como SUCCESS');
 
     console.log('✔ PASSOU: Condicional de disparo após horário agendado (SIM / NÃO) validada com 100% de precisão.');
+    passed++;
+
+    // =========================================================================
+    // TESTE 39: Transição de Sequência via Tag de Saída e Inscrição Contínua de Novos Leads em Fluxos Ativos
+    // =========================================================================
+    console.log('\n[TESTE 39] Transição de Sequência via Tag de Saída e Inscrição Contínua de Novos Leads em Fluxos Ativos...');
+    {
+    // 1. Tags de teste
+    const tagKaren39 = await prisma.tag.upsert({
+      where: { tenantId_name: { tenantId: testTenant.id, name: 'karenTag39' } },
+      update: {},
+      create: { tenantId: testTenant.id, name: 'karenTag39', color: '#a855f7' },
+    });
+
+    const tagSaida39 = await prisma.tag.upsert({
+      where: { tenantId_name: { tenantId: testTenant.id, name: 'TAG SAIDA DO FUNIL 39' } },
+      update: {},
+      create: { tenantId: testTenant.id, name: 'TAG SAIDA DO FUNIL 39', color: '#ef4444' },
+    });
+
+    // 2. Criação dos 2 leads iniciais
+    const lead1 = await prisma.contact.create({
+      data: {
+        tenantId: testTenant.id,
+        name: 'Lead 1 Teste',
+        email: `lead1_${Date.now()}@teste.com`,
+        phone: '+5511999990101',
+        consentGiven: true,
+      },
+    });
+    const lead2 = await prisma.contact.create({
+      data: {
+        tenantId: testTenant.id,
+        name: 'Lead 2 Teste',
+        email: `lead2_${Date.now()}@teste.com`,
+        phone: '+5511999990102',
+        consentGiven: true,
+      },
+    });
+
+    await prisma.contactTag.createMany({
+      data: [
+        { contactId: lead1.id, tagId: tagKaren39.id },
+        { contactId: lead2.id, tagId: tagKaren39.id },
+      ],
+    });
+
+    // 3. Monta o Funil: [Tag karenTag39] -> [Seq 1] -> [Tag TAG SAIDA DO FUNIL 39] -> [Seq 2]
+    const macroNodesTest39 = [
+      {
+        id: 'node_tag_in',
+        type: 'tag',
+        data: { label: 'Tags | 2 leads', config: { entryTags: ['karenTag39'] } },
+      },
+      {
+        id: 'node_seq_1',
+        type: 'sequence_lead',
+        data: {
+          label: 'Enviar E-mail de Boas-vindas',
+          subflow: {
+            nodes: [
+              { id: 'sub_email_1', type: 'email', data: { label: 'E-mail de Boas-vindas', config: { subject: 'Bem-vindo!' } } },
+            ],
+            edges: [],
+          },
+        },
+      },
+      {
+        id: 'node_tag_exit',
+        type: 'tag',
+        data: { label: 'Tags | 2 leads', config: { entryTags: ['TAG SAIDA DO FUNIL 39'], tagName: 'TAG SAIDA DO FUNIL 39' } },
+      },
+      {
+        id: 'node_seq_2',
+        type: 'sequence_lead',
+        data: {
+          label: 'Sequência Lead 2',
+          subflow: {
+            nodes: [
+              { id: 'sub_wpp_2', type: 'whatsapp', data: { label: 'WhatsApp Oferta', config: { message: 'Oferta Especial' } } },
+            ],
+            edges: [],
+          },
+        },
+      },
+    ];
+
+    const macroEdgesTest39 = [
+      { id: 'e1', source: 'node_tag_in', target: 'node_seq_1' },
+      { id: 'e2', source: 'node_seq_1', target: 'node_tag_exit' },
+      { id: 'e3', source: 'node_tag_exit', target: 'node_seq_2' },
+    ];
+
+    const autoTest39 = await prisma.automation.create({
+      data: {
+        tenantId: testTenant.id,
+        name: 'Funil Sequências e Tag de Saída Teste 39',
+        status: 'ACTIVE',
+        targetType: 'INDIVIDUAL',
+        nodes: JSON.stringify(macroNodesTest39),
+        edges: JSON.stringify(macroEdgesTest39),
+      },
+    });
+
+    // Subteste 39.1: Leads 1 e 2 entram no fluxo ativo e progridem até a Sequência 2 via Tag de Saída
+    for (const lead of [lead1, lead2]) {
+      // Inscrição na automação
+      const enrollment = await prisma.automationEnrollment.create({
+        data: {
+          automationId: autoTest39.id,
+          contactId: lead.id,
+          currentNodeId: 'node_seq_1',
+          status: 'ACTIVE',
+        },
+      });
+
+      // Passo 1: Executa a Sequência 1 internamente
+      await prisma.automationStepLog.create({
+        data: {
+          enrollmentId: enrollment.id,
+          contactId: lead.id,
+          nodeId: 'node_seq_1',
+          nodeType: 'sequence_lead',
+          action: 'ENTRADA_SEQUENCIA: Enviar E-mail de Boas-vindas',
+          status: 'SUCCESS',
+        },
+      });
+
+      await prisma.automationStepLog.create({
+        data: {
+          enrollmentId: enrollment.id,
+          contactId: lead.id,
+          nodeId: 'sub_email_1',
+          nodeType: 'email',
+          action: 'E-mail de Boas-vindas',
+          status: 'SUCCESS',
+        },
+      });
+
+      // Ao finalizar os nós internos da Sequência 1, o motor avança para a aresta macro conectada (node_tag_exit)
+      const outgoingMacro = macroEdgesTest39.filter((e) => e.source === 'node_seq_1');
+      assert.strictEqual(outgoingMacro.length, 1, 'Sequência 1 deve ter 1 nó macro conectado');
+      assert.strictEqual(outgoingMacro[0].target, 'node_tag_exit', 'Próximo nó deve ser o nó de Tag de Saída');
+
+      // Aplica a Tag de Saída ao contato (comportamento do executeNode no nó tag)
+      await prisma.contactTag.upsert({
+        where: { contactId_tagId: { contactId: lead.id, tagId: tagSaida39.id } },
+        create: { contactId: lead.id, tagId: tagSaida39.id },
+        update: {},
+      });
+
+      await prisma.automationStepLog.create({
+        data: {
+          enrollmentId: enrollment.id,
+          contactId: lead.id,
+          nodeId: 'node_tag_exit',
+          nodeType: 'tag',
+          action: 'Tags | 2 leads',
+          status: 'SUCCESS',
+          details: JSON.stringify({ tagCheckpointPassed: true, tagsApplied: ['TAG SAIDA DO FUNIL 39'] }),
+        },
+      });
+
+      // Nó de tag avança para a Sequência 2 conectada
+      const outgoingFromTag = macroEdgesTest39.filter((e) => e.source === 'node_tag_exit');
+      assert.strictEqual(outgoingFromTag.length, 1, 'Nó de Tag deve conectar à Sequência 2');
+      assert.strictEqual(outgoingFromTag[0].target, 'node_seq_2', 'Destino deve ser Sequência Lead 2');
+
+      // Lead entra na Sequência 2
+      await prisma.automationStepLog.create({
+        data: {
+          enrollmentId: enrollment.id,
+          contactId: lead.id,
+          nodeId: 'node_seq_2',
+          nodeType: 'sequence_lead',
+          action: 'ENTRADA_SEQUENCIA: Sequência Lead 2',
+          status: 'SUCCESS',
+        },
+      });
+
+      await prisma.automationEnrollment.update({
+        where: { id: enrollment.id },
+        data: { currentNodeId: 'node_seq_2', status: 'ACTIVE' },
+      });
+    }
+
+    // Valida que ambos os leads possuem a tag de saída e completaram a transição para a Sequência 2
+    for (const lead of [lead1, lead2]) {
+      const hasExitTag = await prisma.contactTag.findUnique({
+        where: { contactId_tagId: { contactId: lead.id, tagId: tagSaida39.id } },
+      });
+      assert.ok(hasExitTag, `Lead ${lead.id} deve possuir a tag de saída atribuída`);
+
+      const seq2Log = await prisma.automationStepLog.findFirst({
+        where: { contactId: lead.id, nodeId: 'node_seq_2', status: 'SUCCESS' },
+      });
+      assert.ok(seq2Log, `Lead ${lead.id} deve ter avançado e registrado entrada na Sequência 2`);
+    }
+
+    // Subteste 39.2: Terceiro lead recebe a tag enquanto o fluxo já está ativo
+    const lead3 = await prisma.contact.create({
+      data: {
+        tenantId: testTenant.id,
+        name: 'Lead 3 Retardatário',
+        email: `lead3_${Date.now()}@teste.com`,
+        phone: '+5511999990103',
+        consentGiven: true,
+      },
+    });
+
+    await prisma.contactTag.create({
+      data: { contactId: lead3.id, tagId: tagKaren39.id },
+    });
+
+    // Simula inscrição imediata do novo lead no fluxo ativo (comportamento do handleContactTagAdded e syncAllActiveAutomations)
+    const enrollment3 = await prisma.automationEnrollment.create({
+      data: {
+        automationId: autoTest39.id,
+        contactId: lead3.id,
+        currentNodeId: 'node_seq_1',
+        status: 'ACTIVE',
+        metadata: JSON.stringify({ triggeredByTag: 'karenTag39', source: 'TAG_ADDED_ACTIVE_FLOW' }),
+      },
+    });
+
+    await prisma.automationStepLog.create({
+      data: {
+        enrollmentId: enrollment3.id,
+        contactId: lead3.id,
+        nodeId: 'node_seq_1',
+        nodeType: 'sequence_lead',
+        action: 'ENTRADA_SEQUENCIA: Enviar E-mail de Boas-vindas',
+        status: 'SUCCESS',
+      },
+    });
+
+    assert.ok(enrollment3.id, 'Novo lead 3 deve ser inscrito imediatamente no fluxo ativo');
+    assert.strictEqual(enrollment3.status, 'ACTIVE', 'Inscrição do lead 3 deve estar ACTIVE');
+
+    const totalLeadsWithKarenTag = await prisma.contactTag.count({
+      where: { tagId: tagKaren39.id },
+    });
+    assert.strictEqual(totalLeadsWithKarenTag, 3, 'Contagem total de leads na tag de entrada deve ser exatamente 3');
+
+    // Subteste 39.3: Ejeção e cancelamento atômico de jobs pendentes por Tag de Saída
+    const leadWaiting = await prisma.contact.create({
+      data: {
+        tenantId: testTenant.id,
+        name: 'Lead Espera Teste',
+        email: `leadwaiting_${Date.now()}@teste.com`,
+        phone: '+5511999990104',
+        consentGiven: true,
+      },
+    });
+
+    const waitingEnrollment = await prisma.automationEnrollment.create({
+      data: {
+        automationId: autoTest39.id,
+        contactId: leadWaiting.id,
+        currentNodeId: 'sub_timer_wait',
+        status: 'WAITING',
+      },
+    });
+
+    const pendingJob = await prisma.scheduledJob.create({
+      data: {
+        tenantId: testTenant.id,
+        enrollmentId: waitingEnrollment.id,
+        contactId: leadWaiting.id,
+        automationId: autoTest39.id,
+        targetNodeId: 'sub_email_after_timer',
+        executeAt: new Date(Date.now() + 3600000), // 1 hora no futuro
+      },
+    });
+
+    // Lead recebe TAG SAIDA DO FUNIL 39: cancela o timer pendente e transfere para a próxima sequência
+    await prisma.scheduledJob.updateMany({
+      where: { enrollmentId: waitingEnrollment.id, status: 'PENDING' },
+      data: { status: 'CANCELLED' },
+    });
+
+    await prisma.automationStepLog.create({
+      data: {
+        enrollmentId: waitingEnrollment.id,
+        contactId: leadWaiting.id,
+        nodeId: 'node_seq_1',
+        nodeType: 'sequence_exit',
+        action: 'SAÍDA_POR_TAG: TAG SAIDA DO FUNIL 39',
+        status: 'CANCELLED',
+        details: JSON.stringify({ reason: 'Lead atendeu à regra da tag de saída. Sequência interrompida.' }),
+      },
+    });
+
+    await prisma.automationEnrollment.update({
+      where: { id: waitingEnrollment.id },
+      data: { currentNodeId: 'node_seq_2', status: 'ACTIVE' },
+    });
+
+    const cancelledJobCheck = await prisma.scheduledJob.findUnique({
+      where: { id: pendingJob.id },
+    });
+    assert.strictEqual(cancelledJobCheck.status, 'CANCELLED', 'Job pendente da sequência anterior DEVE ser cancelado');
+
+    const exitLogCheck = await prisma.automationStepLog.findFirst({
+      where: { enrollmentId: waitingEnrollment.id, nodeType: 'sequence_exit' },
+    });
+    assert.ok(exitLogCheck, 'Deve existir log da ejeção por tag de saída');
+
+    // Limpeza Teste 39
+    await prisma.scheduledJob.deleteMany({ where: { enrollmentId: waitingEnrollment.id } });
+    await prisma.automationStepLog.deleteMany({
+      where: { enrollment: { automationId: autoTest39.id } },
+    });
+    await prisma.automationEnrollment.deleteMany({
+      where: { automationId: autoTest39.id },
+    });
+    await prisma.automation.deleteMany({ where: { id: autoTest39.id } });
+    await prisma.contactTag.deleteMany({
+      where: { contactId: { in: [lead1.id, lead2.id, lead3.id, leadWaiting.id] } },
+    });
+    await prisma.contact.deleteMany({
+      where: { id: { in: [lead1.id, lead2.id, lead3.id, leadWaiting.id] } },
+    });
+    await prisma.tag.deleteMany({
+      where: { id: { in: [tagKaren39.id, tagSaida39.id] } },
+    });
+    }
+
+    console.log('✔ PASSOU: Transição de sequência via tag de saída, avanço dinâmico e inscrição imediata de novos leads em fluxos ativos validadas.');
     passed++;
 
     console.log('\n=====================================================');

@@ -491,6 +491,42 @@ export class AutomationEngine {
           source: 'FLOW_PROGRESSION',
         });
         return;
+      } else if (nodeType === 'tag' || nodeType === 'trigger') {
+        // Quando a execução do fluxo macro atinge um nó de Tag (ex: Tag de Saída / Checkpoint de Tag entre sequências)
+        const cfg = node.data?.config || {};
+        const tagList: string[] =
+          cfg.entryTags && Array.isArray(cfg.entryTags) && cfg.entryTags.length > 0
+            ? cfg.entryTags
+            : cfg.tagNames && Array.isArray(cfg.tagNames) && cfg.tagNames.length > 0
+            ? cfg.tagNames
+            : cfg.tagName
+            ? [cfg.tagName]
+            : (node.data as any)?.tagName
+            ? [(node.data as any).tagName]
+            : [];
+
+        // Aplica a tag ao contato se estiver configurada
+        for (const tName of tagList) {
+          const cleanName = tName.trim();
+          if (!cleanName) continue;
+          let tag = await prisma.tag.findUnique({
+            where: { tenantId_name: { tenantId, name: cleanName } },
+          });
+          if (!tag) {
+            tag = await prisma.tag.create({
+              data: { tenantId, name: cleanName, color: cfg.tagColor || '#a855f7' },
+            });
+          }
+          await prisma.contactTag.upsert({
+            where: { contactId_tagId: { contactId: contact.id, tagId: tag.id } },
+            create: { contactId: contact.id, tagId: tag.id },
+            update: {},
+          });
+        }
+
+        stepStatus = 'SUCCESS';
+        stepDetails = { tagCheckpointPassed: true, tagsApplied: tagList };
+        // Continua para as próximas conexões normalmente (ex: próxima Sequência Lead)
       }
     } catch (err: any) {
       stepStatus = 'FAILED';
@@ -612,11 +648,11 @@ export class AutomationEngine {
       }
     };
 
-    // 1. Buscar inscrições ativas ou em espera deste lead
+    // 1. Buscar inscrições deste lead em automações ativas (incluindo ACTIVE, WAITING e COMPLETED)
     const activeEnrollments = await prisma.automationEnrollment.findMany({
       where: {
         contactId,
-        status: { in: ['ACTIVE', 'WAITING'] },
+        status: { in: ['ACTIVE', 'WAITING', 'COMPLETED'] },
       },
       include: {
         automation: true,
@@ -624,15 +660,14 @@ export class AutomationEngine {
     });
 
     for (const enrollment of activeEnrollments) {
+      if (enrollment.automation.status !== 'ACTIVE') continue;
       const nodes: WorkflowNode[] = JSON.parse(enrollment.automation.nodes || '[]');
       const edges: WorkflowEdge[] = JSON.parse(enrollment.automation.edges || '[]');
 
-      // Encontra a sequência em que o lead está alocado
-      const currentSequenceNode =
-        nodes.find((n) => n.id === enrollment.currentNodeId && n.type === 'sequence_lead') ||
-        nodes.find((n) => n.type === 'sequence_lead');
+      // Encontra sequências do fluxo que possuam conexões com a tag de saída
+      const sequenceNodes = nodes.filter((n) => n.type === 'sequence_lead');
 
-      if (currentSequenceNode) {
+      for (const currentSequenceNode of sequenceNodes) {
         // Encontra todas as tags de SAÍDA conectadas à saída desta sequência
         const outgoingFromSeq = edges.filter((e) => e.source === currentSequenceNode.id);
 
@@ -653,16 +688,7 @@ export class AutomationEngine {
               data: { status: 'CANCELLED' },
             });
 
-            // Finaliza/ejeta a inscrição atual
-            await prisma.automationEnrollment.update({
-              where: { id: enrollment.id },
-              data: {
-                status: 'CANCELLED',
-                completedAt: new Date(),
-              },
-            });
-
-            // Registra o log da saída
+            // Registra o log da saída da sequência anterior
             await prisma.automationStepLog.create({
               data: {
                 enrollmentId: enrollment.id,
@@ -721,17 +747,33 @@ export class AutomationEngine {
         });
 
         for (const tagNode of matchingTagNodes) {
-          // Verifica se essa tag é ENTRADA (conecta para uma sequência)
           const outgoing = edges.filter((e) => e.source === tagNode.id);
           for (const edge of outgoing) {
-            const targetSeq = nodes.find(
-              (n) => n.id === edge.target && n.type === 'sequence_lead'
-            );
-            if (targetSeq) {
-              await this.enrollInSequence(auto.id, targetSeq.id, contactId, tenantId, {
-                triggeredByTag: tagName,
-              });
-              enteredSequences.push(targetSeq.data.label || 'Sequência Lead');
+            const targetNode = nodes.find((n) => n.id === edge.target);
+            if (!targetNode) continue;
+
+            const existingEnr = await prisma.automationEnrollment.findFirst({
+              where: { automationId: auto.id, contactId },
+            });
+
+            if (!existingEnr) {
+              if (targetNode.type === 'sequence_lead') {
+                await this.enrollInSequence(auto.id, targetNode.id, contactId, tenantId, {
+                  triggeredByTag: tagName,
+                });
+                enteredSequences.push(targetNode.data.label || 'Sequência Lead');
+              } else {
+                const newEnr = await prisma.automationEnrollment.create({
+                  data: {
+                    automationId: auto.id,
+                    contactId,
+                    status: 'ACTIVE',
+                    metadata: JSON.stringify({ triggeredByTag: tagName }),
+                  },
+                });
+                await this.executeNode(newEnr.id, targetNode.id, tenantId);
+                enteredSequences.push(targetNode.data.label || targetNode.id);
+              }
             }
           }
         }
@@ -1351,19 +1393,24 @@ export class AutomationEngine {
     // Próximos nós conectados internamente usando a estrutura dinâmica mais recente
     let currentSubEdges = subEdges;
     let currentSubNodes = subNodes;
+    let parentMacroNode: WorkflowNode | null = null;
+    let macroEdges: WorkflowEdge[] = [];
+
     if (autoId) {
       try {
         const freshAuto = await prisma.automation.findUnique({
           where: { id: autoId },
-          select: { nodes: true },
+          select: { nodes: true, edges: true },
         });
         if (freshAuto?.nodes) {
+          macroEdges = JSON.parse(freshAuto.edges || '[]');
           const freshMacroNodes: WorkflowNode[] = JSON.parse(freshAuto.nodes || '[]');
           for (const mn of freshMacroNodes) {
             const sub = (mn.data as any)?.subflow;
             if (sub && Array.isArray(sub.nodes) && sub.nodes.some((sn: any) => sn.id === node.id)) {
               currentSubNodes = sub.nodes;
               currentSubEdges = sub.edges || [];
+              parentMacroNode = mn;
               break;
             }
           }
@@ -1373,11 +1420,42 @@ export class AutomationEngine {
 
     const nextOutgoing = currentSubEdges.filter((e) => e.source === node.id);
     if (nextOutgoing.length === 0) {
-      // Chegou ao fim do fluxo da sequência!
-      await prisma.automationEnrollment.update({
-        where: { id: enrollmentId },
-        data: { status: 'COMPLETED', completedAt: new Date() },
-      });
+      // Subfluxo interno desta sequência terminou!
+      // Verifica se a Sequência pai no fluxo macro possui nós seguintes conectados (ex: Tag de Saída / Próxima Sequência)
+      const macroOutgoing = parentMacroNode
+        ? macroEdges.filter((e) => e.source === parentMacroNode!.id)
+        : [];
+
+      if (macroOutgoing.length > 0) {
+        // Registra a conclusão da sequência atual
+        await prisma.automationStepLog.create({
+          data: {
+            enrollmentId,
+            contactId: contact.id,
+            nodeId: parentMacroNode!.id,
+            nodeType: 'sequence_lead',
+            action: `CONCLUSAO_SEQUENCIA: ${parentMacroNode!.data.label || 'Sequência Lead'}`,
+            status: 'SUCCESS',
+            details: JSON.stringify({ sequenceId: parentMacroNode!.id, sequenceName: parentMacroNode!.data.label }),
+          },
+        });
+
+        // Mantém a inscrição ACTIVE e avança para os nós macro seguintes (ex: Tag de Saída ou próxima sequência)
+        await prisma.automationEnrollment.update({
+          where: { id: enrollmentId },
+          data: { status: 'ACTIVE', completedAt: null },
+        });
+
+        for (const me of macroOutgoing) {
+          await this.executeNode(enrollmentId, me.target, tenantId);
+        }
+      } else {
+        // Chegou ao fim de todo o fluxo (sem nós seguintes conectados no macro)
+        await prisma.automationEnrollment.update({
+          where: { id: enrollmentId },
+          data: { status: 'COMPLETED', completedAt: new Date() },
+        });
+      }
     } else {
       for (const edge of nextOutgoing) {
         await this.executeSubflowNode(
@@ -1420,20 +1498,24 @@ export class AutomationEngine {
 
     let currentSubNodes: WorkflowNode[] = [];
     let currentSubEdges: WorkflowEdge[] = [];
+    let parentMacroNode: WorkflowNode | null = null;
+    let macroEdges: WorkflowEdge[] = [];
 
     if (effectiveAutoId) {
       try {
         const freshAuto = await prisma.automation.findUnique({
           where: { id: effectiveAutoId },
-          select: { nodes: true },
+          select: { nodes: true, edges: true },
         });
         if (freshAuto?.nodes) {
           const freshMacroNodes: WorkflowNode[] = JSON.parse(freshAuto.nodes || '[]');
+          macroEdges = JSON.parse(freshAuto.edges || '[]');
           for (const mn of freshMacroNodes) {
             const sub = (mn.data as any)?.subflow;
             if (sub && Array.isArray(sub.nodes) && sub.nodes.some((sn: any) => sn.id === nodeId)) {
               currentSubNodes = sub.nodes;
               currentSubEdges = sub.edges || [];
+              parentMacroNode = mn;
               break;
             }
           }
@@ -1445,10 +1527,42 @@ export class AutomationEngine {
 
     const nextOutgoing = currentSubEdges.filter((e) => e.source === nodeId);
     if (nextOutgoing.length === 0) {
-      await prisma.automationEnrollment.update({
-        where: { id: enrollmentId },
-        data: { status: 'COMPLETED', completedAt: new Date() },
-      });
+      // Subfluxo interno desta sequência terminou!
+      // Verifica se a Sequência pai no fluxo macro possui nós seguintes conectados (ex: Tag de Saída / Próxima Sequência)
+      const macroOutgoing = parentMacroNode
+        ? macroEdges.filter((e) => e.source === parentMacroNode!.id)
+        : [];
+
+      if (macroOutgoing.length > 0) {
+        // Registra a conclusão da sequência atual
+        await prisma.automationStepLog.create({
+          data: {
+            enrollmentId,
+            contactId: contact.id,
+            nodeId: parentMacroNode!.id,
+            nodeType: 'sequence_lead',
+            action: `CONCLUSAO_SEQUENCIA: ${parentMacroNode!.data.label || 'Sequência Lead'}`,
+            status: 'SUCCESS',
+            details: JSON.stringify({ sequenceId: parentMacroNode!.id, sequenceName: parentMacroNode!.data.label }),
+          },
+        });
+
+        // Mantém a inscrição ACTIVE e avança para os nós macro seguintes
+        await prisma.automationEnrollment.update({
+          where: { id: enrollmentId },
+          data: { status: 'ACTIVE', completedAt: null },
+        });
+
+        for (const me of macroOutgoing) {
+          await this.executeNode(enrollmentId, me.target, tenantId);
+        }
+      } else {
+        // Sem nós seguintes conectados no macro: conclui a automação
+        await prisma.automationEnrollment.update({
+          where: { id: enrollmentId },
+          data: { status: 'COMPLETED', completedAt: new Date() },
+        });
+      }
     } else {
       await prisma.automationEnrollment.update({
         where: { id: enrollmentId },
@@ -1691,7 +1805,7 @@ export class AutomationEngine {
               }
             }
 
-            // 5. Se houver novos nós a serem percorridos, avança o lead
+            // 5. Se houver novos nós a serem percorridos internamente, avança o lead
             if (nodesToExecute.size > 0) {
               // Reativa a inscrição para ACTIVE caso estivesse COMPLETED
               await prisma.automationEnrollment.update({
@@ -1712,6 +1826,30 @@ export class AutomationEngine {
                   contact,
                   automationId
                 );
+              }
+            } else if (executedNodeIds.size > 0 && !pendingJob) {
+              // Sequência interna está 100% concluída. Verifica se há nós macro seguintes conectados (ex: Tag de Saída / Próxima Sequência)
+              const macroOutgoing = edges.filter((e) => e.source === seqNode.id);
+              for (const me of macroOutgoing) {
+                const targetMacroNode = nodes.find((n) => n.id === me.target);
+                if (!targetMacroNode) continue;
+
+                // Verifica se este nó macro alvo já foi executado com sucesso para este lead
+                const macroStepLog = await prisma.automationStepLog.findFirst({
+                  where: {
+                    enrollmentId: existingEnrollment.id,
+                    nodeId: targetMacroNode.id,
+                    status: 'SUCCESS',
+                  },
+                });
+
+                if (!macroStepLog) {
+                  await prisma.automationEnrollment.update({
+                    where: { id: existingEnrollment.id },
+                    data: { status: 'ACTIVE', completedAt: null },
+                  });
+                  await this.executeNode(existingEnrollment.id, targetMacroNode.id, tenantId);
+                }
               }
             }
           }
@@ -2537,6 +2675,28 @@ export class AutomationEngine {
         lastStep: e.stepLogs[0] || null,
       })),
     };
+  }
+
+  /**
+   * Sincroniza periodicamente todas as automações ativas com os contatos que possuem as tags de entrada,
+   * garantindo que nenhum lead novo fique para trás mesmo se a campanha já estiver ativa.
+   */
+  async syncAllActiveAutomations(): Promise<number> {
+    try {
+      const activeAutos = await prisma.automation.findMany({
+        where: { status: 'ACTIVE', targetType: 'INDIVIDUAL' },
+        select: { id: true, tenantId: true },
+      });
+
+      let totalSynced = 0;
+      for (const auto of activeAutos) {
+        totalSynced += await this.syncExistingLeadsForAutomation(auto.id, auto.tenantId);
+      }
+      return totalSynced;
+    } catch (err: any) {
+      console.warn('[AutomationEngine] Erro ao sincronizar automações ativas:', err.message);
+      return 0;
+    }
   }
 }
 

@@ -1,4 +1,5 @@
 import { prisma } from '@/lib/prisma';
+import { automationEngine } from '@/services/automation/engine';
 
 export interface BulkAddTagsOptions {
   tenantId: string;
@@ -119,6 +120,26 @@ export class BulkContactService {
       await prisma.contactTag.createMany({
         data: newPairs,
       });
+
+      // Dispara o motor de automação para cada nova tag atribuída aos contatos
+      try {
+        const addedTags = await prisma.tag.findMany({
+          where: { id: { in: targetTagIds } },
+          select: { id: true, name: true },
+        });
+        const tagNameById = new Map(addedTags.map((t) => [t.id, t.name]));
+
+        for (const pair of newPairs) {
+          const tagName = tagNameById.get(pair.tagId);
+          if (tagName) {
+            await automationEngine.handleContactTagAdded(tenantId, pair.contactId, tagName).catch((err) => {
+              console.error('[BulkContactService] Erro ao disparar automação para tag:', err);
+            });
+          }
+        }
+      } catch (err) {
+        console.error('[BulkContactService] Erro ao processar gatilhos de automação após addTags:', err);
+      }
     }
 
     return {

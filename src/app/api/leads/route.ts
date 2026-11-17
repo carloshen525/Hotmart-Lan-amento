@@ -232,6 +232,13 @@ export async function POST(request: Request) {
         console.error('[API Leads] Erro ao inscrever em automação específica:', err);
       });
     } else if (appliedTags.length > 0) {
+      // Dispara o motor de automação (gatilhos de entrada e transições de saída por tag)
+      for (const tName of appliedTags) {
+        await automationEngine.handleContactTagAdded(tenantId, contact.id, tName).catch((err) => {
+          console.error('[API Leads] Erro em handleContactTagAdded:', err);
+        });
+      }
+
       // Dispara automações ativas que escutam qualquer uma dessas tags
       const activeAutomations = await prisma.automation.findMany({
         where: {

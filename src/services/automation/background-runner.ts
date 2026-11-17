@@ -1,4 +1,5 @@
 import { automationScheduler } from './scheduler';
+import { automationEngine } from './engine';
 import { WhatsappQueueService } from '@/services/whatsapp/queue.service';
 import { EmailQueueService } from '@/services/email/queue.service';
 
@@ -30,10 +31,13 @@ export class BackgroundSchedulerRunner {
         // 2. Processa timers de grupos de WhatsApp
         await automationScheduler.processDueGroupTimers();
 
-        // 3. Processa lotes da fila persistente de WhatsApp (anti-bloqueio / agendados)
+        // 3. Sincroniza novos leads com automações ativas (garante avanço contínuo)
+        await automationEngine.syncAllActiveAutomations();
+
+        // 4. Processa lotes da fila persistente de WhatsApp (anti-bloqueio / agendados)
         await WhatsappQueueService.processBatch({ batchSize: 20 });
 
-        // 4. Processa lotes da fila persistente de E-mails
+        // 5. Processa lotes da fila persistente de E-mails
         await EmailQueueService.processBatch({ batchSize: 20 });
       } catch (err: any) {
         // Log não bloqueante
