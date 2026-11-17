@@ -121,6 +121,65 @@ export class AutomationScheduler {
       }
     }
 
+    // 4. Auto-recuperação resiliente: Verifica inscrições individuais em WAITING cujo timer já venceu e que não possuem job ativo pendente
+    try {
+      const stuckWaitingEnrollments = await prisma.automationEnrollment.findMany({
+        where: {
+          status: 'WAITING',
+          currentNodeId: { not: null },
+        },
+        include: {
+          automation: true,
+          scheduledJobs: {
+            where: { status: 'PENDING' },
+          },
+        },
+        take: 30,
+      });
+
+      for (const enr of stuckWaitingEnrollments) {
+        if (!enr.currentNodeId || !enr.automation || enr.automation.status !== 'ACTIVE') continue;
+        if (enr.scheduledJobs && enr.scheduledJobs.length > 0) continue; // Possui job agendado aguardando no tempo certo
+
+        const nodes: any[] = JSON.parse(enr.automation.nodes || '[]');
+        const edges: any[] = JSON.parse(enr.automation.edges || '[]');
+        const currentNode = nodes.find((n) => n.id === enr.currentNodeId);
+        if (!currentNode || (currentNode.type !== 'timer' && currentNode.type !== 'delay')) continue;
+
+        const cfg = currentNode.data?.config || {};
+        const targetStr = cfg.specificDate || cfg.targetDate || cfg.targetTime;
+        const targetTime = parseTargetDate(targetStr);
+
+        if (isNaN(targetTime) || targetTime <= now.getTime()) {
+          // Timer já venceu! Reativa a inscrição e avança para a próxima etapa conectada
+          await prisma.automationEnrollment.update({
+            where: { id: enr.id },
+            data: { status: 'ACTIVE' },
+          });
+
+          await prisma.automationStepLog.create({
+            data: {
+              enrollmentId: enr.id,
+              contactId: enr.contactId,
+              nodeId: currentNode.id,
+              nodeType: 'timer',
+              action: 'TIMER_PASSED',
+              status: 'SUCCESS',
+              details: JSON.stringify({ passedAt: new Date().toISOString(), recovered: true }),
+            },
+          });
+
+          const outgoing = edges.filter((e) => e.source === currentNode.id);
+          for (const edge of outgoing) {
+            await automationEngine.executeNode(enr.id, edge.target, enr.automation.tenantId);
+          }
+          processed++;
+        }
+      }
+    } catch (stuckErr: any) {
+      console.warn('[AutomationScheduler] Aviso na auto-recuperação de timers:', stuckErr.message);
+    }
+
     return { processed, cancelled, failed };
   }
 

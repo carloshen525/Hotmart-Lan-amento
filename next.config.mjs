@@ -2,6 +2,7 @@
 const nextConfig = {
   reactStrictMode: false, // React Flow recommends false for drag/drop smooth rendering
   experimental: {
+    instrumentationHook: true,
     serverComponentsExternalPackages: ['@prisma/client', 'nodemailer', 'bcryptjs'],
   },
   async redirects() {

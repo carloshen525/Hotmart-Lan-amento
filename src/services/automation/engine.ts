@@ -111,6 +111,7 @@ export class AutomationEngine {
    * Executa um nó da automação para a inscrição ativa
    */
   async executeNode(enrollmentId: string, nodeId: string, tenantId: string): Promise<void> {
+    if (!enrollmentId || !nodeId) return;
     const enrollment = await prisma.automationEnrollment.findUnique({
       where: { id: enrollmentId },
       include: {
@@ -433,28 +434,35 @@ export class AutomationEngine {
         // Encontrar os próximos nós após o delay
         const outgoing = edges.filter((e) => e.source === node.id);
         if (outgoing.length > 0) {
-          // Criar Job Agendado persistente
-          for (const nextEdge of outgoing) {
-            await prisma.scheduledJob.create({
-              data: {
-                tenantId,
-                enrollmentId,
-                contactId: contact.id,
-                automationId: automation.id,
-                targetNodeId: nextEdge.target,
-                executeAt,
-                cancelCondition: config.cancelCondition || 'PURCHASE_APPROVED',
-              },
+          const nowMs = Date.now();
+          if (executeAt.getTime() <= nowMs) {
+            // Se o horário agendado já chegou ou passou, avança imediatamente sem criar agendamento pendente
+            stepDetails = { scheduledUntil: executeAt, passedImmediately: true, summary: summaryText };
+            // Continua o fluxo para os nós seguintes sem pausar
+          } else {
+            // Horário no futuro: Criar Job Agendado persistente e pausar execução
+            for (const nextEdge of outgoing) {
+              await prisma.scheduledJob.create({
+                data: {
+                  tenantId,
+                  enrollmentId,
+                  contactId: contact.id,
+                  automationId: automation.id,
+                  targetNodeId: nextEdge.target,
+                  executeAt,
+                  cancelCondition: config.cancelCondition || 'PURCHASE_APPROVED',
+                },
+              });
+            }
+
+            await prisma.automationEnrollment.update({
+              where: { id: enrollmentId },
+              data: { status: 'WAITING' },
             });
+
+            stepDetails = { scheduledUntil: executeAt, summary: summaryText, cancelCondition: config.cancelCondition || 'PURCHASE_APPROVED' };
+            shouldHaltExecution = true; // A execução pausa aqui até o job vencer
           }
-
-          await prisma.automationEnrollment.update({
-            where: { id: enrollmentId },
-            data: { status: 'WAITING' },
-          });
-
-          stepDetails = { scheduledUntil: executeAt, summary: summaryText, cancelCondition: config.cancelCondition || 'PURCHASE_APPROVED' };
-          shouldHaltExecution = true; // A execução pausa aqui até o job vencer
         }
       } else if (nodeType === 'sequence_lead') {
         // Quando a execução do fluxo macro atinge uma Sequência Lead (após um Timer, Tag ou nó macro):
@@ -746,91 +754,154 @@ export class AutomationEngine {
       orderBy: { enteredAt: 'desc' },
     });
 
-    if (existingEnrollment) {
-      // Lead já possui inscrição nesta automação. NUNCA recriar e NUNCA reiniciar do início!
-      const subflow = (seqNode.data as any).subflow || {};
-      const subNodes: WorkflowNode[] = subflow.nodes || [];
-      const subEdges: WorkflowEdge[] = subflow.edges || [];
+    let enrollment = existingEnrollment;
 
-      // Caso novas etapas tenham sido adicionadas ao fluxo:
-      // Se a inscrição estava concluída, verifica se a última etapa que o lead completou possui novas saídas
-      if (existingEnrollment.status === 'COMPLETED' && existingEnrollment.currentNodeId) {
-        const outgoingFromLast = subEdges.filter((e) => e.source === existingEnrollment.currentNodeId);
-        if (outgoingFromLast.length > 0) {
-          await prisma.automationEnrollment.update({
-            where: { id: existingEnrollment.id },
-            data: { status: 'ACTIVE', completedAt: null },
-          });
-          for (const edge of outgoingFromLast) {
-            await this.executeSubflowNode(
-              existingEnrollment.id,
-              edge.target,
-              subNodes,
-              subEdges,
-              tenantId,
-              contact,
-              automationId
-            );
-          }
+    if (!enrollment) {
+      // Cria a inscrição posicionada nesta sequência
+      enrollment = await prisma.automationEnrollment.create({
+        data: {
+          automationId,
+          contactId,
+          currentNodeId: sequenceNodeId,
+          status: 'ACTIVE',
+          metadata: JSON.stringify(metadata),
+        },
+      });
+    } else {
+      // Lead já possui inscrição nesta automação (ex: veio de um Timer macro ou nó anterior).
+      // Atualiza o currentNodeId para esta sequência e garante status ACTIVE
+      await prisma.automationEnrollment.update({
+        where: { id: enrollment.id },
+        data: {
+          currentNodeId: sequenceNodeId,
+          status: 'ACTIVE',
+          completedAt: null,
+        },
+      });
+    }
+
+    const subflow = (seqNode.data as any).subflow || {};
+    const subNodes: WorkflowNode[] = subflow.nodes || [];
+    const subEdges: WorkflowEdge[] = subflow.edges || [];
+
+    if (subNodes.length === 0) {
+      // Sequência sem nós internos: avança para saídas macro se houver
+      const macroEdges: WorkflowEdge[] = JSON.parse(automation.edges || '[]');
+      const outgoingFromSeq = macroEdges.filter((e) => e.source === sequenceNodeId);
+      if (outgoingFromSeq.length === 0) {
+        await prisma.automationEnrollment.update({
+          where: { id: enrollment.id },
+          data: { status: 'COMPLETED', completedAt: new Date() },
+        });
+      } else {
+        for (const me of outgoingFromSeq) {
+          await this.executeNode(enrollment.id, me.target, tenantId);
         }
       }
       return;
     }
 
-    // Cria a inscrição posicionada nesta sequência
-    const enrollment = await prisma.automationEnrollment.create({
-      data: {
-        automationId,
+    // Busca etapas internas já executadas com SUCESSO nesta sequência para este lead
+    const successLogs = await prisma.automationStepLog.findMany({
+      where: {
         contactId,
-        currentNodeId: sequenceNodeId,
-        status: 'ACTIVE',
-        metadata: JSON.stringify(metadata),
-      },
-    });
-
-    // Registra entrada na sequência
-    await prisma.automationStepLog.create({
-      data: {
+        nodeId: { in: subNodes.map((n) => n.id) },
+        status: { in: ['SUCCESS', 'PROCESSING', 'QUEUED'] },
         enrollmentId: enrollment.id,
-        contactId,
-        nodeId: seqNode.id,
-        nodeType: 'sequence_lead',
-        action: `ENTRADA_SEQUENCIA: ${seqNode.data.label || 'Sequência Lead'}`,
-        status: 'SUCCESS',
-        details: JSON.stringify({ sequenceName: seqNode.data.label, metadata }),
+      },
+      select: { nodeId: true },
+    });
+    const executedNodeIds = new Set(successLogs.map((l) => l.nodeId));
+
+    const pendingJob = await prisma.scheduledJob.findFirst({
+      where: {
+        enrollmentId: enrollment.id,
+        status: 'PENDING',
+        targetNodeId: { in: subNodes.map((n) => n.id) },
       },
     });
 
-    // Executa os nós internos do sub-fluxo da sequência
-    const subflow = (seqNode.data as any).subflow || {};
-    const subNodes: WorkflowNode[] = subflow.nodes || [];
-    const subEdges: WorkflowEdge[] = subflow.edges || [];
-
-    const startNode = subNodes.find((n) => n.type === 'start') || subNodes[0];
-    if (startNode) {
-      // Registra o passo no nó Start para constar no progresso do funil
+    // Se nenhum nó interno foi executado e não há agendamento pendente nesta sequência:
+    if (executedNodeIds.size === 0 && !pendingJob) {
+      // Registra entrada na sequência
       await prisma.automationStepLog.create({
         data: {
           enrollmentId: enrollment.id,
           contactId,
-          nodeId: startNode.id,
-          nodeType: 'start',
-          action: 'START_SEQUENCIA',
+          nodeId: seqNode.id,
+          nodeType: 'sequence_lead',
+          action: `ENTRADA_SEQUENCIA: ${seqNode.data.label || 'Sequência Lead'}`,
           status: 'SUCCESS',
-          details: JSON.stringify({ sequenceId: seqNode.id }),
+          details: JSON.stringify({ sequenceName: seqNode.data.label, metadata }),
         },
       });
 
-      await prisma.automationEnrollment.update({
-        where: { id: enrollment.id },
-        data: { currentNodeId: startNode.id },
-      });
+      const startNode = subNodes.find((n) => n.type === 'start');
+      if (startNode) {
+        // Registra o passo no nó Start para constar no progresso do funil
+        await prisma.automationStepLog.create({
+          data: {
+            enrollmentId: enrollment.id,
+            contactId,
+            nodeId: startNode.id,
+            nodeType: 'start',
+            action: 'START_SEQUENCIA',
+            status: 'SUCCESS',
+            details: JSON.stringify({ sequenceId: seqNode.id }),
+          },
+        });
 
-      const outgoingFromStart = subEdges.filter((e) => e.source === startNode.id);
-      for (const edge of outgoingFromStart) {
+        await prisma.automationEnrollment.update({
+          where: { id: enrollment.id },
+          data: { currentNodeId: startNode.id },
+        });
+
+        const outgoingFromStart = subEdges.filter((e) => e.source === startNode.id);
+        for (const edge of outgoingFromStart) {
+          await this.executeSubflowNode(
+            enrollment.id,
+            edge.target,
+            subNodes,
+            subEdges,
+            tenantId,
+            contact,
+            automationId
+          );
+        }
+      } else {
+        // Sem nó start explícito: executa os nós de entrada raiz
+        const targetIds = new Set(subEdges.map((e) => e.target));
+        const entryNodes = subNodes.filter((n) => !targetIds.has(n.id));
+        const nodesToRun = entryNodes.length > 0 ? entryNodes : (subNodes.length > 0 ? [subNodes[0]] : []);
+        for (const rn of nodesToRun) {
+          await this.executeSubflowNode(
+            enrollment.id,
+            rn.id,
+            subNodes,
+            subEdges,
+            tenantId,
+            contact,
+            automationId
+          );
+        }
+      }
+    } else if (executedNodeIds.size > 0) {
+      // Lead já executou etapas anteriores nesta sequência: verifica se há novas etapas conectadas a partir das concluídas
+      const nodesToExecute = new Set<string>();
+      for (const executedId of Array.from(executedNodeIds)) {
+        const outgoing = subEdges.filter((e) => e.source === executedId);
+        for (const edge of outgoing) {
+          if (!executedNodeIds.has(edge.target)) {
+            if (!pendingJob || pendingJob.targetNodeId !== edge.target) {
+              nodesToExecute.add(edge.target);
+            }
+          }
+        }
+      }
+      for (const targetNodeId of Array.from(nodesToExecute)) {
         await this.executeSubflowNode(
           enrollment.id,
-          edge.target,
+          targetNodeId,
           subNodes,
           subEdges,
           tenantId,
@@ -858,7 +929,7 @@ export class AutomationEngine {
 
     // Se automationId não foi passado, descobre pela inscrição
     let autoId = automationId;
-    if (!autoId) {
+    if (!autoId && enrollmentId) {
       const enr = await prisma.automationEnrollment.findUnique({
         where: { id: enrollmentId },
         select: { automationId: true },
@@ -1107,26 +1178,44 @@ export class AutomationEngine {
           }
 
           const outgoing = subEdges.filter((e) => e.source === node.id);
-          for (const edge of outgoing) {
-            await prisma.scheduledJob.create({
-              data: {
-                tenantId,
+          const nowMs = Date.now();
+          if (executeAt.getTime() <= nowMs) {
+            // Se o horário agendado já chegou ou passou, avança imediatamente sem criar agendamento pendente
+            stepDetails = { scheduledUntil: executeAt, passedImmediately: true, summary: summaryText };
+            for (const edge of outgoing) {
+              await this.executeSubflowNode(
                 enrollmentId,
-                contactId: contact.id,
-                automationId: autoId,
-                targetNodeId: edge.target,
-                executeAt,
-                cancelCondition: cfg.cancelCondition || 'NONE',
-              },
+                edge.target,
+                subNodes,
+                subEdges,
+                tenantId,
+                contact,
+                autoId
+              );
+            }
+          } else {
+            for (const edge of outgoing) {
+              await prisma.scheduledJob.create({
+                data: {
+                  tenantId,
+                  enrollmentId,
+                  contactId: contact.id,
+                  automationId: autoId,
+                  targetNodeId: edge.target,
+                  executeAt,
+                  cancelCondition: cfg.cancelCondition || 'NONE',
+                },
+              });
+            }
+
+            await prisma.automationEnrollment.update({
+              where: { id: enrollmentId },
+              data: { status: 'WAITING', currentNodeId: node.id },
             });
+
+            stepDetails = { scheduledUntil: executeAt, summary: summaryText };
+            shouldHalt = true;
           }
-
-          await prisma.automationEnrollment.update({
-            where: { id: enrollmentId },
-            data: { status: 'WAITING', currentNodeId: node.id },
-          });
-
-          stepDetails = { scheduledUntil: executeAt, summary: summaryText };
         } else {
           stepDetails = { scheduledUntil: existingJob.executeAt, alreadyScheduled: true };
         }
@@ -1261,6 +1350,7 @@ export class AutomationEngine {
     tenantId: string,
     autoId?: string | null
   ): Promise<void> {
+    if (!enrollmentId || !nodeId) return;
     const enrollment = await prisma.automationEnrollment.findUnique({
       where: { id: enrollmentId },
       include: { contact: true, automation: true },
@@ -1488,11 +1578,18 @@ export class AutomationEngine {
 
             // 4. Caso o lead nunca tenha executado nenhuma etapa interna (ex: acabou de entrar ou sequência acabou de ser conectada)
             if (executedNodeIds.size === 0 && !pendingJob) {
-              const startNode = subNodes.find((n) => n.type === 'start') || subNodes[0];
+              const startNode = subNodes.find((n) => n.type === 'start');
               if (startNode) {
                 const outgoingFromStart = subEdges.filter((e) => e.source === startNode.id);
                 for (const edge of outgoingFromStart) {
                   nodesToExecute.add(edge.target);
+                }
+              } else {
+                const targetIds = new Set(subEdges.map((e) => e.target));
+                const entryNodes = subNodes.filter((n) => !targetIds.has(n.id));
+                const nodesToRun = entryNodes.length > 0 ? entryNodes : (subNodes.length > 0 ? [subNodes[0]] : []);
+                for (const en of nodesToRun) {
+                  nodesToExecute.add(en.id);
                 }
               }
             }

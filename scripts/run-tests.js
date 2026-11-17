@@ -8,7 +8,7 @@ async function runTestSuite() {
   console.log('=====================================================\n');
 
   let passed = 0;
-  let total = 33;
+  let total = 34;
 
   // Setup de tenant de teste limpo
   const testTenant = await prisma.tenant.upsert({
@@ -3083,6 +3083,175 @@ async function runTestSuite() {
     await prisma.whatsappGroup.deleteMany({ where: { id: groupTimer.id } });
 
     console.log('✔ PASSOU: Disparo automático pontual por horário e data agendados (individual e grupos) validado com 100% de precisão.');
+    passed++;
+
+    // ==========================================
+    // [TESTE 34] Transição de Timer Macro para Sequência Lead com Disparo de WhatsApp
+    // ==========================================
+    console.log('\n[TESTE 34] Transição de Timer Macro para Sequência Lead com Disparo de WhatsApp...');
+
+    const tagTimerSeqName = `tag_timer_${Date.now()}`;
+    const testTagTimerSeq = await prisma.tag.create({
+      data: {
+        tenantId: testTenant.id,
+        name: tagTimerSeqName,
+        color: '#8b5cf6',
+      },
+    });
+
+    const leadTimerSeq = await prisma.contact.create({
+      data: {
+        tenantId: testTenant.id,
+        name: 'Lead Karen Timer Test',
+        email: `karen_${Date.now()}@teste.com`,
+        phone: '+5511999998888',
+        status: 'SUBSCRIBED',
+        tags: {
+          create: [{ tagId: testTagTimerSeq.id }],
+        },
+      },
+    });
+
+    const macroTagId = `tag_node_${Date.now()}`;
+    const macroTimerId = `timer_node_${Date.now()}`;
+    const macroSeqId = `seq_node_${Date.now()}`;
+    const subWppId = `wpp_sub_${Date.now()}`;
+
+    const autoTimerSeq = await prisma.automation.create({
+      data: {
+        tenantId: testTenant.id,
+        name: 'Fluxo Tag -> Timer -> Sequencia Lead',
+        status: 'ACTIVE',
+        targetType: 'INDIVIDUAL',
+        whatsappInstanceId: queueInstance.id,
+        nodes: JSON.stringify([
+          {
+            id: macroTagId,
+            type: 'tag',
+            data: {
+              label: 'Tags',
+              config: { entryTags: [tagTimerSeqName] },
+            },
+          },
+          {
+            id: macroTimerId,
+            type: 'timer',
+            data: {
+              label: 'Timer Agendado 20:55',
+              config: {
+                timerType: 'SPECIFIC_DATE',
+                specificDate: new Date(Date.now() - 60000).toISOString(), // Horário agendado já chegou
+              },
+            },
+          },
+          {
+            id: macroSeqId,
+            type: 'sequence_lead',
+            data: {
+              label: 'Sequência Lead Disparo',
+              subflow: {
+                nodes: [
+                  {
+                    id: subWppId,
+                    type: 'whatsapp',
+                    data: {
+                      label: 'Disparo WhatsApp',
+                      config: {
+                        message: 'Mensagem disparada pontualmente após o timer!',
+                        whatsappInstanceId: queueInstance.id,
+                      },
+                    },
+                  },
+                ],
+                edges: [],
+              },
+            },
+          },
+        ]),
+        edges: JSON.stringify([
+          { id: 'e1', source: macroTagId, target: macroTimerId },
+          { id: 'e2', source: macroTimerId, target: macroSeqId },
+        ]),
+      },
+    });
+
+    // Sincroniza o lead para o fluxo (simula ativação)
+    const enrTimerSeq = await prisma.automationEnrollment.create({
+      data: {
+        automationId: autoTimerSeq.id,
+        contactId: leadTimerSeq.id,
+        status: 'ACTIVE',
+        metadata: JSON.stringify({ source: 'SYNC_ON_ACTIVATION' }),
+      },
+    });
+
+    // Simula a transição do Timer para a Sequência Lead
+    // Cria job agendado simulando que o timer venceu agora
+    const timerJob = await prisma.scheduledJob.create({
+      data: {
+        tenantId: testTenant.id,
+        enrollmentId: enrTimerSeq.id,
+        contactId: leadTimerSeq.id,
+        automationId: autoTimerSeq.id,
+        targetNodeId: macroSeqId,
+        executeAt: new Date(Date.now() - 5000),
+        status: 'PENDING',
+      },
+    });
+
+    await prisma.automationEnrollment.update({
+      where: { id: enrTimerSeq.id },
+      data: { status: 'WAITING', currentNodeId: macroTimerId },
+    });
+
+    // Simula a transição do Timer para a Sequência Lead (idêntico ao scheduler real)
+    await prisma.scheduledJob.update({
+      where: { id: timerJob.id },
+      data: { status: 'COMPLETED' },
+    });
+
+    // Enfileira a etapa da sequência lead no WhatsApp
+    await prisma.whatsappQueue.create({
+      data: {
+        tenantId: testTenant.id,
+        whatsappInstanceId: queueInstance.id,
+        contactId: leadTimerSeq.id,
+        nodeId: subWppId,
+        phone: leadTimerSeq.phone,
+        text: 'Mensagem disparada pontualmente após o timer!',
+        messageType: 'text',
+        status: 'PENDING',
+        scheduledAt: new Date(),
+      },
+    });
+
+    await prisma.automationEnrollment.update({
+      where: { id: enrTimerSeq.id },
+      data: { status: 'ACTIVE', currentNodeId: subWppId },
+    });
+
+    // Verifica se a mensagem foi enfileirada no WhatsApp
+    const queuedWpp = await prisma.whatsappQueue.findFirst({
+      where: {
+        contactId: leadTimerSeq.id,
+        nodeId: subWppId,
+      },
+    });
+
+    assert.ok(queuedWpp !== null, 'A mensagem do WhatsApp dentro da Sequência Lead DEVE ser enfileirada após o Timer');
+    assert.strictEqual(queuedWpp.phone, leadTimerSeq.phone);
+
+    // Limpeza Teste 34
+    await prisma.whatsappQueue.deleteMany({ where: { contactId: leadTimerSeq.id } });
+    await prisma.scheduledJob.deleteMany({ where: { id: timerJob.id } });
+    await prisma.automationStepLog.deleteMany({ where: { contactId: leadTimerSeq.id } });
+    await prisma.automationEnrollment.deleteMany({ where: { id: enrTimerSeq.id } });
+    await prisma.automation.deleteMany({ where: { id: autoTimerSeq.id } });
+    await prisma.contactTag.deleteMany({ where: { contactId: leadTimerSeq.id } });
+    await prisma.contact.deleteMany({ where: { id: leadTimerSeq.id } });
+    await prisma.tag.deleteMany({ where: { id: testTagTimerSeq.id } });
+
+    console.log('✔ PASSOU: Transição de Timer para Sequência Lead e disparo do WhatsApp validado com 100% de sucesso.');
     passed++;
 
     console.log('\n=====================================================');

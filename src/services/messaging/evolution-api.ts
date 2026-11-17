@@ -1319,18 +1319,25 @@ export class EvolutionApiService {
 
           console.error('[EvolutionApi] Falha confirmada no envio de mídia:', errorMsg);
 
-          await prisma.messageLog.create({
-            data: {
-              tenantId: params.tenantId,
-              contactId: params.contactId,
-              channel: 'WHATSAPP',
-              provider: 'EVOLUTION_API',
-              recipient: params.phone,
-              content: logContent,
-              status: 'FAILED',
-              error: String(errorMsg),
-            },
-          });
+          try {
+            if (params.contactId) {
+              const cExists = await prisma.contact.findUnique({ where: { id: params.contactId }, select: { id: true } });
+              if (cExists) {
+                await prisma.messageLog.create({
+                  data: {
+                    tenantId: params.tenantId,
+                    contactId: params.contactId,
+                    channel: 'WHATSAPP',
+                    provider: 'EVOLUTION_API',
+                    recipient: params.phone,
+                    content: logContent,
+                    status: 'FAILED',
+                    error: String(errorMsg),
+                  },
+                });
+              }
+            }
+          } catch {}
 
           return {
             success: false,
@@ -1342,24 +1349,33 @@ export class EvolutionApiService {
         }
 
         const externalMessageId = responseData?.key?.id || `evo_${Date.now()}`;
-        const log = await prisma.messageLog.create({
-          data: {
-            tenantId: params.tenantId,
-            contactId: params.contactId,
-            channel: 'WHATSAPP',
-            provider: 'EVOLUTION_API',
-            recipient: params.phone,
-            templateName: params.templateName,
-            content: logContent,
-            status: 'SENT',
-            externalMessageId,
-            costEstimate: 0.0,
-          },
-        });
+        let logId = `msg_${Date.now()}`;
+        try {
+          if (params.contactId) {
+            const cExists = await prisma.contact.findUnique({ where: { id: params.contactId }, select: { id: true } });
+            if (cExists) {
+              const log = await prisma.messageLog.create({
+                data: {
+                  tenantId: params.tenantId,
+                  contactId: params.contactId,
+                  channel: 'WHATSAPP',
+                  provider: 'EVOLUTION_API',
+                  recipient: params.phone,
+                  templateName: params.templateName,
+                  content: logContent,
+                  status: 'SENT',
+                  externalMessageId,
+                  costEstimate: 0.0,
+                },
+              });
+              logId = log.id;
+            }
+          }
+        } catch {}
 
         return {
           success: true,
-          messageId: log.id,
+          messageId: logId,
           provider: 'EVOLUTION_API',
           status: 'SENT',
           costEstimate: 0.0,
@@ -1391,18 +1407,25 @@ export class EvolutionApiService {
 
       if (!response.ok) {
         const errorMsg = data?.message || data?.error || `Falha no envio (HTTP ${response.status})`;
-        await prisma.messageLog.create({
-          data: {
-            tenantId: params.tenantId,
-            contactId: params.contactId,
-            channel: 'WHATSAPP',
-            provider: 'EVOLUTION_API',
-            recipient: params.phone,
-            content: finalMessageText,
-            status: 'FAILED',
-            error: String(errorMsg),
-          },
-        });
+        try {
+          if (params.contactId) {
+            const cExists = await prisma.contact.findUnique({ where: { id: params.contactId }, select: { id: true } });
+            if (cExists) {
+              await prisma.messageLog.create({
+                data: {
+                  tenantId: params.tenantId,
+                  contactId: params.contactId,
+                  channel: 'WHATSAPP',
+                  provider: 'EVOLUTION_API',
+                  recipient: params.phone,
+                  content: finalMessageText,
+                  status: 'FAILED',
+                  error: String(errorMsg),
+                },
+              });
+            }
+          }
+        } catch {}
 
         return {
           success: false,
@@ -1414,25 +1437,33 @@ export class EvolutionApiService {
       }
 
       const externalMessageId = data?.key?.id || `evo_${Date.now()}`;
-
-      const log = await prisma.messageLog.create({
-        data: {
-          tenantId: params.tenantId,
-          contactId: params.contactId,
-          channel: 'WHATSAPP',
-          provider: 'EVOLUTION_API',
-          recipient: params.phone,
-          templateName: params.templateName,
-          content: finalMessageText,
-          status: 'SENT',
-          externalMessageId,
-          costEstimate: 0.0,
-        },
-      });
+      let logId = `msg_${Date.now()}`;
+      try {
+        if (params.contactId) {
+          const cExists = await prisma.contact.findUnique({ where: { id: params.contactId }, select: { id: true } });
+          if (cExists) {
+            const log = await prisma.messageLog.create({
+              data: {
+                tenantId: params.tenantId,
+                contactId: params.contactId,
+                channel: 'WHATSAPP',
+                provider: 'EVOLUTION_API',
+                recipient: params.phone,
+                templateName: params.templateName,
+                content: finalMessageText,
+                status: 'SENT',
+                externalMessageId,
+                costEstimate: 0.0,
+              },
+            });
+            logId = log.id;
+          }
+        }
+      } catch {}
 
       return {
         success: true,
-        messageId: log.id,
+        messageId: logId,
         provider: 'EVOLUTION_API',
         status: 'SENT',
         costEstimate: 0.0,
