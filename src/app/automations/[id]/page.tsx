@@ -64,6 +64,7 @@ import {
   FileText,
   Eye,
   Smartphone,
+  Monitor,
   ExternalLink,
   AlertCircle,
   AlertTriangle,
@@ -218,12 +219,21 @@ export default function AutomationCanvasPage() {
   const [isFlowWppModalOpen, setIsFlowWppModalOpen] = useState(false);
   const [propagateWppToAllNodes, setPropagateWppToAllNodes] = useState(true);
 
-  // Modalidade de Automação (Individual vs Grupo) e Acompanhamento de Grupos
+  // Modalidade de Automação (Individual vs Grupo) e Gerenciamento de Grupos
   const [targetType, setTargetType] = useState<'INDIVIDUAL' | 'GROUP'>('INDIVIDUAL');
   const [isGroupPanelOpen, setIsGroupPanelOpen] = useState(false);
   const [groupStats, setGroupStats] = useState<any>(null);
   const [loadingGroupStats, setLoadingGroupStats] = useState(false);
   const [syncingGroups, setSyncingGroups] = useState(false);
+
+  // Estados para Gerenciar Grupos (Painel Dispositivos + Grupos do WhatsApp)
+  const [manageGroups, setManageGroups] = useState<any[]>([]);
+  const [loadingManageGroups, setLoadingManageGroups] = useState(false);
+  const [selectedManageDevice, setSelectedManageDevice] = useState<string>('ALL');
+  const [manageDeviceSearch, setManageDeviceSearch] = useState('');
+  const [manageGroupSearch, setManageGroupSearch] = useState('');
+  const [activeTagPickerGroupId, setActiveTagPickerGroupId] = useState<string | null>(null);
+  const [quickTagSearch, setQuickTagSearch] = useState('');
 
   // Modal de Configurar grupos de WhatsApp (ID, Imagem, Nome com regra do #, Descrição e Permissões)
   const [isEditarGrupoModalOpen, setIsEditarGrupoModalOpen] = useState(false);
@@ -1519,6 +1529,151 @@ export default function AutomationCanvasPage() {
     setSyncingGroups(false);
   };
 
+  // Funções para Painel de Gerenciar Grupos (Dispositivos + Grupos + Tags)
+  const fetchManageGroups = async (deviceFilter = selectedManageDevice) => {
+    setLoadingManageGroups(true);
+    try {
+      const url =
+        deviceFilter && deviceFilter !== 'ALL'
+          ? `/api/groups?instanceId=${deviceFilter}`
+          : `/api/groups`;
+      const res = await fetch(url);
+      const data = await res.json();
+      if (res.ok && Array.isArray(data.groups)) {
+        setManageGroups(data.groups);
+      }
+    } catch (err) {
+      console.error('[fetchManageGroups] Erro:', err);
+    } finally {
+      setLoadingManageGroups(false);
+    }
+  };
+
+  const handleAddTagToGroup = async (groupId: string, tagId: string) => {
+    try {
+      const res = await fetch('/api/groups/bulk/add-tags', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ groupIds: [groupId], tagIds: [tagId] }),
+      });
+      if (res.ok) {
+        const tagObj = availableTags.find((t) => t.id === tagId);
+        setManageGroups((prev) =>
+          prev.map((g) => {
+            if (g.id !== groupId) return g;
+            const currentTags = g.tags || [];
+            if (currentTags.some((t: any) => t.tagId === tagId || t.tag?.id === tagId)) return g;
+            return {
+              ...g,
+              tags: [...currentTags, { groupId, tagId, tag: tagObj || { id: tagId, name: 'Tag', color: '#10b981' } }],
+            };
+          })
+        );
+        setActiveTagPickerGroupId(null);
+        fetchRealtimeStats();
+      }
+    } catch (err) {
+      console.error('[handleAddTagToGroup] Erro:', err);
+    }
+  };
+
+  const handleRemoveTagFromGroup = async (groupId: string, tagId: string) => {
+    try {
+      const res = await fetch('/api/groups/bulk/remove-tags', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ groupIds: [groupId], tagIds: [tagId] }),
+      });
+      if (res.ok) {
+        setManageGroups((prev) =>
+          prev.map((g) => {
+            if (g.id !== groupId) return g;
+            return {
+              ...g,
+              tags: (g.tags || []).filter((t: any) => t.tagId !== tagId && t.tag?.id !== tagId),
+            };
+          })
+        );
+        fetchRealtimeStats();
+      }
+    } catch (err) {
+      console.error('[handleRemoveTagFromGroup] Erro:', err);
+    }
+  };
+
+  const handleCreateAndAddTagToGroup = async (groupId: string, tagName: string) => {
+    if (!tagName.trim()) return;
+    try {
+      const res = await fetch('/api/groups/tags', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ name: tagName.trim(), color: '#10b981' }),
+      });
+      const data = await res.json();
+      if (res.ok && data.tag) {
+        setAvailableTags((prev) => [...prev, { ...data.tag, isGroupTag: true }]);
+        await handleAddTagToGroup(groupId, data.tag.id);
+        setQuickTagSearch('');
+      }
+    } catch (err) {
+      console.error('[handleCreateAndAddTagToGroup] Erro:', err);
+    }
+  };
+
+  const handleSyncGroupsFromInstance = async () => {
+    setSyncingGroups(true);
+    try {
+      const res = await fetch('/api/groups/sync', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          instanceId: selectedManageDevice !== 'ALL' ? selectedManageDevice : undefined,
+        }),
+      });
+      const data = await res.json();
+      if (res.ok) {
+        setSaveNotice(`Grupos sincronizados com sucesso (${data.result?.totalSynced || 0} grupos atualizados)!`);
+        setTimeout(() => setSaveNotice(null), 4000);
+        await fetchManageGroups(selectedManageDevice);
+        fetchRealtimeStats();
+      } else {
+        setSaveNotice(data.error || 'Erro ao sincronizar grupos');
+        setTimeout(() => setSaveNotice(null), 4000);
+      }
+    } catch {
+      setSaveNotice('Erro ao conectar com a Evolution API');
+      setTimeout(() => setSaveNotice(null), 4000);
+    }
+    setSyncingGroups(false);
+  };
+
+  const filteredDevices = useMemo(() => {
+    if (!manageDeviceSearch.trim()) return availableWppInstances;
+    const q = manageDeviceSearch.toLowerCase().trim();
+    return availableWppInstances.filter((inst) => {
+      const name = (inst.name || inst.instanceName || '').toLowerCase();
+      const phone = (inst.phone || '').toLowerCase();
+      return name.includes(q) || phone.includes(q);
+    });
+  }, [availableWppInstances, manageDeviceSearch]);
+
+  const filteredGroups = useMemo(() => {
+    let list = manageGroups;
+    if (selectedManageDevice !== 'ALL') {
+      list = list.filter((g) => g.whatsappInstanceId === selectedManageDevice);
+    }
+    if (manageGroupSearch.trim()) {
+      const q = manageGroupSearch.toLowerCase().trim();
+      list = list.filter((g) => {
+        const name = (g.name || '').toLowerCase();
+        const jid = (g.jid || '').toLowerCase();
+        const tagNames = (g.tags || []).map((t: any) => (t.tag?.name || '').toLowerCase()).join(' ');
+        return name.includes(q) || jid.includes(q) || tagNames.includes(q);
+      });
+    }
+    return list;
+  }, [manageGroups, selectedManageDevice, manageGroupSearch]);
+
   // Aquecimento Modal Handler
   const openWarmupModal = (nodeToConfigure?: Node) => {
     const target = nodeToConfigure || selectedNode;
@@ -2602,7 +2757,9 @@ export default function AutomationCanvasPage() {
                 type="button"
                 onClick={() => {
                   setIsGroupPanelOpen(true);
-                  fetchGroupStats();
+                  fetchWppInstances();
+                  fetchTags(true);
+                  fetchManageGroups('ALL');
                 }}
                 className="flex items-center gap-1.5 px-3 py-1.5 rounded-xl border border-purple-500/60 bg-[#1e152e] hover:bg-[#281c3e] text-purple-200 text-xs font-semibold transition-all cursor-pointer shadow-md shadow-purple-950/30"
                 title="Abrir painel de acompanhamento dos grupos inscritos nesta automação"
@@ -2916,7 +3073,9 @@ export default function AutomationCanvasPage() {
                 type="button"
                 onClick={() => {
                   setIsGroupPanelOpen(true);
-                  fetchGroupStats();
+                  fetchWppInstances();
+                  fetchTags(true);
+                  fetchManageGroups('ALL');
                 }}
                 className="w-full py-3 px-2 rounded-xl bg-[#00a884] hover:bg-[#008f6f] text-white flex flex-col items-center justify-center gap-1.5 shadow-lg shadow-emerald-950/40 cursor-pointer transition-all active:scale-95 group"
                 title="Abrir painel de acompanhamento e sincronização dos grupos do WhatsApp"
@@ -4581,223 +4740,293 @@ export default function AutomationCanvasPage() {
         </div>
       )}
 
-      {/* Modal / Painel de Acompanhamento de Automação em Grupos (Requisito 11) */}
+      {/* MODAL: GERENCIAR GRUPOS (Layout de 2 Colunas: Dispositivos + Grupos do WhatsApp) */}
       {isGroupPanelOpen && (
-        <div className="fixed inset-0 z-50 bg-black/80 backdrop-blur-sm flex items-center justify-center p-4 overflow-y-auto">
-          <div className="bg-[#12141a] border border-slate-800 rounded-2xl w-full max-w-4xl max-h-[90vh] flex flex-col shadow-2xl animate-in zoom-in-95 duration-150">
-            {/* Cabeçalho */}
-            <div className="p-5 border-b border-slate-800 flex items-center justify-between">
-              <div className="flex items-center gap-3">
-                <div className="w-10 h-10 rounded-xl bg-purple-600/20 border border-purple-500/30 flex items-center justify-center text-purple-400">
-                  <Users className="w-5 h-5" />
-                </div>
+        <div className="fixed inset-0 z-50 bg-black/85 backdrop-blur-md flex items-center justify-center p-3 sm:p-5 overflow-y-auto animate-in fade-in duration-150">
+          <div className="w-full max-w-5xl flex flex-col md:flex-row gap-4 max-h-[88vh]">
+            
+            {/* COLUNA ESQUERDA: DISPOSITIVOS */}
+            <div className="w-full md:w-80 flex flex-col bg-[#14161f] border border-slate-800 rounded-2xl p-4 shadow-2xl shrink-0">
+              <h3 className="font-bold text-white text-base mb-3">Dispositivos</h3>
+
+              {/* Campo de Busca de Dispositivos */}
+              <div className="relative mb-3">
+                <Search className="w-4 h-4 text-slate-400 absolute left-3 top-1/2 -translate-y-1/2" />
+                <input
+                  type="text"
+                  value={manageDeviceSearch}
+                  onChange={(e) => setManageDeviceSearch(e.target.value)}
+                  placeholder="Buscar"
+                  className="w-full bg-[#1e222d] border border-slate-700/80 rounded-xl pl-9 pr-3 py-2 text-xs text-white placeholder-slate-500 focus:outline-none focus:border-purple-500 transition-all"
+                />
+              </div>
+
+              {/* Opção: Todos os dispositivos */}
+              <div
+                onClick={() => {
+                  setSelectedManageDevice('ALL');
+                  fetchManageGroups('ALL');
+                }}
+                className={`p-3 rounded-xl border transition-all cursor-pointer flex items-center justify-between mb-2 select-none ${
+                  selectedManageDevice === 'ALL'
+                    ? 'bg-[#1b233d] border-[#3b82f6] shadow-md shadow-blue-950/30'
+                    : 'bg-[#1a1d26] border-slate-800 hover:border-slate-700'
+                }`}
+              >
                 <div>
-                  <h3 className="font-bold text-white text-base flex items-center gap-2">
-                    Acompanhamento de Automação em Grupos
-                    <span className="text-[10px] bg-purple-950/80 text-purple-300 border border-purple-700/60 px-2 py-0.5 rounded-full font-semibold">
-                      WhatsApp Groups
-                    </span>
-                  </h3>
-                  <p className="text-xs text-slate-400">
-                    Métricas em tempo real, etapas e status de execução por grupo elegível.
-                  </p>
+                  <div className="font-semibold text-white text-xs">Todos os dispositivos</div>
+                  <div className="text-[11px] text-slate-400 mt-0.5">Visualize todos os grupos do seu projeto.</div>
                 </div>
+                <Monitor className="w-5 h-5 text-slate-300 ml-2 shrink-0" />
               </div>
 
-              <div className="flex items-center gap-2">
-                <button
-                  type="button"
-                  onClick={handleSyncAndEnrollGroups}
-                  disabled={syncingGroups}
-                  className="flex items-center gap-1.5 px-3 py-1.5 rounded-xl bg-purple-600 hover:bg-purple-500 disabled:opacity-50 text-white text-xs font-semibold shadow-md transition-all cursor-pointer"
-                  title="Busca grupos elegíveis e inscreve no fluxo"
-                >
-                  <RefreshCw className={`w-3.5 h-3.5 ${syncingGroups ? 'animate-spin' : ''}`} />
-                  <span>{syncingGroups ? 'Sincronizando...' : 'Sincronizar Grupos Elegíveis'}</span>
-                </button>
-                <button
-                  type="button"
-                  onClick={() => setIsGroupPanelOpen(false)}
-                  className="p-1.5 text-slate-400 hover:text-white rounded-lg hover:bg-slate-800 transition-colors"
-                >
-                  <X className="w-5 h-5" />
-                </button>
-              </div>
-            </div>
-
-            {/* Conteúdo com Scroll */}
-            <div className="p-6 overflow-y-auto space-y-6">
-              {/* Cards de Métricas */}
-              <div className="grid grid-cols-2 sm:grid-cols-5 gap-3">
-                <div className="bg-[#181c25] border border-slate-800 p-3.5 rounded-xl">
-                  <span className="text-[11px] text-slate-400 font-medium block">Total Grupos</span>
-                  <span className="text-2xl font-bold text-white mt-1 block">
-                    {groupStats?.totalGroups ?? 0}
-                  </span>
-                </div>
-                <div className="bg-[#181c25] border border-slate-800 p-3.5 rounded-xl">
-                  <span className="text-[11px] text-amber-400 font-medium block">Pendentes</span>
-                  <span className="text-2xl font-bold text-amber-300 mt-1 block">
-                    {groupStats?.pendingCount ?? 0}
-                  </span>
-                </div>
-                <div className="bg-[#181c25] border border-slate-800 p-3.5 rounded-xl">
-                  <span className="text-[11px] text-sky-400 font-medium block">Processando</span>
-                  <span className="text-2xl font-bold text-sky-300 mt-1 block">
-                    {groupStats?.processingCount ?? 0}
-                  </span>
-                </div>
-                <div className="bg-[#181c25] border border-slate-800 p-3.5 rounded-xl">
-                  <span className="text-[11px] text-emerald-400 font-medium block">Enviados (Sucesso)</span>
-                  <span className="text-2xl font-bold text-emerald-300 mt-1 block">
-                    {groupStats?.completedCount ?? 0}
-                  </span>
-                </div>
-                <div className="bg-[#181c25] border border-slate-800 p-3.5 rounded-xl">
-                  <span className="text-[11px] text-rose-400 font-medium block">Falhas / Bloqueios</span>
-                  <span className="text-2xl font-bold text-rose-300 mt-1 block">
-                    {groupStats?.failedCount ?? 0}
-                  </span>
-                </div>
-              </div>
-
-              {/* Tabela de Grupos Inscritos */}
-              <div className="bg-[#181c25] border border-slate-800 rounded-xl overflow-hidden">
-                <div className="px-4 py-3 border-b border-slate-800 flex items-center justify-between">
-                  <span className="font-bold text-xs text-white uppercase tracking-wider">
-                    Grupos Inscritos nesta Automação ({groupStats?.enrollments?.length ?? 0})
-                  </span>
-                  <button
-                    type="button"
-                    onClick={fetchGroupStats}
-                    disabled={loadingGroupStats}
-                    className="text-xs text-slate-400 hover:text-white flex items-center gap-1 cursor-pointer"
-                  >
-                    <RefreshCw className={`w-3 h-3 ${loadingGroupStats ? 'animate-spin' : ''}`} />
-                    <span>Atualizar</span>
-                  </button>
-                </div>
-
-                {loadingGroupStats ? (
-                  <div className="p-8 text-center text-xs text-slate-400">
-                    Carregando dados dos grupos...
-                  </div>
-                ) : !groupStats?.enrollments || groupStats.enrollments.length === 0 ? (
-                  <div className="p-8 text-center space-y-2">
-                    <p className="text-xs text-slate-400">
-                      Nenhum grupo elegível inscrito nesta automação até o momento.
-                    </p>
-                    <p className="text-[11px] text-slate-500">
-                      Clique no botão acima para sincronizar e inscrever os grupos onde seu número é Administrador.
-                    </p>
+              {/* Lista de Dispositivos Conectados */}
+              <div className="flex-1 overflow-y-auto space-y-2 pr-1 custom-scrollbar min-h-[140px] max-h-[420px]">
+                {filteredDevices.length === 0 ? (
+                  <div className="text-center py-8 text-xs text-slate-500 leading-relaxed px-2">
+                    Nenhum dispositivo conectado ao sistema
                   </div>
                 ) : (
-                  <div className="overflow-x-auto">
-                    <table className="w-full text-left text-xs">
-                      <thead className="bg-[#12141a] text-slate-400 border-b border-slate-800 text-[11px]">
-                        <tr>
-                          <th className="py-2.5 px-4 font-semibold">Grupo</th>
-                          <th className="py-2.5 px-4 font-semibold">Permissão</th>
-                          <th className="py-2.5 px-4 font-semibold">Etapa Atual</th>
-                          <th className="py-2.5 px-4 font-semibold">Status</th>
-                          <th className="py-2.5 px-4 font-semibold">Último Detalhe</th>
-                        </tr>
-                      </thead>
-                      <tbody className="divide-y divide-slate-800/60 text-slate-300">
-                        {groupStats.enrollments.map((enr: any) => (
-                          <tr key={enr.id} className="hover:bg-slate-800/30 transition-colors">
-                            <td className="py-3 px-4">
-                              <div className="flex items-center gap-2.5">
-                                {enr.group?.pictureUrl ? (
-                                  <img
-                                    src={enr.group.pictureUrl}
-                                    alt=""
-                                    className="w-8 h-8 rounded-full object-cover border border-slate-700 shrink-0"
-                                  />
-                                ) : (
-                                  <div className="w-8 h-8 rounded-full bg-purple-950/60 border border-purple-800/60 flex items-center justify-center text-purple-300 text-xs font-bold shrink-0">
-                                    {(enr.group?.name || 'G')[0]}
-                                  </div>
-                                )}
-                                <div>
-                                  <span className="font-semibold text-white block">
-                                    {enr.group?.name || 'Grupo sem nome'}
-                                  </span>
-                                  <span className="text-[10px] text-slate-400 font-mono block">
-                                    {enr.group?.participantsCount ?? 0} participantes • {enr.group?.jid}
-                                  </span>
-                                </div>
-                              </div>
-                            </td>
-                            <td className="py-3 px-4">
-                              {enr.group?.adminRole === 'superadmin' ? (
-                                <span className="inline-flex items-center gap-1 px-2 py-0.5 rounded-full text-[10px] font-bold bg-amber-950/60 text-amber-300 border border-amber-600/40">
-                                  🛡️ Super Admin
-                                </span>
-                              ) : enr.group?.isAdmin ? (
-                                <span className="inline-flex items-center gap-1 px-2 py-0.5 rounded-full text-[10px] font-bold bg-emerald-950/60 text-emerald-300 border border-emerald-600/40">
-                                  👑 Admin
-                                </span>
-                              ) : (
-                                <span className="inline-flex items-center gap-1 px-2 py-0.5 rounded-full text-[10px] font-semibold bg-rose-950/60 text-rose-300 border border-rose-600/40">
-                                  ⚠️ Não é Admin
-                                </span>
-                              )}
-                            </td>
-                            <td className="py-3 px-4">
-                              <span className="font-mono text-[11px] text-slate-300">
-                                {enr.currentNodeId || 'Início'}
-                              </span>
-                            </td>
-                            <td className="py-3 px-4">
-                              <span
-                                className={`inline-block px-2 py-0.5 rounded-full text-[10px] font-bold uppercase tracking-wider ${
-                                  enr.status === 'COMPLETED'
-                                    ? 'bg-emerald-950/60 text-emerald-300 border border-emerald-600/40'
-                                    : enr.status === 'FAILED'
-                                    ? 'bg-rose-950/60 text-rose-300 border border-rose-600/40'
-                                    : enr.status === 'WAITING' || enr.status === 'PENDING'
-                                    ? 'bg-amber-950/60 text-amber-300 border border-amber-600/40'
-                                    : 'bg-sky-950/60 text-sky-300 border border-sky-600/40'
-                                }`}
-                              >
-                                {enr.status === 'COMPLETED'
-                                  ? 'Concluído'
-                                  : enr.status === 'FAILED'
-                                  ? 'Falha'
-                                  : enr.status === 'WAITING'
-                                  ? 'Aguardando'
-                                  : 'Ativo'}
-                              </span>
-                            </td>
-                            <td className="py-3 px-4 text-[11px] text-slate-400 max-w-xs truncate">
-                              {enr.lastStep?.errorMessage ? (
-                                <span className="text-rose-400 font-medium">{enr.lastStep.errorMessage}</span>
-                              ) : enr.lastStep?.executedAt ? (
-                                <span>Último envio: {new Date(enr.lastStep.executedAt).toLocaleTimeString('pt-BR')}</span>
-                              ) : (
-                                <span className="text-slate-600">Nenhum evento registrado</span>
-                              )}
-                            </td>
-                          </tr>
-                        ))}
-                      </tbody>
-                    </table>
-                  </div>
+                  filteredDevices.map((inst) => {
+                    const isSelected = selectedManageDevice === inst.id;
+                    const isConnected = inst.status === 'CONNECTED' || (inst as any).connected;
+                    return (
+                      <div
+                        key={inst.id}
+                        onClick={() => {
+                          setSelectedManageDevice(inst.id);
+                          fetchManageGroups(inst.id);
+                        }}
+                        className={`p-3 rounded-xl border transition-all cursor-pointer flex items-center justify-between select-none ${
+                          isSelected
+                            ? 'bg-[#1b233d] border-[#3b82f6] shadow-md shadow-blue-950/30'
+                            : 'bg-[#1a1d26] border-slate-800 hover:border-slate-700'
+                        }`}
+                      >
+                        <div className="min-w-0 pr-2">
+                          <div className="font-semibold text-white text-xs flex items-center gap-1.5 truncate">
+                            <span
+                              className={`w-2 h-2 rounded-full shrink-0 ${
+                                isConnected ? 'bg-emerald-400' : 'bg-slate-500'
+                              }`}
+                            />
+                            <span className="truncate">{inst.name || inst.instanceName || 'WhatsApp'}</span>
+                          </div>
+                          <div className="text-[11px] text-slate-400 font-mono mt-0.5 truncate">
+                            {inst.phone || 'Sem número'}
+                          </div>
+                        </div>
+                        <Smartphone className="w-4 h-4 text-slate-400 shrink-0" />
+                      </div>
+                    );
+                  })
                 )}
               </div>
             </div>
 
-            {/* Rodapé do Modal */}
-            <div className="p-4 border-t border-slate-800 flex items-center justify-end">
-              <button
-                type="button"
-                onClick={() => setIsGroupPanelOpen(false)}
-                className="px-4 py-2 bg-slate-800 hover:bg-slate-700 text-slate-300 text-xs font-semibold rounded-xl transition-colors cursor-pointer"
-              >
-                Fechar
-              </button>
+            {/* COLUNA DIREITA: GRUPOS DE WHATSAPP */}
+            <div className="flex-1 flex flex-col bg-[#14161f] border border-slate-800 rounded-2xl p-4 shadow-2xl overflow-hidden min-h-[400px]">
+              {/* Topo: Título + Campo de Busca */}
+              <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-3 mb-3">
+                <div className="flex items-center gap-2">
+                  <h3 className="font-bold text-white text-base">Grupos de WhatsApp</h3>
+                  <span className="text-[11px] text-slate-400 font-mono">
+                    ({filteredGroups.length} {filteredGroups.length === 1 ? 'grupo' : 'grupos'})
+                  </span>
+                </div>
+
+                <div className="relative w-full sm:w-64">
+                  <Search className="w-4 h-4 text-slate-400 absolute left-3 top-1/2 -translate-y-1/2" />
+                  <input
+                    type="text"
+                    value={manageGroupSearch}
+                    onChange={(e) => setManageGroupSearch(e.target.value)}
+                    placeholder="Buscar"
+                    className="w-full bg-[#1e222d] border border-slate-700/80 rounded-xl pl-9 pr-3 py-1.5 text-xs text-white placeholder-slate-500 focus:outline-none focus:border-purple-500 transition-all"
+                  />
+                </div>
+              </div>
+
+              {/* Lista de Grupos */}
+              <div className="flex-1 overflow-y-auto space-y-2.5 my-2 pr-1 custom-scrollbar min-h-[260px] max-h-[500px]">
+                {loadingManageGroups ? (
+                  <div className="flex-1 flex items-center justify-center p-12 text-slate-400 text-xs">
+                    <RefreshCw className="w-4 h-4 animate-spin mr-2" />
+                    Carregando grupos do WhatsApp...
+                  </div>
+                ) : filteredGroups.length === 0 ? (
+                  <div className="h-full flex items-center justify-center p-12 text-slate-400 text-sm font-medium">
+                    Nenhum grupo encontrado
+                  </div>
+                ) : (
+                  filteredGroups.map((g) => (
+                    <div
+                      key={g.id}
+                      className="p-3 bg-[#1a1d26] border border-slate-800/80 rounded-xl hover:border-slate-700 transition-colors flex flex-col sm:flex-row sm:items-center justify-between gap-3"
+                    >
+                      {/* Avatar e Dados do Grupo */}
+                      <div className="flex items-center gap-3 min-w-0">
+                        {g.pictureUrl ? (
+                          <img
+                            src={g.pictureUrl}
+                            alt=""
+                            className="w-9 h-9 rounded-full object-cover shrink-0 border border-slate-700"
+                          />
+                        ) : (
+                          <div className="w-9 h-9 rounded-full bg-purple-950/80 border border-purple-800/80 text-purple-300 flex items-center justify-center text-xs font-bold shrink-0">
+                            {(g.name || 'G')[0]}
+                          </div>
+                        )}
+                        <div className="min-w-0">
+                          <div className="font-semibold text-white text-xs truncate" title={g.name}>
+                            {g.name || 'Grupo sem nome'}
+                          </div>
+                          <div className="text-[10px] text-slate-400 flex items-center gap-2 mt-0.5 font-mono flex-wrap">
+                            <span>{g.participantsCount ?? 0} membros</span>
+                            <span>•</span>
+                            <span className="truncate max-w-[160px] text-slate-300">
+                              {g.whatsappInstance?.name || g.whatsappInstance?.instanceName || 'WhatsApp'}
+                            </span>
+                          </div>
+                        </div>
+                      </div>
+
+                      {/* Tags Associadas e Adicionar/Remover */}
+                      <div className="flex items-center gap-1.5 flex-wrap shrink-0">
+                        {(g.tags || []).map(({ tag }: any) => {
+                          if (!tag) return null;
+                          return (
+                            <span
+                              key={tag.id}
+                              style={{
+                                backgroundColor: `${tag.color || '#10b981'}18`,
+                                color: tag.color || '#10b981',
+                                borderColor: `${tag.color || '#10b981'}40`,
+                              }}
+                              className="inline-flex items-center gap-1 px-2 py-0.5 rounded-md text-[11px] font-semibold border select-none"
+                            >
+                              #{tag.name}
+                              <button
+                                type="button"
+                                onClick={() => handleRemoveTagFromGroup(g.id, tag.id)}
+                                className="hover:opacity-60 text-xs ml-0.5 cursor-pointer font-bold leading-none"
+                                title="Remover tag do grupo"
+                              >
+                                ×
+                              </button>
+                            </span>
+                          );
+                        })}
+
+                        {/* Botão de Adicionar Tag com Dropdown Popover */}
+                        <div className="relative">
+                          <button
+                            type="button"
+                            onClick={() => {
+                              setActiveTagPickerGroupId(activeTagPickerGroupId === g.id ? null : g.id);
+                              setQuickTagSearch('');
+                            }}
+                            className="px-2 py-1 rounded-md bg-slate-800 hover:bg-slate-700 text-slate-300 hover:text-white text-xs flex items-center gap-1 border border-slate-700 transition-colors cursor-pointer"
+                            title="Adicionar tag a este grupo"
+                          >
+                            <Plus className="w-3 h-3" />
+                            <span className="text-[10px] font-medium">+ Tag</span>
+                          </button>
+
+                          {/* Popover de Seleção / Criação de Tags */}
+                          {activeTagPickerGroupId === g.id && (
+                            <div className="absolute right-0 top-full mt-1.5 w-56 bg-[#161922] border border-slate-700 rounded-xl shadow-2xl p-2 z-30 animate-in fade-in zoom-in-95 duration-100">
+                              <div className="text-[11px] font-semibold text-slate-300 mb-1.5 px-1 flex items-center justify-between">
+                                <span>Adicionar Tag</span>
+                                <button
+                                  type="button"
+                                  onClick={() => setActiveTagPickerGroupId(null)}
+                                  className="text-slate-400 hover:text-white text-xs"
+                                >
+                                  ×
+                                </button>
+                              </div>
+
+                              <input
+                                type="text"
+                                value={quickTagSearch}
+                                onChange={(e) => setQuickTagSearch(e.target.value)}
+                                placeholder="Buscar ou criar tag..."
+                                className="w-full bg-[#1e222d] border border-slate-700 rounded-lg px-2 py-1 text-xs text-white placeholder-slate-500 focus:outline-none focus:border-purple-500 mb-2"
+                                autoFocus
+                              />
+
+                              <div className="max-h-36 overflow-y-auto space-y-1 custom-scrollbar">
+                                {availableTags
+                                  .filter((t) => {
+                                    const assigned = (g.tags || []).some(
+                                      (at: any) => at.tagId === t.id || at.tag?.id === t.id
+                                    );
+                                    if (assigned) return false;
+                                    if (!quickTagSearch.trim()) return true;
+                                    return t.name.toLowerCase().includes(quickTagSearch.toLowerCase().trim());
+                                  })
+                                  .map((t) => (
+                                    <button
+                                      key={t.id}
+                                      type="button"
+                                      onClick={() => handleAddTagToGroup(g.id, t.id)}
+                                      className="w-full text-left px-2 py-1 rounded-md hover:bg-slate-800 flex items-center gap-1.5 text-xs text-slate-200 transition-colors"
+                                    >
+                                      <span
+                                        className="w-2 h-2 rounded-full shrink-0"
+                                        style={{ backgroundColor: t.color || '#10b981' }}
+                                      />
+                                      <span className="truncate">#{t.name}</span>
+                                    </button>
+                                  ))}
+
+                                {quickTagSearch.trim() &&
+                                  !availableTags.some(
+                                    (t) => t.name.toLowerCase() === quickTagSearch.toLowerCase().trim()
+                                  ) && (
+                                    <button
+                                      type="button"
+                                      onClick={() => handleCreateAndAddTagToGroup(g.id, quickTagSearch)}
+                                      className="w-full text-left px-2 py-1 rounded-md hover:bg-purple-950/60 border border-purple-800/40 text-purple-300 text-xs font-semibold flex items-center gap-1.5 mt-1"
+                                    >
+                                      <Plus className="w-3 h-3" />
+                                      <span>Criar "#{quickTagSearch.trim()}"</span>
+                                    </button>
+                                  )}
+                              </div>
+                            </div>
+                          )}
+                        </div>
+                      </div>
+                    </div>
+                  ))
+                )}
+              </div>
+
+              {/* Rodapé: Sincronização + Botão FECHAR */}
+              <div className="pt-3 border-t border-slate-800/80 flex items-center justify-between mt-auto">
+                <button
+                  type="button"
+                  onClick={handleSyncGroupsFromInstance}
+                  disabled={syncingGroups}
+                  className="flex items-center gap-1.5 text-xs text-slate-400 hover:text-white transition-colors cursor-pointer disabled:opacity-50"
+                  title="Atualizar lista de grupos com a Evolution API"
+                >
+                  <RefreshCw className={`w-3.5 h-3.5 ${syncingGroups ? 'animate-spin' : ''}`} />
+                  <span>{syncingGroups ? 'Sincronizando grupos...' : 'Sincronizar Grupos do WhatsApp'}</span>
+                </button>
+
+                <button
+                  type="button"
+                  onClick={() => setIsGroupPanelOpen(false)}
+                  className="text-slate-300 hover:text-white font-bold text-xs uppercase tracking-wider px-4 py-1.5 rounded-lg hover:bg-slate-800 transition-colors cursor-pointer"
+                >
+                  FECHAR
+                </button>
+              </div>
             </div>
+
           </div>
         </div>
       )}
