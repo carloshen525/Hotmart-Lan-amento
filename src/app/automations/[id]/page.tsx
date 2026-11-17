@@ -2554,7 +2554,7 @@ export default function AutomationCanvasPage() {
   };
 
   // Salvar mensagem de WhatsApp ou E-mail (Regra 5 e 7: salva apenas referências, sem Base64)
-  const handleSaveMessage = (legacyMessageText?: string, emailSubject?: string) => {
+  const handleSaveMessage = async (legacyMessageText?: string, emailSubject?: string) => {
     if (!selectedNode) return;
 
     if (selectedNode.type === 'whatsapp') {
@@ -2565,71 +2565,159 @@ export default function AutomationCanvasPage() {
       }
     }
 
+    let nextStatus = status;
     if (status === 'ACTIVE') {
       const wantsToPause = confirm(
         'Regra de Edição: O fluxo está ATIVO em produção.\n\nPara alterar o conteúdo e mensagens desta etapa, a automação precisa ser pausada.\n\nDeseja pausar a automação agora para prosseguir com a edição?'
       );
       if (!wantsToPause) return;
-      handleSave('PAUSED');
+      nextStatus = 'PAUSED';
+      setStatus('PAUSED');
     }
 
-    setSequenceNodes((nds) =>
-      nds.map((n) => {
-        if (n.id === selectedNode.id) {
-          const isWpp = n.type === 'whatsapp';
-          if (isWpp) {
-            // Expurgar Base64 de todos os blocos antes de persistir
-            const sanitizedBlocks = wppBlocks.map((b) => {
-              const { mediaBase64, ...rest } = b;
-              return rest;
-            });
+    const effectiveWppId = selectedWppInstanceId || flowWhatsappInstanceId;
+    const selectedInst = availableWppInstances.find((i) => i.id === effectiveWppId);
+    const instName = selectedInst?.name || selectedInst?.phone || (effectiveWppId ? 'WhatsApp Conectado' : undefined);
+    const instPhone = selectedInst?.phone || undefined;
 
-            const firstMedia = sanitizedBlocks.find((b) => b.type !== 'text');
-            const firstText = sanitizedBlocks.find((b) => b.type === 'text');
-            const selectedInst = availableWppInstances.find((i) => i.id === selectedWppInstanceId);
+    const updateInNode = (n: Node): Node => {
+      if (n.id !== selectedNode.id) return n;
+      const isWpp = n.type === 'whatsapp';
+      if (isWpp) {
+        // Expurgar Base64 de todos os blocos antes de persistir
+        const sanitizedBlocks = wppBlocks.map((b) => {
+          const { mediaBase64, ...rest } = b;
+          return rest;
+        });
 
-            const nextCfg: any = {
+        const firstMedia = sanitizedBlocks.find((b) => b.type !== 'text');
+        const firstText = sanitizedBlocks.find((b) => b.type === 'text');
+
+        const nextCfg: any = {
+          ...((n.data.config as object) || {}),
+          whatsappInstanceId: effectiveWppId || undefined,
+          whatsappInstanceName: instName,
+          whatsappPhone: instPhone,
+          blocks: sanitizedBlocks,
+          messageType: firstMedia ? firstMedia.type : 'text',
+          mediaUrl: firstMedia?.mediaUrl,
+          mediaMimeType: firstMedia?.mediaMimeType,
+          mediaFileName: firstMedia?.mediaFileName,
+          mediaSize: firstMedia?.mediaSize,
+          caption: firstMedia?.caption,
+          message: firstText?.text || firstMedia?.caption || '[Mensagem WhatsApp]',
+          text: firstText?.text || firstMedia?.caption || '[Mensagem WhatsApp]',
+          isGroup: targetType === 'GROUP',
+          targetType: targetType === 'GROUP' ? 'GROUP' : 'LEAD',
+        };
+        delete nextCfg.mediaBase64;
+
+        return {
+          ...n,
+          data: {
+            ...n.data,
+            isGroup: targetType === 'GROUP',
+            targetType: targetType === 'GROUP' ? 'GROUP' : 'LEAD',
+            config: nextCfg,
+          },
+        };
+      } else {
+        return {
+          ...n,
+          data: {
+            ...n.data,
+            config: {
               ...((n.data.config as object) || {}),
-              whatsappInstanceId: selectedWppInstanceId || undefined,
-              whatsappInstanceName: selectedInst?.name || undefined,
-              whatsappPhone: selectedInst?.phone || undefined,
-              blocks: sanitizedBlocks,
-              messageType: firstMedia ? firstMedia.type : 'text',
-              mediaUrl: firstMedia?.mediaUrl,
-              mediaMimeType: firstMedia?.mediaMimeType,
-              mediaFileName: firstMedia?.mediaFileName,
-              mediaSize: firstMedia?.mediaSize,
-              caption: firstMedia?.caption,
-              message: firstText?.text || firstMedia?.caption || '[Mensagem WhatsApp]',
-              text: firstText?.text || firstMedia?.caption || '[Mensagem WhatsApp]',
-            };
-            delete nextCfg.mediaBase64;
+              subject: emailSubject,
+              content: legacyMessageText,
+            },
+          },
+        };
+      }
+    };
 
-            return {
-              ...n,
+    // 1. Atualiza nos nós macro (essencial para fluxo de grupos e nós diretos do canvas)
+    let updatedMacroNodes = macroNodes.map(updateInNode);
+    setMacroNodes(updatedMacroNodes);
+
+    // 2. Atualiza nos nós de sequência interna
+    const nextSequenceNodes = sequenceNodes.map(updateInNode);
+    setSequenceNodes(nextSequenceNodes);
+
+    // 3. Se estiver editando dentro de uma sequência, sincroniza o subflow no nó pai macro correspondente
+    if (activeSequenceNode) {
+      updatedMacroNodes = updatedMacroNodes.map((m) =>
+        m.id === activeSequenceNode.id
+          ? {
+              ...m,
               data: {
-                ...n.data,
-                config: nextCfg,
-              },
-            };
-          } else {
-            return {
-              ...n,
-              data: {
-                ...n.data,
-                config: {
-                  ...((n.data.config as object) || {}),
-                  subject: emailSubject,
-                  content: legacyMessageText,
+                ...m.data,
+                subflow: {
+                  nodes: nextSequenceNodes,
+                  edges: sequenceEdges,
                 },
               },
-            };
-          }
-        }
-        return n;
-      })
-    );
+            }
+          : m
+      );
+      setMacroNodes(updatedMacroNodes);
+      setActiveSequenceNode((prev) =>
+        prev
+          ? {
+              ...prev,
+              data: {
+                ...prev.data,
+                subflow: {
+                  nodes: nextSequenceNodes,
+                  edges: sequenceEdges,
+                },
+              },
+            }
+          : null
+      );
+    }
+
+    // 4. Atualiza o nó selecionado localmente
+    const updatedTarget = updateInNode(selectedNode);
+    setSelectedNode(updatedTarget);
+
     setIsMessageDrawerOpen(false);
+
+    // 5. Persiste imediatamente no Banco de Dados para garantir salvamento instantâneo
+    try {
+      const res = await fetch(`/api/automations/${automationId}`, {
+        method: 'PUT',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          status: nextStatus,
+          nodes: updatedMacroNodes,
+          edges: macroEdges,
+          flowWhatsappInstanceId: effectiveWppId || flowWhatsappInstanceId || undefined,
+        }),
+      });
+
+      if (!res.ok) {
+        const data = await res.json().catch(() => ({}));
+        setSaveNotice(data.error || 'Erro ao persistir mensagem no banco de dados');
+        setTimeout(() => setSaveNotice(null), 5000);
+      } else {
+        sessionStorage.setItem(
+          `flow_cache_${automationId}`,
+          JSON.stringify({
+            nodes: updatedMacroNodes,
+            edges: macroEdges,
+            status: nextStatus,
+            timestamp: Date.now(),
+          })
+        );
+        setSaveNotice('Mensagem e linha de WhatsApp salvas com sucesso!');
+        setTimeout(() => setSaveNotice(null), 3000);
+      }
+    } catch (err: any) {
+      console.error('[handleSaveMessage] Erro ao persistir:', err);
+      setSaveNotice('Erro de conexão ao salvar mensagem');
+      setTimeout(() => setSaveNotice(null), 4000);
+    }
   };
 
   // Exclusão de nó (etapa) por ID com limpeza de conexões e confirmação se o fluxo estiver ativo

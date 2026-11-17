@@ -2233,11 +2233,17 @@ export class AutomationEngine {
     if (nodeType === 'whatsapp') {
       const config = node.data?.config || {};
 
+      const targetInstanceId =
+        config.whatsappInstanceId ||
+        (automation as any).flowWhatsappInstanceId ||
+        (automation as any).whatsappInstanceId ||
+        group.whatsappInstanceId;
+
       // Validação obrigatória de administrador antes de enfileirar
       const check = await whatsappGroupService.verifyGroupEligibility(
         tenantId,
         group.jid,
-        (automation as any).whatsappInstanceId || group.whatsappInstanceId
+        targetInstanceId
       );
 
       if (!check.eligible) {
@@ -2281,7 +2287,7 @@ export class AutomationEngine {
       // Enfileira mensagem para o grupo na fila persistente com delay entre grupos
       await WhatsappQueueService.enqueue({
         tenantId,
-        whatsappInstanceId: (automation as any).whatsappInstanceId || group.whatsappInstanceId,
+        whatsappInstanceId: targetInstanceId,
         phone: group.jid, // JID do grupo
         contactName: group.name,
         recipientType: 'GROUP',
