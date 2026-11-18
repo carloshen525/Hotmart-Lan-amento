@@ -2259,23 +2259,26 @@ export class AutomationEngine {
     const node = nodes.find((n) => n.id === nodeId);
     if (!node) return;
 
-    // Regra: Evita reexecução do mesmo nó que já foi executado com sucesso para este grupo
+    // Regra: Evita reexecução do mesmo nó que já foi executado ou está enfileirado/processando para este grupo
     // CRÍTICO: 'WAIT_TIMER' indica que o nó ainda está aguardando o horário, NUNCA que foi concluído!
-    const alreadyLogged = await prisma.automationGroupStepLog.findFirst({
+    const existingLog = await prisma.automationGroupStepLog.findFirst({
       where: {
         enrollmentId,
         nodeId,
-        status: 'SUCCESS',
+        status: { in: ['SUCCESS', 'QUEUED', 'PROCESSING'] },
         action: { not: 'WAIT_TIMER' },
       },
     });
 
-    if (alreadyLogged) {
-      // Já foi concluído: avança diretamente para as próximas etapas
-      const outgoingEdges = edges.filter((e) => e.source === nodeId);
-      for (const edge of outgoingEdges) {
-        await this.executeGroupNode(enrollmentId, edge.target, tenantId);
+    if (existingLog) {
+      if (existingLog.status === 'SUCCESS') {
+        // Já foi concluído: avança diretamente para as próximas etapas
+        const outgoingEdges = edges.filter((e) => e.source === nodeId);
+        for (const edge of outgoingEdges) {
+          await this.executeGroupNode(enrollmentId, edge.target, tenantId);
+        }
       }
+      // Se estiver em QUEUED ou PROCESSING, não re-executa nem duplica mensagem
       return;
     }
 
@@ -2410,6 +2413,25 @@ export class AutomationEngine {
     // 2. Nó de Envio de WHATSAPP no Grupo
     if (nodeType === 'whatsapp') {
       const config = node.data?.config || {};
+
+      // GUARDA ANTI-DUPLICAÇÃO: Verifica se já existe mensagem enfileirada ou enviada para este nó e grupo
+      try {
+        const existingQueue = await (prisma as any).whatsappQueue.findFirst({
+          where: {
+            tenantId,
+            nodeId,
+            groupEnrollmentId: enrollmentId,
+            status: { in: ['PENDING', 'PROCESSING', 'SENT'] },
+          },
+        });
+
+        if (existingQueue) {
+          console.warn(
+            `[ANTI-DUPLICAÇÃO] Mensagem de grupo para nó ${nodeId} já existe na fila (id: ${existingQueue.id}, status: ${existingQueue.status}). Abortando duplicação.`
+          );
+          return;
+        }
+      } catch {}
 
       const targetInstanceId =
         config.whatsappInstanceId ||
@@ -2830,7 +2852,7 @@ export class AutomationEngine {
     const executedLogs = await prisma.automationGroupStepLog.findMany({
       where: {
         enrollmentId,
-        status: 'SUCCESS',
+        status: { in: ['SUCCESS', 'QUEUED', 'PROCESSING'] },
         action: { not: 'WAIT_TIMER' },
       },
       select: { nodeId: true },

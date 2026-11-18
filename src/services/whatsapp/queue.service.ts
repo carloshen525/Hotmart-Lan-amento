@@ -132,6 +132,21 @@ export class WhatsappQueueService {
           await prisma.$executeRawUnsafe(`ALTER TABLE "WhatsappInstance" ADD COLUMN max_delay_seconds INTEGER DEFAULT 45;`);
         }
       } catch {}
+
+      // Limpeza de itens duplicados PENDING remanescentes criados indevidamente
+      try {
+        await prisma.$executeRawUnsafe(`
+          DELETE FROM whatsapp_queue
+          WHERE status = 'PENDING'
+          AND node_id IS NOT NULL
+          AND rowid NOT IN (
+            SELECT MIN(rowid)
+            FROM whatsapp_queue
+            WHERE status = 'PENDING' AND node_id IS NOT NULL
+            GROUP BY tenant_id, node_id, phone, COALESCE(group_enrollment_id, '')
+          );
+        `);
+      } catch {}
     } catch (err: any) {
       console.warn('[WhatsappQueueService] Aviso em ensureQueueTable:', err.message);
     }
@@ -176,6 +191,55 @@ export class WhatsappQueueService {
     }
     if (!phone) {
       throw new Error('phone é obrigatório para enfileirar mensagem de WhatsApp.');
+    }
+
+    // GUARDA ANTI-DUPLICAÇÃO ESTRITA:
+    // Impede enfileiramento repetido da mesma etapa para o mesmo grupo ou lead
+    if (tenantId && nodeId && (groupEnrollmentId || groupJid || phone || enrollmentId)) {
+      const dedupFilter: any = {
+        tenantId,
+        nodeId,
+        status: { in: ['PENDING', 'PROCESSING', 'SENT'] },
+      };
+
+      if (groupEnrollmentId) {
+        dedupFilter.groupEnrollmentId = groupEnrollmentId;
+      } else if (groupJid) {
+        dedupFilter.groupJid = groupJid;
+      } else if (enrollmentId) {
+        dedupFilter.enrollmentId = enrollmentId;
+      } else if (phone) {
+        dedupFilter.phone = phone;
+      }
+
+      let existingQueueItem: any = null;
+      try {
+        if ((prisma as any).whatsappQueue) {
+          existingQueueItem = await (prisma as any).whatsappQueue.findFirst({
+            where: dedupFilter,
+            orderBy: { createdAt: 'desc' },
+          });
+        }
+      } catch {}
+
+      if (!existingQueueItem) {
+        try {
+          const rows: any = await prisma.$queryRawUnsafe(`
+            SELECT id, status FROM whatsapp_queue
+            WHERE tenant_id = ? AND node_id = ? AND phone = ?
+            AND status IN ('PENDING', 'PROCESSING', 'SENT')
+            LIMIT 1;
+          `, tenantId, nodeId, phone);
+          if (Array.isArray(rows) && rows.length > 0) existingQueueItem = rows[0];
+        } catch {}
+      }
+
+      if (existingQueueItem) {
+        console.warn(
+          `[WhatsappQueueService] 🛑 BLOQUEIO ANTI-DUPLICAÇÃO: Mensagem para nó ${nodeId} e destino ${phone} já existe na fila (id: ${existingQueueItem.id}, status: ${existingQueueItem.status}). Ignorando duplicação.`
+        );
+        return existingQueueItem.id;
+      }
     }
 
     // 1. Busca configurações de delay da instância do WhatsApp
@@ -535,6 +599,47 @@ export class WhatsappQueueService {
       }
     }
 
+    // Guarda de Segurança Final: impede disparo duplicado de item já enviado anteriormente
+    const groupEnrollmentId = item.groupEnrollmentId || item.group_enrollment_id;
+    const nodeId = item.nodeId || item.node_id;
+    const tenantId = item.tenantId || item.tenant_id;
+    const destination = item.groupJid || item.phone;
+
+    if (nodeId && (groupEnrollmentId || destination)) {
+      let alreadySent: any = null;
+      try {
+        if ((prisma as any).whatsappQueue) {
+          alreadySent = await (prisma as any).whatsappQueue.findFirst({
+            where: {
+              tenantId,
+              nodeId,
+              status: 'SENT',
+              ...(groupEnrollmentId ? { groupEnrollmentId } : { phone: destination }),
+              id: { not: item.id },
+            },
+          });
+        }
+      } catch {}
+
+      if (alreadySent) {
+        console.warn(
+          `[WhatsappQueueService] 🛑 CANCELANDO DISPARO DUPLICADO: O nó ${nodeId} já foi enviado anteriormente para ${destination} (item ${alreadySent.id}). Cancelando item atual ${item.id}.`
+        );
+        try {
+          if ((prisma as any).whatsappQueue) {
+            await (prisma as any).whatsappQueue.update({
+              where: { id: item.id },
+              data: {
+                status: 'CANCELLED',
+                errorMessage: 'Cancelado automaticamente: mensagem já enviada anteriormente (anti-duplicação)',
+              },
+            });
+          }
+        } catch {}
+        return;
+      }
+    }
+
     let success = false;
     let errorMessage = '';
 
@@ -620,12 +725,30 @@ export class WhatsappQueueService {
         WHERE id = ?
       `, currentAttempts, item.id);
 
+      // Cancela quaisquer duplicatas PENDING remanescentes para o mesmo nó e destino
+      if (nodeId && (groupEnrollmentId || destination)) {
+        try {
+          if ((prisma as any).whatsappQueue) {
+            await (prisma as any).whatsappQueue.updateMany({
+              where: {
+                tenantId,
+                nodeId,
+                status: 'PENDING',
+                ...(groupEnrollmentId ? { groupEnrollmentId } : { phone: destination }),
+                id: { not: item.id },
+              },
+              data: {
+                status: 'CANCELLED',
+                errorMessage: 'Cancelado automaticamente: duplicata detectada na fila',
+              },
+            });
+          }
+        } catch {}
+      }
+
       // 5. Se pertencer a uma automação, atualiza o log da etapa para SUCCESS e avança o fluxo
       const enrollmentId = item.enrollmentId || item.enrollment_id;
-      const nodeId = item.nodeId || item.node_id;
-      const tenantId = item.tenantId || item.tenant_id;
       const automationId = item.automationId || item.automation_id;
-
       const contactId = item.contactId || item.contact_id;
 
       if (nodeId && (enrollmentId || contactId)) {
@@ -654,7 +777,6 @@ export class WhatsappQueueService {
         }
       }
 
-      const groupEnrollmentId = item.groupEnrollmentId || item.group_enrollment_id;
       if (nodeId && groupEnrollmentId) {
         try {
           await prisma.automationGroupStepLog.updateMany({

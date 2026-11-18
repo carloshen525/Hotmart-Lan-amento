@@ -206,6 +206,7 @@ export class AutomationScheduler {
     const now = Date.now();
     let processed = 0;
     let failed = 0;
+    const handledTimerKeys = new Set<string>();
 
     try {
       const waitingEnrollments = await prisma.automationGroupEnrollment.findMany({
@@ -263,6 +264,9 @@ export class AutomationScheduler {
 
           // SEGURANÇA MÁXIMA: Executa estritamente quando targetTime <= now
           if (targetTime <= now) {
+            const timerKey = `${enr.id}:${currentNode.id}`;
+            handledTimerKeys.add(timerKey);
+
             const diffSec = Math.round((now - targetTime) / 1000);
             console.log(
               `[TIMER EXECUTADO - GRUPO] Enrollment: ${enr.id} | Grupo: ${enr.groupId} | Data prevista: ${formatBrasiliaDateTime(targetTime)} (${new Date(targetTime).toISOString()}) | Data real: ${formatBrasiliaDateTime(now)} (${new Date(now).toISOString()}) | Diferença: ${diffSec}s`
@@ -313,6 +317,10 @@ export class AutomationScheduler {
 
       for (const waitLog of pendingWaitLogs) {
         try {
+          const timerKey = `${waitLog.enrollmentId}:${waitLog.nodeId}`;
+          if (handledTimerKeys.has(timerKey)) continue;
+          handledTimerKeys.add(timerKey);
+
           const alreadyPassed = await prisma.automationGroupStepLog.findFirst({
             where: {
               enrollmentId: waitLog.enrollmentId,

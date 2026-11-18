@@ -13,15 +13,15 @@ export class MessageManager {
   private recentSends = new Map<string, number>();
 
   async sendWhatsApp(params: SendWhatsAppParams): Promise<SendResult> {
-    // Guarda de Desduplicação Estrita: impede envio da mesma mensagem para o mesmo telefone em menos de 10 segundos
-    const cleanPhone = (params.phone || '').replace(/\D/g, '');
+    // Guarda de Desduplicação Estrita: impede envio da mesma mensagem para o mesmo telefone/grupo em menos de 120 segundos
+    const dest = (params.phone || '').trim();
     const cleanText = (params.text || params.caption || '').trim().slice(0, 100);
-    const dedupKey = `${params.tenantId || ''}_${cleanPhone}_${cleanText}`;
+    const dedupKey = `${params.tenantId || ''}_${dest}_${cleanText}`;
 
     const now = Date.now();
     const lastSent = this.recentSends.get(dedupKey);
-    if (lastSent && now - lastSent < 10000) {
-      console.warn(`[MessageManager] Prevenção de duplicidade: mensagem idêntica para ${cleanPhone} ignorada (${now - lastSent}ms atrás)`);
+    if (lastSent && now - lastSent < 120000) {
+      console.warn(`[MessageManager] Prevenção de duplicidade: mensagem idêntica para ${dest} ignorada (${now - lastSent}ms atrás)`);
       return {
         success: true,
         messageId: 'dedup_guard_skipped',
@@ -31,10 +31,10 @@ export class MessageManager {
     }
     this.recentSends.set(dedupKey, now);
 
-    // Limpa entradas antigas (> 60 segundos)
+    // Limpa entradas antigas (> 120 segundos)
     if (this.recentSends.size > 500) {
       for (const [k, time] of this.recentSends.entries()) {
-        if (now - time > 60000) this.recentSends.delete(k);
+        if (now - time > 120000) this.recentSends.delete(k);
       }
     }
 

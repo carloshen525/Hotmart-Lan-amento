@@ -5890,6 +5890,158 @@ async function runTestSuite() {
     console.log('✔ PASSOU: Ramificações em Grupos, Prevenção de Conclusão Prematura e Auto-Healing validados com 100% de sucesso.');
     passed++;
 
+    // =====================================================
+    // TESTE 46: Guarda Absoluta Anti-Duplicação de Mensagens em Grupos e Leads
+    // =====================================================
+    console.log('\n[TESTE 46] Guarda Absoluta Anti-Duplicação de Mensagens em Grupos e Leads...');
+    total++;
+
+    const inst46 = await prisma.whatsappInstance.create({
+      data: {
+        tenantId: testTenant.id,
+        name: 'Instância Anti-Duplicação',
+        instanceName: `inst_anti_dup_${Date.now()}`,
+        instanceToken: 'token46',
+        status: 'CONNECTED',
+      },
+    });
+
+    const grupo46 = await prisma.whatsappGroup.create({
+      data: {
+        tenantId: testTenant.id,
+        whatsappInstanceId: inst46.id,
+        jid: `120363464646@g.us`,
+        name: 'Grupo Teste Anti-Duplicação',
+        isAdmin: true,
+        isEligible: true,
+        status: 'ACTIVE',
+      },
+    });
+
+    const autoGrupo46 = await prisma.automation.create({
+      data: {
+        tenantId: testTenant.id,
+        name: 'Automação Anti-Duplicação Grupos',
+        targetType: 'GROUP',
+        status: 'ACTIVE',
+        nodes: JSON.stringify([
+          { id: 'node_start', type: 'trigger' },
+          { id: 'node_wpp_dup', type: 'whatsapp', data: { config: { text: 'Mensagem única sem duplicação' } } },
+        ]),
+        edges: JSON.stringify([
+          { id: 'e1', source: 'node_start', target: 'node_wpp_dup' },
+        ]),
+      },
+    });
+
+    const enr46 = await prisma.automationGroupEnrollment.create({
+      data: {
+        automationId: autoGrupo46.id,
+        groupId: grupo46.id,
+        tenantId: testTenant.id,
+        status: 'ACTIVE',
+      },
+    });
+
+    // 1. Simula primeiro enfileiramento legítimo
+    const firstQueueItem = await prisma.whatsappQueue.create({
+      data: {
+        id: `wq_first_${Date.now()}`,
+        tenantId: testTenant.id,
+        whatsappInstanceId: inst46.id,
+        phone: grupo46.jid,
+        recipientType: 'GROUP',
+        groupJid: grupo46.jid,
+        groupEnrollmentId: enr46.id,
+        nodeId: 'node_wpp_dup',
+        automationId: autoGrupo46.id,
+        text: 'Mensagem única sem duplicação',
+        status: 'PENDING',
+      },
+    });
+
+    // Registra log em status QUEUED
+    await prisma.automationGroupStepLog.create({
+      data: {
+        enrollmentId: enr46.id,
+        groupId: grupo46.id,
+        tenantId: testTenant.id,
+        nodeId: 'node_wpp_dup',
+        nodeType: 'whatsapp',
+        action: 'QUEUE_GROUP_WHATSAPP',
+        status: 'QUEUED',
+      },
+    });
+
+    // 2. Simula tentativas subsequentes de re-enfileirar enquanto a mensagem ainda está QUEUED/PENDING
+    // (Simula o loop de 4s do background runner chamando checkAndAdvanceNewGroupNodes)
+    const executedLogs46 = await prisma.automationGroupStepLog.findMany({
+      where: {
+        enrollmentId: enr46.id,
+        status: { in: ['SUCCESS', 'QUEUED', 'PROCESSING'] },
+        action: { not: 'WAIT_TIMER' },
+      },
+      select: { nodeId: true },
+    });
+    const executedSet46 = new Set(executedLogs46.map((l) => l.nodeId));
+    assert.strictEqual(
+      executedSet46.has('node_wpp_dup'),
+      true,
+      'Nó em status QUEUED deve ser considerado executado/em andamento, impedindo re-enfileiramento'
+    );
+
+    // 3. Simula tentativa de criar duplicata direta no banco e valida a purga anti-duplicação
+    const duplicateQueueItem = await prisma.whatsappQueue.create({
+      data: {
+        id: `wq_dup_${Date.now()}`,
+        tenantId: testTenant.id,
+        whatsappInstanceId: inst46.id,
+        phone: grupo46.jid,
+        recipientType: 'GROUP',
+        groupJid: grupo46.jid,
+        groupEnrollmentId: enr46.id,
+        nodeId: 'node_wpp_dup',
+        automationId: autoGrupo46.id,
+        text: 'Mensagem única sem duplicação',
+        status: 'PENDING',
+      },
+    });
+
+    // Executa a query de purga idêntica à que roda na inicialização
+    await prisma.$executeRawUnsafe(`
+      DELETE FROM whatsapp_queue
+      WHERE status = 'PENDING'
+      AND node_id IS NOT NULL
+      AND rowid NOT IN (
+        SELECT MIN(rowid)
+        FROM whatsapp_queue
+        WHERE status = 'PENDING' AND node_id IS NOT NULL
+        GROUP BY tenant_id, node_id, phone, COALESCE(group_enrollment_id, '')
+      );
+    `);
+
+    const remainingPending46 = await prisma.whatsappQueue.findMany({
+      where: {
+        tenantId: testTenant.id,
+        nodeId: 'node_wpp_dup',
+        groupEnrollmentId: enr46.id,
+        status: 'PENDING',
+      },
+    });
+    assert.strictEqual(remainingPending46.length, 1, 'Exatamente 1 mensagem pendente deve restar após purga de duplicatas');
+    assert.strictEqual(remainingPending46[0].id, firstQueueItem.id, 'O item original deve ser preservado e a duplicata excluída');
+
+    // Limpeza Teste 46
+    await prisma.whatsappQueue.deleteMany({ where: { tenantId: testTenant.id } });
+    await prisma.automationGroupStepLog.deleteMany({ where: { enrollment: { automationId: autoGrupo46.id } } });
+    await prisma.automationGroupEnrollment.deleteMany({ where: { automationId: autoGrupo46.id } });
+    await prisma.automation.delete({ where: { id: autoGrupo46.id } });
+    await prisma.whatsappGroup.delete({ where: { id: grupo46.id } });
+    await prisma.whatsappInstance.delete({ where: { id: inst46.id } });
+
+    console.log('✔ PASSOU: Guarda Absoluta Anti-Duplicação de Mensagens validada com 100% de sucesso.');
+    passed++;
+
     console.log('\n=====================================================');
     console.log(` RESULTADO FINAL: ${passed}/${total} TESTES PASSARAM COM SUCESSO!`);
     console.log('=====================================================');

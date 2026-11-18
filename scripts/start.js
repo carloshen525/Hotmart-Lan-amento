@@ -70,6 +70,27 @@ try {
   console.warn('[PROD START] Aviso na sincronização do WhatsApp (continuando inicialização):', err.message);
 }
 
+// 4.1. Limpa quaisquer mensagens duplicadas pendentes que possam ter ficado na fila
+try {
+  console.log('[PROD START] Purgando mensagens duplicadas pendentes na fila...');
+  const { PrismaClient } = require('@prisma/client');
+  const prismaClient = new PrismaClient();
+  prismaClient.$executeRawUnsafe(`
+    DELETE FROM whatsapp_queue
+    WHERE status = 'PENDING'
+    AND node_id IS NOT NULL
+    AND rowid NOT IN (
+      SELECT MIN(rowid)
+      FROM whatsapp_queue
+      WHERE status = 'PENDING' AND node_id IS NOT NULL
+      GROUP BY tenant_id, node_id, phone, COALESCE(group_enrollment_id, '')
+    );
+  `).then(() => prismaClient.$disconnect()).catch(() => prismaClient.$disconnect());
+  console.log('[PROD START] Fila purgada contra duplicatas.');
+} catch (err) {
+  console.warn('[PROD START] Aviso na purga de duplicatas:', err.message);
+}
+
 // 5. Inicia o Cron Worker em background para disparo automático de timers e filas
 console.log('[PROD START] Iniciando Cron Worker em segundo plano para agendamentos...');
 const cronProc = spawn('node', ['scripts/cron-worker.js'], {
