@@ -47,6 +47,7 @@ import {
   StandardCheckoutEventType,
 } from '@/services/checkout/types';
 import { WordPressIntegrationTab } from '@/components/integrations/WordPressIntegrationTab';
+import { PlatformLogo } from '@/components/integrations/PlatformLogos';
 
 interface TagItem {
   id: string;
@@ -534,259 +535,9 @@ export default function IntegrationsPage() {
     }
   };
 
-  // Renderiza o emblema e ícone visual de cada plataforma de acordo com as fotos de referência
+  // Renderiza o emblema e ícone visual oficial de cada plataforma
   const renderPlatformBrandLogo = (platformId: string) => {
-    const p = platformId.toUpperCase();
-    if (p === 'ABMEX') {
-      return (
-        <div className="w-10 h-10 rounded-full bg-zinc-900 border border-zinc-700 flex items-center justify-center text-orange-500 font-black text-sm">
-          ✕
-        </div>
-      );
-    }
-    if (p === 'ACTIVE_CAMPAIGN') {
-      return (
-        <div className="w-10 h-10 rounded-full bg-[#004cff] flex items-center justify-center text-white font-bold text-base">
-          ›
-        </div>
-      );
-    }
-    if (p === 'APPMAX') {
-      return (
-        <div className="w-10 h-10 rounded-full bg-[#00d084]/20 border border-[#00d084]/40 flex items-center justify-center text-[#00d084] font-bold text-xs">
-          ⮑
-        </div>
-      );
-    }
-    if (p === 'ASAAS') {
-      return (
-        <div className="w-10 h-10 rounded-full bg-zinc-800 flex items-center justify-center text-white font-black text-[10px] tracking-tight">
-          asaas
-        </div>
-      );
-    }
-    if (p === 'B4YOU') {
-      return (
-        <div className="w-10 h-10 rounded-full bg-teal-950 border border-teal-500/40 flex items-center justify-center text-teal-400 font-bold text-xs">
-          4+
-        </div>
-      );
-    }
-    if (p === 'BRAIP' || p === 'BRAIP_STATUS_ENTREGUE') {
-      return (
-        <div className="w-10 h-10 rounded-full bg-[#7c3aed] flex items-center justify-center text-white font-black text-sm">
-          3
-        </div>
-      );
-    }
-    if (p === 'DIGITAL_GURU') {
-      return (
-        <div className="w-10 h-10 rounded-full bg-emerald-100 flex items-center justify-center text-emerald-800 font-bold text-[10px]">
-          GURU
-        </div>
-      );
-    }
-    if (p === 'DOPPUS' || p === 'DOPPUS_V3') {
-      return (
-        <div className="w-10 h-10 rounded-full bg-orange-500 flex items-center justify-center text-white font-bold text-xs">
-          d
-        </div>
-      );
-    }
-    if (p === 'EDUZZ') {
-      return (
-        <div className="w-10 h-10 rounded-full bg-[#facc15] flex items-center justify-center text-slate-900 font-black text-sm">
-          E
-        </div>
-      );
-    }
-    if (p === 'FACEBOOK') {
-      return (
-        <div className="w-10 h-10 rounded-full bg-[#1877f2] flex items-center justify-center text-white font-black text-sm">
-          f
-        </div>
-      );
-    }
-    if (p.includes('FORM')) {
-      return (
-        <div className="w-10 h-10 rounded-full bg-purple-600/30 border border-purple-500/50 flex items-center justify-center text-amber-300">
-          <FileText className="w-5 h-5" />
-        </div>
-      );
-    }
-    if (p === 'GREENN') {
-      return (
-        <div className="w-10 h-10 rounded-full bg-[#10b981] flex items-center justify-center text-white font-bold text-sm">
-          ✓
-        </div>
-      );
-    }
-    if (p === 'HEROSPARK' || p === 'HOTWEBINAR') {
-      return (
-        <div className="w-10 h-10 rounded-full bg-rose-600 flex items-center justify-center text-white font-black text-sm">
-          H
-        </div>
-      );
-    }
-    if (p === 'HOTMART' || p === 'HOTMART_V2') {
-      return (
-        <div className="w-10 h-10 rounded-full bg-orange-600/20 border border-orange-500/40 flex items-center justify-center text-orange-500">
-          <Flame className="w-5 h-5 fill-orange-500" />
-        </div>
-      );
-    }
-    if (p.includes('ISET')) {
-      return (
-        <div className="w-10 h-10 rounded-full bg-sky-700 flex items-center justify-center text-white font-black text-sm italic">
-          i
-        </div>
-      );
-    }
-    if (p === 'IRROBA') {
-      return (
-        <div className="w-10 h-10 rounded-full bg-white border border-red-600 flex items-center justify-center text-red-600 font-black text-sm">
-          i
-        </div>
-      );
-    }
-    if (p === 'KIRVANO') {
-      return (
-        <div className="w-10 h-10 rounded-full bg-black border border-zinc-700 flex items-center justify-center text-white font-black text-sm">
-          K
-        </div>
-      );
-    }
-    if (p === 'KIWIFY') {
-      return (
-        <div className="w-10 h-10 rounded-full bg-[#10b981] flex items-center justify-center text-white font-black text-xs">
-          🥝
-        </div>
-      );
-    }
-    if (p === 'LASTLINK') {
-      return (
-        <div className="w-10 h-10 rounded-full bg-emerald-600 flex items-center justify-center text-white font-bold text-xs">
-          <Layers className="w-4 h-4" />
-        </div>
-      );
-    }
-    if (p === 'LEADSTER') {
-      return (
-        <div className="w-10 h-10 rounded-full bg-sky-500 flex items-center justify-center text-white font-black text-xs">
-          *
-        </div>
-      );
-    }
-    if (p === 'MAGENTO') {
-      return (
-        <div className="w-10 h-10 rounded-full bg-orange-600 flex items-center justify-center text-white font-black text-xs">
-          M
-        </div>
-      );
-    }
-    if (p === 'MANYCHAT') {
-      return (
-        <div className="w-10 h-10 rounded-full bg-black border border-zinc-600 flex items-center justify-center text-white font-black text-xs">
-          m
-        </div>
-      );
-    }
-    if (p === 'MONETIZZE') {
-      return (
-        <div className="w-10 h-10 rounded-full bg-blue-600 flex items-center justify-center text-white font-black text-xs">
-          $
-        </div>
-      );
-    }
-    if (p === 'PAGARME') {
-      return (
-        <div className="w-10 h-10 rounded-full bg-emerald-700 flex items-center justify-center text-white font-black text-xs">
-          P
-        </div>
-      );
-    }
-    if (p === 'PAYT' || p === 'PAYT_CUSTOM') {
-      return (
-        <div className="w-10 h-10 rounded-full bg-orange-600 flex items-center justify-center text-white font-bold text-[10px]">
-          payt
-        </div>
-      );
-    }
-    if (p === 'PEPPER') {
-      return (
-        <div className="w-10 h-10 rounded-full bg-red-600 flex items-center justify-center text-white font-bold text-sm">
-          🌶
-        </div>
-      );
-    }
-    if (p === 'PERFECTPAY') {
-      return (
-        <div className="w-10 h-10 rounded-full bg-teal-600 flex items-center justify-center text-white font-black text-xs">
-          P
-        </div>
-      );
-    }
-    if (p === 'RD_STATION') {
-      return (
-        <div className="w-10 h-10 rounded-full bg-cyan-600 flex items-center justify-center text-white font-black text-xs">
-          RD
-        </div>
-      );
-    }
-    if (p === 'SHOPIFY') {
-      return (
-        <div className="w-10 h-10 rounded-full bg-[#16a34a] flex items-center justify-center text-white font-bold text-xs">
-          🛍
-        </div>
-      );
-    }
-    if (p.includes('TICTO')) {
-      return (
-        <div className="w-10 h-10 rounded-full bg-purple-900 border border-purple-500/40 flex items-center justify-center text-purple-300 font-black text-xs">
-          T
-        </div>
-      );
-    }
-    if (p.includes('WOOCOMMERCE')) {
-      return (
-        <div className="w-10 h-10 rounded-full bg-purple-700 flex items-center justify-center text-white font-black text-[10px]">
-          Woo
-        </div>
-      );
-    }
-    if (p === 'WORDPRESS') {
-      return (
-        <div className="w-10 h-10 rounded-full bg-sky-700 flex items-center justify-center text-white font-black text-xs">
-          W
-        </div>
-      );
-    }
-    if (p.includes('YAMPI')) {
-      return (
-        <div className="w-10 h-10 rounded-full bg-white border border-purple-300 flex items-center justify-center text-purple-600 font-bold text-[10px]">
-          yampi
-        </div>
-      );
-    }
-    if (p === 'CUSTOM') {
-      return (
-        <div className="w-10 h-10 rounded-full bg-sky-600/30 border border-sky-400/50 flex items-center justify-center text-sky-400">
-          <Globe className="w-5 h-5" />
-        </div>
-      );
-    }
-    if (p === 'LEAD_DATA') {
-      return (
-        <div className="w-10 h-10 rounded-full bg-blue-600/30 border border-blue-400/50 flex items-center justify-center text-blue-400">
-          <Users className="w-5 h-5" />
-        </div>
-      );
-    }
-    return (
-      <div className="w-10 h-10 rounded-full bg-zinc-800 border border-zinc-700 flex items-center justify-center text-zinc-300 font-bold text-xs">
-        {p.substring(0, 2)}
-      </div>
-    );
+    return <PlatformLogo platformId={platformId} size={40} />;
   };
 
   const selectedPreset =
@@ -1345,11 +1096,6 @@ export default function IntegrationsPage() {
                   <h4 className="text-sm font-semibold text-white group-hover:text-indigo-400 transition-colors truncate">
                     {p.name}
                   </h4>
-                  {p.description && (
-                    <p className="text-[11px] text-zinc-400 line-clamp-1 mt-0.5">
-                      {p.description}
-                    </p>
-                  )}
                 </div>
               </button>
             ))}
@@ -1361,9 +1107,6 @@ export default function IntegrationsPage() {
               </div>
               <div className="min-w-0 flex-1">
                 <h4 className="text-sm font-semibold text-white">Solicitar nova integração</h4>
-                <p className="text-[11px] text-zinc-400 mt-0.5">
-                  Precisa de uma integração específica? Solicite ao nosso time técnico.
-                </p>
               </div>
             </div>
           </div>
@@ -2038,11 +1781,6 @@ export default function IntegrationsPage() {
                     <h4 className="text-sm font-semibold text-white group-hover:text-indigo-400 transition-colors truncate">
                       {p.name}
                     </h4>
-                    {p.description && (
-                      <p className="text-[11px] text-zinc-400 line-clamp-1 mt-0.5">
-                        {p.description}
-                      </p>
-                    )}
                   </div>
                 </button>
               ))}
@@ -2054,9 +1792,6 @@ export default function IntegrationsPage() {
                 </div>
                 <div className="min-w-0 flex-1">
                   <h4 className="text-sm font-semibold text-white">Solicitar nova integração</h4>
-                  <p className="text-[11px] text-zinc-400 mt-0.5">
-                    Precisa de uma integração específica? Solicite ao nosso time técnico.
-                  </p>
                 </div>
               </div>
             </div>
