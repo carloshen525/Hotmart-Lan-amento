@@ -6,6 +6,61 @@ import { WorkflowNode, WorkflowEdge } from './types';
 import { BackgroundSchedulerRunner } from './background-runner';
 import { parseTargetDate, formatBrasiliaDateTime, formatRemainingTime } from '@/lib/date-utils';
 
+export interface ExecutionBranchContext {
+  branchId: string;
+  sourceNodeId?: string;
+  currentNodeId: string;
+  currentStepLabel?: string;
+  nextStepId?: string | null;
+  nextStepLabel?: string | null;
+  state: 'RUNNING' | 'WAITING' | 'COMPLETED' | 'FAILED';
+  waitingUntil?: string | null;
+  lastExecutedAt: string;
+}
+
+/**
+ * Verifica se o nó 'toNodeId' é alcançável a partir do nó 'fromNodeId' em um grafo direcionado.
+ * Retorna true se toNodeId for descendente de fromNodeId (ou se forem o mesmo nó).
+ */
+export function isNodeReachable(fromNodeId: string, toNodeId: string, edges: WorkflowEdge[]): boolean {
+  if (fromNodeId === toNodeId) return true;
+  const visited = new Set<string>();
+  const queue = [fromNodeId];
+  while (queue.length > 0) {
+    const curr = queue.shift()!;
+    if (curr === toNodeId) return true;
+    if (visited.has(curr)) continue;
+    visited.add(curr);
+    for (const edge of edges) {
+      if (edge.source === curr && !visited.has(edge.target)) {
+        queue.push(edge.target);
+      }
+    }
+  }
+  return false;
+}
+
+/**
+ * Identifica o ID da ramificação para um nó em um grafo com possíveis bifurcações.
+ */
+export function findBranchIdForNode(nodeId: string, nodes: WorkflowNode[], edges: WorkflowEdge[]): string {
+  const bifurcations = nodes.filter((n) => edges.filter((e) => e.source === n.id).length > 1);
+  if (bifurcations.length === 0) {
+    return 'branch_main';
+  }
+
+  for (const bif of bifurcations) {
+    const outEdges = edges.filter((e) => e.source === bif.id);
+    for (const edge of outEdges) {
+      if (edge.target === nodeId || isNodeReachable(edge.target, nodeId, edges)) {
+        return `branch_${bif.id}_${edge.target}`;
+      }
+    }
+  }
+
+  return 'branch_main';
+}
+
 export class AutomationEngine {
   private runningSyncs = new Set<string>(); // automationId
   private executingNodes = new Set<string>(); // `${contactId}_${nodeId}`
@@ -2312,9 +2367,9 @@ export class AutomationEngine {
       }
     }
 
-    // 4. VALIDAÇÃO DE TIMER BLOQUEANTE
-    // O timer representa uma pausa obrigatória na execução.
-    // Enquanto qualquer timer estiver aguardando seu horário, NENHUMA etapa subsequente pode iniciar.
+    // 4. VALIDAÇÃO DE TIMER BLOQUEANTE COM ESCOPO LOCAL DE RAMIFICAÇÃO (GRAFO DIRECIONADO)
+    // O timer possui escopo LOCAL à sua ramificação: ele bloqueia exclusivamente os nós descendentes
+    // que dependem dele no grafo. Ramificações paralelas NUNCA são bloqueadas ou atrasadas por timers de outros ramos!
     const waitLogs = await prisma.automationGroupStepLog.findMany({
       where: {
         enrollmentId,
@@ -2331,19 +2386,22 @@ export class AutomationEngine {
         select: { nodeId: true },
       });
       const passedIds = new Set(passedLogs.map((p) => p.nodeId));
-      const pendingTimer = waitLogs.find((w) => !passedIds.has(w.nodeId));
+      const pendingTimers = waitLogs.filter((w) => !passedIds.has(w.nodeId) && w.nodeId !== nodeId);
 
-      if (pendingTimer && pendingTimer.nodeId !== nodeId) {
-        const timerNode = nodes.find((n) => n.id === pendingTimer.nodeId);
-        console.log(
-          `[STATE MACHINE - BLOQUEIO TIMER]\n` +
-          `Grupo: ${group.name} (${group.jid})\n` +
-          `Fluxo: ${automation.name} (${automation.id})\n` +
-          `Etapa tentada: ${node.data?.label || nodeType} (${nodeId})\n` +
-          `Motivo do bloqueio: O grupo está em pausa obrigatória no timer "${timerNode?.data?.label || pendingTimer.nodeId}". Nenhuma etapa futura pode ser executada até a conclusão do timer.\n` +
-          `Horário: ${formatBrasiliaDateTime(Date.now())}`
-        );
-        return;
+      for (const pending of pendingTimers) {
+        // Bloqueia SOMENTE se o timer pendente for um ancestral deste nó no grafo direcionado
+        if (isNodeReachable(pending.nodeId, nodeId, edges)) {
+          const timerNode = nodes.find((n) => n.id === pending.nodeId);
+          console.log(
+            `[STATE MACHINE - BLOQUEIO TIMER LOCAL]\n` +
+            `Grupo: ${group.name} (${group.jid})\n` +
+            `Fluxo: ${automation.name} (${automation.id})\n` +
+            `Etapa tentada: ${node.data?.label || nodeType} (${nodeId})\n` +
+            `Motivo do bloqueio: Esta ramificação depende do timer "${timerNode?.data?.label || pending.nodeId}" que ainda está aguardando seu horário.\n` +
+            `Horário: ${formatBrasiliaDateTime(Date.now())}`
+          );
+          return;
+        }
       }
     }
 
@@ -2355,25 +2413,38 @@ export class AutomationEngine {
       enrollment.status = 'ACTIVE';
     }
 
-    // 5. ATUALIZAÇÃO DA MÁQUINA DE ESTADOS (GRUPO / ETAPA ATUAL / PRÓXIMA ETAPA)
+    // 5. ATUALIZAÇÃO DA MÁQUINA DE ESTADOS (RAMIFICAÇÃO / ETAPA ATUAL / PRÓXIMA ETAPA)
     const outgoingEdges = edges.filter((e) => e.source === nodeId);
     const nextNode = outgoingEdges.length > 0 ? nodes.find((n) => n.id === outgoingEdges[0].target) : null;
-    const nextStepLabel = nextNode?.data?.label || (nextNode ? nextNode.type : 'Fim do Fluxo');
+    const nextStepLabel = nextNode?.data?.label || (nextNode ? nextNode.type : 'Fim da Ramificação');
+    const currentBranchId = findBranchIdForNode(nodeId, nodes, edges);
+
+    let currentMeta: any = {};
+    try {
+      currentMeta = JSON.parse(enrollment.metadata || '{}');
+    } catch {}
+    if (!currentMeta.branches || typeof currentMeta.branches !== 'object') {
+      currentMeta.branches = {};
+    }
+
+    currentMeta.branches[currentBranchId] = {
+      branchId: currentBranchId,
+      currentNodeId: nodeId,
+      currentStepType: nodeType,
+      currentStepLabel: node.data?.label || nodeType,
+      nextStepId: nextNode?.id || null,
+      nextStepLabel,
+      state: 'RUNNING',
+      waitingUntil: null,
+      lastExecutedAt: new Date().toISOString(),
+    };
 
     await prisma.automationGroupEnrollment.update({
       where: { id: enrollmentId },
       data: {
         currentNodeId: nodeId,
-        metadata: JSON.stringify({
-          currentStepId: nodeId,
-          currentStepType: nodeType,
-          currentStepLabel: node.data?.label || nodeType,
-          nextStepId: nextNode?.id || null,
-          nextStepLabel,
-          stepStatus: 'EXECUTING',
-          lastExecutedAt: new Date().toISOString(),
-          updatedAt: new Date().toISOString(),
-        }),
+        status: 'ACTIVE',
+        metadata: JSON.stringify(currentMeta),
       },
     });
 
@@ -2438,10 +2509,32 @@ export class AutomationEngine {
           `[TIMER AGENDADO - GRUPO] Enrollment: ${enrollmentId} | Grupo: ${group.name} | Tipo: ${isSpecificGroup ? 'SPECIFIC_DATE' : 'RELATIVE'} | Data programada: ${formatBrasiliaDateTime(targetTimestamp)} (${new Date(targetTimestamp).toISOString()}) | Horário atual: ${formatBrasiliaDateTime(now)} (${new Date(now).toISOString()}) | Tempo restante: ${formatRemainingTime(remainingMs)}`
         );
 
-        // Horário futuro: grupo entra em WAITING até que o timer seja atingido pontualmente
+        // Atualiza a ramificação específica para WAITING com escopo local
+        currentMeta.branches[currentBranchId] = {
+          branchId: currentBranchId,
+          currentNodeId: nodeId,
+          currentStepType: 'timer',
+          currentStepLabel: node.data?.label || 'Timer',
+          nextStepId: nextNode?.id || null,
+          nextStepLabel,
+          state: 'WAITING',
+          waitingUntil: new Date(targetTimestamp).toISOString(),
+          lastExecutedAt: new Date().toISOString(),
+        };
+
+        // Se existirem outras ramificações em RUNNING, o enrollment global permanece ACTIVE
+        const branchList: any[] = Object.values(currentMeta.branches);
+        const hasOtherRunningBranch = branchList.some(
+          (b) => b.branchId !== currentBranchId && b.state === 'RUNNING'
+        );
+
         await prisma.automationGroupEnrollment.update({
           where: { id: enrollmentId },
-          data: { status: 'WAITING', currentNodeId: nodeId },
+          data: {
+            status: hasOtherRunningBranch ? 'ACTIVE' : 'WAITING',
+            currentNodeId: nodeId,
+            metadata: JSON.stringify(currentMeta),
+          },
         });
 
         // CRÍTICO: Status DEVE SER 'WAITING', NUNCA 'SUCCESS'!
@@ -2997,33 +3090,41 @@ export class AutomationEngine {
         hasPendingQueue = pendingCount > 0;
       } catch {}
 
+      const nodes: WorkflowNode[] = JSON.parse(automation.nodes || '[]');
+      const currentBranchId = findBranchIdForNode(currentNodeId, nodes, edges);
+      let currentMeta: any = {};
+      try {
+        currentMeta = JSON.parse(enrollment.metadata || '{}');
+      } catch {}
+      if (!currentMeta.branches) currentMeta.branches = {};
+      if (currentMeta.branches[currentBranchId]) {
+        currentMeta.branches[currentBranchId].state = 'COMPLETED';
+        currentMeta.branches[currentBranchId].nextStepId = null;
+        currentMeta.branches[currentBranchId].nextStepLabel = 'Concluído';
+        currentMeta.branches[currentBranchId].lastExecutedAt = new Date().toISOString();
+      }
+
+      // Verifica se existe alguma outra ramificação ainda em andamento no fluxo ou mensagens na fila
+      const pendingTimerNodeIds = new Set(waitLogs.filter((w) => !passedNodeIds.has(w.nodeId)).map((w) => w.nodeId));
+      const hasUnexecutedConnectedNodes = edges.some(
+        (edge) => executedNodeIds.has(edge.source) && !executedNodeIds.has(edge.target) && !pendingTimerNodeIds.has(edge.target)
+      );
+
+      if (hasPendingQueue || hasUnexecutedConnectedNodes) {
+        // Outro ramo ainda está sendo processado ativamente na sua vez; mantém o grupo ativo
+        await prisma.automationGroupEnrollment.update({
+          where: { id: enrollmentId },
+          data: { status: 'ACTIVE', metadata: JSON.stringify(currentMeta) },
+        });
+        return;
+      }
+
       if (hasPendingTimers) {
+        // Nenhum ramo está em execução ativa, mas existem timers aguardando horário
         const pendingTimerNodeId = waitLogs.find((w) => !passedNodeIds.has(w.nodeId))?.nodeId || null;
         await prisma.automationGroupEnrollment.update({
           where: { id: enrollmentId },
-          data: { status: 'WAITING', currentNodeId: pendingTimerNodeId },
-        });
-        return;
-      }
-
-      if (hasPendingQueue) {
-        await prisma.automationGroupEnrollment.update({
-          where: { id: enrollmentId },
-          data: { status: 'ACTIVE' },
-        });
-        return;
-      }
-
-      // Verifica se existe alguma outra ramificação ainda em andamento no fluxo
-      const hasUnexecutedConnectedNodes = edges.some(
-        (edge) => executedNodeIds.has(edge.source) && !executedNodeIds.has(edge.target)
-      );
-
-      if (hasUnexecutedConnectedNodes) {
-        // Outro ramo ainda está sendo processado na sua vez; mantém o grupo ativo sem avançar nós prematuramente
-        await prisma.automationGroupEnrollment.update({
-          where: { id: enrollmentId },
-          data: { status: 'ACTIVE' },
+          data: { status: 'WAITING', currentNodeId: pendingTimerNodeId, metadata: JSON.stringify(currentMeta) },
         });
         return;
       }
@@ -3031,7 +3132,7 @@ export class AutomationEngine {
       // Todos os ramos foram concluídos com sucesso!
       await prisma.automationGroupEnrollment.update({
         where: { id: enrollmentId },
-        data: { status: 'COMPLETED', completedAt: new Date(), currentNodeId: null },
+        data: { status: 'COMPLETED', completedAt: new Date(), currentNodeId: null, metadata: JSON.stringify(currentMeta) },
       });
       return;
     }

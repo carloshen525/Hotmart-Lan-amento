@@ -200,7 +200,8 @@ export class AutomationScheduler {
   }
 
   /**
-   * Processa timers de automações em grupos onde o grupo está em WAITING aguardando a data/hora
+   * Processa timers de automações em grupos onde a ramificação está em WAITING aguardando a data/hora.
+   * Suporta múltiplas ramificações independentes e paralelas no mesmo enrollment.
    */
   async processDueGroupTimers(): Promise<{ processed: number; failed: number }> {
     const now = Date.now();
@@ -209,108 +210,12 @@ export class AutomationScheduler {
     const handledTimerKeys = new Set<string>();
 
     try {
-      const waitingEnrollments = await prisma.automationGroupEnrollment.findMany({
-        where: {
-          status: 'WAITING',
-          currentNodeId: { not: null },
-        },
-        include: {
-          automation: true,
-        },
-      });
-
-      for (const enr of waitingEnrollments) {
-        try {
-          if (!enr.currentNodeId || enr.automation.status !== 'ACTIVE') continue;
-
-          const nodes: any[] = JSON.parse(enr.automation.nodes || '[]');
-          const edges: any[] = JSON.parse(enr.automation.edges || '[]');
-          const currentNode = nodes.find((n) => n.id === enr.currentNodeId);
-          if (!currentNode) continue;
-
-          const cfg = currentNode.data?.config || {};
-          const targetStr = cfg.specificDate || cfg.targetDate || cfg.targetTime;
-          let targetTime = parseTargetDate(targetStr);
-
-          // Se for timer relativo ou se targetTime não veio da config do nó, busca no log WAIT_TIMER
-          if (isNaN(targetTime)) {
-            const lastWaitLog = await prisma.automationGroupStepLog.findFirst({
-              where: {
-                enrollmentId: enr.id,
-                nodeId: currentNode.id,
-                action: 'WAIT_TIMER',
-              },
-              orderBy: { executedAt: 'desc' },
-            });
-            if (lastWaitLog && lastWaitLog.details) {
-              try {
-                const parsed = JSON.parse(lastWaitLog.details);
-                if (parsed.scheduledFor || parsed.targetDate) {
-                  targetTime = parseTargetDate(parsed.scheduledFor || parsed.targetDate);
-                }
-              } catch {}
-            }
-          }
-
-          // Se targetTime for inválido (NaN), NUNCA disparar! Mantém aguardando com segurança
-          if (isNaN(targetTime)) {
-            continue;
-          }
-
-          // Se o horário ainda não foi alcançado, mantém o grupo aguardando intacto
-          if (targetTime > now) {
-            continue;
-          }
-
-          // SEGURANÇA MÁXIMA: Executa estritamente quando targetTime <= now
-          if (targetTime <= now) {
-            const timerKey = `${enr.id}:${currentNode.id}`;
-            handledTimerKeys.add(timerKey);
-
-            const diffSec = Math.round((now - targetTime) / 1000);
-            console.log(
-              `[TIMER EXECUTADO - GRUPO] Enrollment: ${enr.id} | Grupo: ${enr.groupId} | Data prevista: ${formatBrasiliaDateTime(targetTime)} (${new Date(targetTime).toISOString()}) | Data real: ${formatBrasiliaDateTime(now)} (${new Date(now).toISOString()}) | Diferença: ${diffSec}s`
-            );
-
-            // Reativa o grupo para ACTIVE
-            await prisma.automationGroupEnrollment.update({
-              where: { id: enr.id },
-              data: { status: 'ACTIVE' },
-            });
-
-            await prisma.automationGroupStepLog.create({
-              data: {
-                enrollmentId: enr.id,
-                groupId: enr.groupId,
-                tenantId: enr.tenantId,
-                nodeId: currentNode.id,
-                nodeType: 'timer',
-                action: 'TIMER_PASSED',
-                status: 'SUCCESS',
-                details: JSON.stringify({
-                  passedAt: new Date().toISOString(),
-                  scheduledFor: new Date(targetTime).toISOString(),
-                }),
-              },
-            });
-
-            // Avança para a próxima etapa através da máquina de estados
-            await automationEngine.advanceGroupNode(enr.id, currentNode.id, enr.tenantId, enr.automation.id);
-            processed++;
-          }
-        } catch (enrErr: any) {
-          failed++;
-          console.error(`[AutomationScheduler] Erro ao processar timer do grupo ${enr.id}:`, enrErr.message);
-        }
-      }
-
-      // 2. RECUPERAÇÃO AUTO-HEALING DE TIMERS E RAMIFICAÇÕES DE GRUPOS:
-      // Busca logs WAIT_TIMER em automações ativas que ainda não receberam TIMER_PASSED
+      // Busca todos os timers pendentes em grupos de automações ativas que ainda não receberam TIMER_PASSED
       const pendingWaitLogs = await prisma.automationGroupStepLog.findMany({
         where: {
           action: 'WAIT_TIMER',
         },
-        orderBy: { executedAt: 'desc' },
+        orderBy: { executedAt: 'asc' },
       });
 
       for (const waitLog of pendingWaitLogs) {
@@ -356,43 +261,43 @@ export class AutomationScheduler {
 
           if (isNaN(targetTime)) continue;
 
-          if (targetTime <= now) {
-            console.log(
-              `[TIMER AUTO-HEALING - GRUPO] Enrollment: ${enr.id} | Grupo: ${enr.groupId} | Node: ${currentNode.id} | Horário atingido: ${formatBrasiliaDateTime(targetTime)}. Executando e avançando...`
-            );
-
-            await prisma.automationGroupEnrollment.update({
-              where: { id: enr.id },
-              data: { status: 'ACTIVE', currentNodeId: currentNode.id },
-            });
-
-            await prisma.automationGroupStepLog.create({
-              data: {
-                enrollmentId: enr.id,
-                groupId: enr.groupId,
-                tenantId: enr.tenantId,
-                nodeId: currentNode.id,
-                nodeType: 'timer',
-                action: 'TIMER_PASSED',
-                status: 'SUCCESS',
-                details: JSON.stringify({
-                  passedAt: new Date().toISOString(),
-                  scheduledFor: new Date(targetTime).toISOString(),
-                  recovery: true,
-                }),
-              },
-            });
-
-            // Avança para a próxima etapa através da máquina de estados
-            await automationEngine.advanceGroupNode(enr.id, currentNode.id, enr.tenantId, enr.automation.id);
-            processed++;
+          // Se o horário ainda não foi alcançado, esta ramificação continua aguardando intacta
+          if (targetTime > now) {
+            continue;
           }
-        } catch (logErr: any) {
-          console.error(`[AutomationScheduler] Erro ao recuperar timer de grupo ${waitLog.id}:`, logErr.message);
+
+          // Horário atingido! Executa pontualmente
+          const diffSec = Math.round((now - targetTime) / 1000);
+          console.log(
+            `[TIMER EXECUTADO - RAMIFICAÇÃO] Enrollment: ${enr.id} | Grupo: ${enr.groupId} | Node: ${currentNode.id} | Data prevista: ${formatBrasiliaDateTime(targetTime)} | Data real: ${formatBrasiliaDateTime(now)} | Diferença: ${diffSec}s`
+          );
+
+          await prisma.automationGroupStepLog.create({
+            data: {
+              enrollmentId: enr.id,
+              groupId: enr.groupId,
+              tenantId: enr.tenantId,
+              nodeId: currentNode.id,
+              nodeType: 'timer',
+              action: 'TIMER_PASSED',
+              status: 'SUCCESS',
+              details: JSON.stringify({
+                passedAt: new Date().toISOString(),
+                scheduledFor: new Date(targetTime).toISOString(),
+              }),
+            },
+          });
+
+          // Avança exclusivamente a ramificação deste timer na máquina de estados
+          await automationEngine.advanceGroupNode(enr.id, currentNode.id, enr.tenantId, enr.automation.id);
+          processed++;
+        } catch (timerErr: any) {
+          failed++;
+          console.error(`[AutomationScheduler] Erro ao processar timer de ramificação ${waitLog.id}:`, timerErr.message);
         }
       }
     } catch (err: any) {
-      console.error('[AutomationScheduler] Erro ao buscar timers de grupos:', err.message);
+      console.error('[AutomationScheduler] Erro ao buscar timers de ramificações:', err.message);
     }
 
     return { processed, failed };
