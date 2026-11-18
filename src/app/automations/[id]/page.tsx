@@ -110,20 +110,7 @@ const getLocalDatetimeString = (date: Date = new Date()) => {
   return `${date.getFullYear()}-${pad(date.getMonth() + 1)}-${pad(date.getDate())}T${pad(date.getHours())}:${pad(date.getMinutes())}`;
 };
 
-// Helper para interpretar data/hora considerando o fuso horário de Brasília (UTC-3)
-function parseTargetDate(dateStr: string): number {
-  if (!dateStr) return NaN;
-  const clean = dateStr.trim();
-  if (/[Z+-]\d{2}(:?\d{2})?$/.test(clean) || clean.endsWith('Z')) {
-    return new Date(clean).getTime();
-  }
-  if (/^\d{4}-\d{2}-\d{2}[T ]\d{2}:\d{2}(:\d{2})?(\.\d+)?$/.test(clean)) {
-    const isoWithT = clean.replace(' ', 'T');
-    const withOffset = new Date(`${isoWithT}-03:00`).getTime();
-    if (!isNaN(withOffset)) return withOffset;
-  }
-  return new Date(clean).getTime();
-}
+import { parseTargetDate } from '@/lib/date-utils';
 
 // Helper para evitar duplicação do telefone no rótulo da linha WhatsApp
 function formatWppInstanceLabel(inst: any): string {

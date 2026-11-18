@@ -1,19 +1,6 @@
 import { prisma } from '@/lib/prisma';
 import { automationEngine } from './engine';
-
-function parseTargetDate(dateStr?: string | null): number {
-  if (!dateStr) return NaN;
-  const clean = dateStr.trim();
-  if (/[Z+-]\d{2}(:?\d{2})?$/.test(clean) || clean.endsWith('Z')) {
-    return new Date(clean).getTime();
-  }
-  if (/^\d{4}-\d{2}-\d{2}[T ]\d{2}:\d{2}(:\d{2})?(\.\d+)?$/.test(clean)) {
-    const isoWithT = clean.replace(' ', 'T');
-    const withOffset = new Date(`${isoWithT}-03:00`).getTime();
-    if (!isNaN(withOffset)) return withOffset;
-  }
-  return new Date(clean).getTime();
-}
+import { parseTargetDate, formatBrasiliaDateTime, formatRemainingTime } from '@/lib/date-utils';
 
 export class AutomationScheduler {
   /**
@@ -22,7 +9,7 @@ export class AutomationScheduler {
   async processDueJobs(): Promise<{ processed: number; cancelled: number; failed: number }> {
     const now = new Date();
 
-    // Busca jobs pendentes cujo tempo chegou
+    // Busca jobs pendentes cujo tempo de execução programado já chegou
     const dueJobs = await prisma.scheduledJob.findMany({
       where: {
         status: 'PENDING',
@@ -41,6 +28,14 @@ export class AutomationScheduler {
 
     for (const job of dueJobs) {
       try {
+        // Bloqueio de segurança: impede estritamente execução antecipada
+        if (job.executeAt.getTime() > now.getTime()) {
+          console.error(
+            `[ERRO CRÍTICO] Bloqueio de segurança: tentativa de execução antecipada do job ${job.id}! Programado: ${job.executeAt.toISOString()} vs Atual: ${now.toISOString()}`
+          );
+          continue;
+        }
+
         // Bloqueio atômico do job
         const updated = await prisma.scheduledJob.updateMany({
           where: { id: job.id, status: 'PENDING' },
@@ -92,6 +87,12 @@ export class AutomationScheduler {
           cancelled++;
           continue;
         }
+
+        // Log detalhado de execução pontual do timer
+        const diffSec = Math.round((now.getTime() - job.executeAt.getTime()) / 1000);
+        console.log(
+          `[TIMER EXECUTADO] Job: ${job.id} | Lead: ${job.contactId} | Data prevista: ${formatBrasiliaDateTime(job.executeAt)} (${job.executeAt.toISOString()}) | Data real: ${formatBrasiliaDateTime(now)} (${now.toISOString()}) | Diferença: ${diffSec}s`
+        );
 
         // 3. Reativa a inscrição para ACTIVE e executa o próximo nó
         if (job.enrollmentId) {
@@ -150,8 +151,23 @@ export class AutomationScheduler {
         const targetStr = cfg.specificDate || cfg.targetDate || cfg.targetTime;
         const targetTime = parseTargetDate(targetStr);
 
-        if (isNaN(targetTime) || targetTime <= now.getTime()) {
-          // Timer já venceu! Reativa a inscrição e avança para a próxima etapa conectada
+        // Se targetTime for inválido (NaN), NUNCA executa antecipadamente! Mantém aguardando.
+        if (isNaN(targetTime)) {
+          continue;
+        }
+
+        // Se for no futuro, mantém estritamente aguardando
+        if (targetTime > now.getTime()) {
+          continue;
+        }
+
+        // Executa apenas quando targetTime <= now:
+        if (targetTime <= now.getTime()) {
+          const diffSec = Math.round((now.getTime() - targetTime) / 1000);
+          console.log(
+            `[TIMER EXECUTADO - RECUPERAÇÃO] Lead: ${enr.contactId} | Data prevista: ${formatBrasiliaDateTime(targetTime)} | Data real: ${formatBrasiliaDateTime(now)} | Diferença: ${diffSec}s`
+          );
+
           await prisma.automationEnrollment.update({
             where: { id: enr.id },
             data: { status: 'ACTIVE' },
@@ -215,8 +231,8 @@ export class AutomationScheduler {
           const targetStr = cfg.specificDate || cfg.targetDate || cfg.targetTime;
           let targetTime = parseTargetDate(targetStr);
 
+          // Se for timer relativo ou se targetTime não veio da config do nó, busca no log WAIT_TIMER
           if (isNaN(targetTime)) {
-            // Busca o horário agendado salvo no log WAIT_TIMER para este nó e inscrição de grupo
             const lastWaitLog = await prisma.automationGroupStepLog.findFirst({
               where: {
                 enrollmentId: enr.id,
@@ -229,14 +245,29 @@ export class AutomationScheduler {
               try {
                 const parsed = JSON.parse(lastWaitLog.details);
                 if (parsed.scheduledFor || parsed.targetDate) {
-                  targetTime = new Date(parsed.scheduledFor || parsed.targetDate).getTime();
+                  targetTime = parseTargetDate(parsed.scheduledFor || parsed.targetDate);
                 }
               } catch {}
             }
           }
 
-          // Se não há targetTime ou se o horário agendado já chegou
-          if (isNaN(targetTime) || targetTime <= now) {
+          // Se targetTime for inválido (NaN), NUNCA disparar! Mantém aguardando com segurança
+          if (isNaN(targetTime)) {
+            continue;
+          }
+
+          // Se o horário ainda não foi alcançado, mantém o grupo aguardando intacto
+          if (targetTime > now) {
+            continue;
+          }
+
+          // SEGURANÇA MÁXIMA: Executa estritamente quando targetTime <= now
+          if (targetTime <= now) {
+            const diffSec = Math.round((now - targetTime) / 1000);
+            console.log(
+              `[TIMER EXECUTADO - GRUPO] Enrollment: ${enr.id} | Grupo: ${enr.groupId} | Data prevista: ${formatBrasiliaDateTime(targetTime)} (${new Date(targetTime).toISOString()}) | Data real: ${formatBrasiliaDateTime(now)} (${new Date(now).toISOString()}) | Diferença: ${diffSec}s`
+            );
+
             // Reativa o grupo para ACTIVE
             await prisma.automationGroupEnrollment.update({
               where: { id: enr.id },
@@ -252,7 +283,10 @@ export class AutomationScheduler {
                 nodeType: 'timer',
                 action: 'TIMER_PASSED',
                 status: 'SUCCESS',
-                details: JSON.stringify({ passedAt: new Date().toISOString() }),
+                details: JSON.stringify({
+                  passedAt: new Date().toISOString(),
+                  scheduledFor: new Date(targetTime).toISOString(),
+                }),
               },
             });
 

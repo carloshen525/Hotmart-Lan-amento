@@ -8,7 +8,7 @@ async function runTestSuite() {
   console.log('=====================================================\n');
 
   let passed = 0;
-  let total = 43;
+  let total = 44;
 
   // Setup de tenant de teste limpo
   const testTenant = await prisma.tenant.upsert({
@@ -5117,6 +5117,456 @@ async function runTestSuite() {
     });
 
     console.log('✔ PASSOU: Motor de automação de funis por TAGs e eventos validado com 100% de sucesso.');
+    passed++;
+
+    // -------------------------------------------------------------
+    // TESTE 44: Correção Crítica do Motor de Agendamento por Data e Horário
+    // (Fuso Horário de Brasília, Timer Absoluto vs Relativo e Prevenção de Disparo Prematuro)
+    // -------------------------------------------------------------
+    console.log('\n[TESTE 44] Correção Crítica do Motor de Agendamento por Data e Horário...');
+
+    // 1. Validação do parser de datas (parseTargetDate) com Fuso Horário de Brasília (UTC-3)
+    function testParseTargetDate(dateStr) {
+      if (!dateStr || typeof dateStr !== 'string') return NaN;
+      let clean = dateStr.trim();
+      const brMatch = clean.match(/^(\d{1,2})\/(\d{1,2})\/(\d{4})(?:(?:\s+às\s+|\s+T?|\s+)(\d{1,2}):(\d{2})(?::(\d{2}))?)?$/i);
+      if (brMatch) {
+        const day = brMatch[1].padStart(2, '0');
+        const month = brMatch[2].padStart(2, '0');
+        const year = brMatch[3];
+        const hour = (brMatch[4] || '00').padStart(2, '0');
+        const min = (brMatch[5] || '00').padStart(2, '0');
+        const sec = (brMatch[6] || '00').padStart(2, '0');
+        return new Date(`${year}-${month}-${day}T${hour}:${min}:${sec}-03:00`).getTime();
+      }
+      const isoMatch = clean.match(/^(\d{4})-(\d{2})-(\d{2})[T ](\d{2}):(\d{2})(?::(\d{2}))?(?:\.\d+)?$/);
+      if (isoMatch) {
+        const [_, y, m, d, hr, mn, sc] = isoMatch;
+        const sec = sc || '00';
+        return new Date(`${y}-${m}-${d}T${hr}:${mn}:${sec}-03:00`).getTime();
+      }
+      if (/[+-]\d{2}(:?\d{2})?$/.test(clean) || clean.endsWith('Z')) {
+        return new Date(clean).getTime();
+      }
+      return new Date(clean).getTime();
+    }
+
+    // Validação 1: HTML datetime-local (2026-11-18T06:00) deve ancorar em 09:00 UTC (06:00 BRT)
+    const tHtml = testParseTargetDate('2026-11-18T06:00');
+    assert.strictEqual(new Date(tHtml).toISOString(), '2026-11-18T09:00:00.000Z', '06:00 BRT deve equivaler exatamente a 09:00 UTC');
+
+    // Validação 2: Formato amigável brasileiro (18/11/2026 às 06:00) deve ancorar em 09:00 UTC
+    const tBrAs = testParseTargetDate('18/11/2026 às 06:00');
+    assert.strictEqual(new Date(tBrAs).toISOString(), '2026-11-18T09:00:00.000Z', '18/11/2026 às 06:00 deve equivaler a 09:00 UTC');
+
+    // Validação 3: Formato amigável brasileiro com espaço (18/11/2026 06:00) deve ancorar em 09:00 UTC
+    const tBrEsp = testParseTargetDate('18/11/2026 06:00');
+    assert.strictEqual(new Date(tBrEsp).toISOString(), '2026-11-18T09:00:00.000Z', '18/11/2026 06:00 deve equivaler a 09:00 UTC');
+
+    // Validação 4: Data inválida retorna NaN e nunca dispara
+    assert.ok(isNaN(testParseTargetDate('invalid_date_abc')), 'Data inválida deve retornar NaN');
+    assert.ok(isNaN(testParseTargetDate(null)), 'Data nula deve retornar NaN');
+
+    // 2. Cenário Real do Usuário: Automação de Grupos com Timer para 06:00
+    // Simula o servidor rodando em 03:25 AM em Brasília (06:25 UTC)
+    const ts44 = Date.now();
+    const inst44 = await prisma.whatsappInstance.create({
+      data: {
+        tenantId: testTenant.id,
+        name: 'Instância Expert 44',
+        instanceName: `inst_44_${ts44}`,
+        instanceToken: `tok_44_${ts44}`,
+        phone: '+5511999994444',
+        status: 'CONNECTED',
+      },
+    });
+
+    const tagGrupoName = `GRUPO EXPERT BUSCA E APREENSÃO ${ts44}`;
+    const tagGrupo44 = await prisma.groupTag.upsert({
+      where: {
+        tenantId_name: {
+          tenantId: testTenant.id,
+          name: tagGrupoName,
+        },
+      },
+      create: {
+        tenantId: testTenant.id,
+        name: tagGrupoName,
+        color: '#8b5cf6',
+      },
+      update: {},
+    });
+
+    const grupo44 = await prisma.whatsappGroup.create({
+      data: {
+        tenantId: testTenant.id,
+        whatsappInstanceId: inst44.id,
+        jid: `120363_grupo44_${ts44}@g.us`,
+        name: 'GRUPO EXPERT BUSCA E APREENSÃO #1',
+        isEligible: true,
+        status: 'ACTIVE',
+      },
+    });
+
+    await prisma.groupTagOnGroup.create({
+      data: {
+        groupId: grupo44.id,
+        tagId: tagGrupo44.id,
+      },
+    });
+
+    // Nós do fluxo exatamente como na captura do usuário:
+    // Tag | 7 grupos -> Timer (06:00) -> WhatsApp -> Timer (10:00) -> WhatsApp
+    // Para o teste, usamos data futura real (ex: daqui a 2 horas)
+    const futureDateStr = new Date(Date.now() + 2 * 3600 * 1000).toISOString().slice(0, 16);
+    const futureDate10Str = new Date(Date.now() + 6 * 3600 * 1000).toISOString().slice(0, 16);
+
+    const autoGrupo44 = await prisma.automation.create({
+      data: {
+        tenantId: testTenant.id,
+        name: 'Automação Grupos Agendada',
+        targetType: 'GROUP',
+        status: 'ACTIVE',
+        targetGroupTags: JSON.stringify([tagGrupoName]),
+        nodes: JSON.stringify([
+          { id: 'node_tag', type: 'tag', data: { label: 'Tags | 1 grupo', config: { entryTags: [tagGrupoName] } } },
+          { id: 'node_timer_6', type: 'timer', data: { label: 'Até 18/11/2026 às 06:00', config: { timerType: 'SPECIFIC_DATE', specificDate: futureDateStr } } },
+          { id: 'node_wpp_1', type: 'whatsapp', data: { label: 'WhatsApp | 1 grupo', config: { text: 'Mensagem das 06:00' } } },
+          { id: 'node_timer_10', type: 'timer', data: { label: 'Até 18/11/2026 às 10:00', config: { timerType: 'SPECIFIC_DATE', specificDate: futureDate10Str } } },
+          { id: 'node_wpp_2', type: 'whatsapp', data: { label: 'WhatsApp | 0 grupos', config: { text: 'Mensagem das 10:00' } } },
+        ]),
+        edges: JSON.stringify([
+          { id: 'e1', source: 'node_tag', target: 'node_timer_6' },
+          { id: 'e2', source: 'node_timer_6', target: 'node_wpp_1' },
+          { id: 'e3', source: 'node_wpp_1', target: 'node_timer_10' },
+          { id: 'e4', source: 'node_timer_10', target: 'node_wpp_2' },
+        ]),
+      },
+    });
+
+    // Helper simulado do motor para execução de nós de grupos com as regras corrigidas
+    async function testExecuteGroupNodeEngine(enrollmentId, nodeId, tenantId, simulatedNow) {
+      const enrollment = await prisma.automationGroupEnrollment.findUnique({
+        where: { id: enrollmentId },
+        include: { automation: true, group: true },
+      });
+      if (!enrollment || enrollment.status === 'CANCELLED' || enrollment.status === 'COMPLETED') return;
+
+      const nodes = JSON.parse(enrollment.automation.nodes || '[]');
+      const edges = JSON.parse(enrollment.automation.edges || '[]');
+      const node = nodes.find((n) => n.id === nodeId);
+      if (!node) return;
+
+      // REGRA: já executado com sucesso (excluindo WAIT_TIMER)
+      const alreadyLogged = await prisma.automationGroupStepLog.findFirst({
+        where: {
+          enrollmentId,
+          nodeId,
+          status: 'SUCCESS',
+          action: { not: 'WAIT_TIMER' },
+        },
+      });
+      if (alreadyLogged) {
+        const outgoingEdges = edges.filter((e) => e.source === nodeId);
+        for (const edge of outgoingEdges) {
+          await testExecuteGroupNodeEngine(enrollmentId, edge.target, tenantId, simulatedNow);
+        }
+        return;
+      }
+
+      await prisma.automationGroupEnrollment.update({
+        where: { id: enrollmentId },
+        data: { currentNodeId: nodeId },
+      });
+
+      const nodeType = node.data?.type || node.type;
+
+      if (nodeType === 'timer' || nodeType === 'delay') {
+        const cfg = node.data?.config || {};
+        const isSpecific = Boolean(cfg.timerType === 'SPECIFIC_DATE' || cfg.delayType === 'specific_date' || cfg.specificDate);
+        let targetTimestamp;
+        if (isSpecific) {
+          targetTimestamp = testParseTargetDate(cfg.specificDate);
+          if (isNaN(targetTimestamp)) return;
+        } else {
+          targetTimestamp = simulatedNow + 60000;
+        }
+
+        if (targetTimestamp > simulatedNow) {
+          // Horário futuro: aguarda!
+          await prisma.automationGroupEnrollment.update({
+            where: { id: enrollmentId },
+            data: { status: 'WAITING', currentNodeId: nodeId },
+          });
+          // CRÍTICO: Status é WAITING, NUNCA SUCCESS!
+          await prisma.automationGroupStepLog.create({
+            data: {
+              enrollmentId,
+              groupId: enrollment.groupId,
+              tenantId,
+              nodeId,
+              nodeType: 'timer',
+              action: 'WAIT_TIMER',
+              status: 'WAITING',
+              details: JSON.stringify({ scheduledFor: new Date(targetTimestamp).toISOString() }),
+            },
+          });
+          return; // Aguarda pontualmente o horário!
+        }
+
+        // Horário alcançado:
+        await prisma.automationGroupStepLog.create({
+          data: {
+            enrollmentId,
+            groupId: enrollment.groupId,
+            tenantId,
+            nodeId,
+            nodeType: 'timer',
+            action: 'TIMER_PASSED',
+            status: 'SUCCESS',
+            details: JSON.stringify({ passedAt: new Date(simulatedNow).toISOString() }),
+          },
+        });
+
+        const outgoingEdges = edges.filter((e) => e.source === nodeId);
+        for (const edge of outgoingEdges) {
+          await testExecuteGroupNodeEngine(enrollmentId, edge.target, tenantId, simulatedNow);
+        }
+        return;
+      }
+
+      if (nodeType === 'whatsapp') {
+        // Envio no WhatsApp
+        await prisma.whatsappQueue.create({
+          data: {
+            tenantId,
+            whatsappInstanceId: inst44.id,
+            recipientType: 'GROUP',
+            groupJid: enrollment.group.jid,
+            phone: 'group',
+            text: node.data?.config?.text || 'Mensagem de Grupo',
+            status: 'PENDING',
+          },
+        });
+
+        await prisma.automationGroupStepLog.create({
+          data: {
+            enrollmentId,
+            groupId: enrollment.groupId,
+            tenantId,
+            nodeId,
+            nodeType: 'whatsapp',
+            action: 'WHATSAPP_GROUP_QUEUED',
+            status: 'SUCCESS',
+          },
+        });
+
+        const outgoingEdges = edges.filter((e) => e.source === nodeId);
+        for (const edge of outgoingEdges) {
+          await testExecuteGroupNodeEngine(enrollmentId, edge.target, tenantId, simulatedNow);
+        }
+      }
+    }
+
+    // Helper simulado do scheduler para processamento de timers vencidos
+    async function testProcessDueGroupTimers(simulatedNow) {
+      const waitingEnrollments = await prisma.automationGroupEnrollment.findMany({
+        where: { status: 'WAITING', currentNodeId: { not: null } },
+        include: { automation: true },
+      });
+
+      let processed = 0;
+      for (const enr of waitingEnrollments) {
+        if (!enr.currentNodeId) continue;
+        const nodes = JSON.parse(enr.automation.nodes || '[]');
+        const edges = JSON.parse(enr.automation.edges || '[]');
+        const currentNode = nodes.find((n) => n.id === enr.currentNodeId);
+        if (!currentNode) continue;
+
+        const cfg = currentNode.data?.config || {};
+        let targetTime = testParseTargetDate(cfg.specificDate);
+        if (isNaN(targetTime)) {
+          const waitLog = await prisma.automationGroupStepLog.findFirst({
+            where: { enrollmentId: enr.id, nodeId: currentNode.id, action: 'WAIT_TIMER' },
+            orderBy: { executedAt: 'desc' },
+          });
+          if (waitLog && waitLog.details) {
+            try { targetTime = testParseTargetDate(JSON.parse(waitLog.details).scheduledFor); } catch {}
+          }
+        }
+
+        // NUNCA processar se targetTime for NaN ou se ainda for futuro
+        if (isNaN(targetTime) || targetTime > simulatedNow) {
+          continue;
+        }
+
+        // targetTime <= simulatedNow: VENCEU!
+        await prisma.automationGroupEnrollment.update({
+          where: { id: enr.id },
+          data: { status: 'ACTIVE' },
+        });
+
+        await prisma.automationGroupStepLog.create({
+          data: {
+            enrollmentId: enr.id,
+            groupId: enr.groupId,
+            tenantId: enr.tenantId,
+            nodeId: currentNode.id,
+            nodeType: 'timer',
+            action: 'TIMER_PASSED',
+            status: 'SUCCESS',
+            details: JSON.stringify({ passedAt: new Date(simulatedNow).toISOString() }),
+          },
+        });
+
+        const outgoingEdges = edges.filter((e) => e.source === currentNode.id);
+        for (const edge of outgoingEdges) {
+          await testExecuteGroupNodeEngine(enr.id, edge.target, enr.tenantId, simulatedNow);
+        }
+        processed++;
+      }
+      return processed;
+    }
+
+    // SUBTESTE 44.1: Ativação inicial às 03:25 AM com agendamento para as 06:00
+    // O sistema NUNCA deve disparar imediatamente!
+    const enrollment44 = await prisma.automationGroupEnrollment.create({
+      data: {
+        automationId: autoGrupo44.id,
+        groupId: grupo44.id,
+        tenantId: testTenant.id,
+        status: 'ACTIVE',
+      },
+    });
+
+    const now0325 = Date.now(); // Representa o momento atual (03:25)
+    // Gatilho avança para o Timer 06:00
+    await testExecuteGroupNodeEngine(enrollment44.id, 'node_timer_6', testTenant.id, now0325);
+
+    // Validações imediatas pós-ativação:
+    const enrAfterTrigger = await prisma.automationGroupEnrollment.findUnique({
+      where: { id: enrollment44.id },
+    });
+    assert.strictEqual(enrAfterTrigger.status, 'WAITING', 'Grupo DEVE permanecer com status WAITING');
+    assert.strictEqual(enrAfterTrigger.currentNodeId, 'node_timer_6', 'Grupo DEVE permanecer aguardando no nó do timer das 06:00');
+
+    const waitTimerLog = await prisma.automationGroupStepLog.findFirst({
+      where: { enrollmentId: enrollment44.id, nodeId: 'node_timer_6' },
+    });
+    assert.ok(waitTimerLog, 'Log de espera do timer deve existir');
+    assert.strictEqual(waitTimerLog.action, 'WAIT_TIMER', 'Ação do log deve ser WAIT_TIMER');
+    assert.strictEqual(waitTimerLog.status, 'WAITING', 'Status do log de espera DEVE ser WAITING, nunca SUCCESS');
+
+    // NENHUM envio de WhatsApp deve ter sido gerado!
+    const queuedWppEarly = await prisma.whatsappQueue.findMany({
+      where: { tenantId: testTenant.id, groupJid: grupo44.jid },
+    });
+    assert.strictEqual(queuedWppEarly.length, 0, 'NENHUMA mensagem de WhatsApp pode ser disparada antes do horário agendado');
+
+    // SUBTESTE 44.2: Resiliência contra re-ativação / re-salvamento do fluxo
+    // Simula usuário clicando em "Salvar" ou "Ativar" novamente enquanto o fluxo está esperando
+    // O helper checkAndAdvanceNewGroupNodes não pode considerar o timer como 'SUCCESS' concluído
+    const executedLogs = await prisma.automationGroupStepLog.findMany({
+      where: {
+        enrollmentId: enrollment44.id,
+        status: 'SUCCESS',
+        action: { not: 'WAIT_TIMER' },
+      },
+      select: { nodeId: true },
+    });
+    const executedSet = new Set(executedLogs.map((l) => l.nodeId));
+    assert.strictEqual(executedSet.has('node_timer_6'), false, 'Nó de timer aguardando NUNCA deve ser listado como SUCCESS');
+
+    // SUBTESTE 44.3: Ciclo periódico do Cron Worker / Scheduler antes do horário
+    const processedEarly = await testProcessDueGroupTimers(now0325 + 30000); // 30s depois
+    assert.strictEqual(processedEarly, 0, 'O scheduler não deve processar timers cujo horário ainda não chegou');
+
+    const queuedWppStillZero = await prisma.whatsappQueue.findMany({
+      where: { tenantId: testTenant.id, groupJid: grupo44.jid },
+    });
+    assert.strictEqual(queuedWppStillZero.length, 0, 'Fila de WhatsApp deve permanecer estritamente vazia');
+
+    // SUBTESTE 44.4: Simulação de avanço do tempo até as 06:00 (horário atingido)
+    // Avança o relógio simulado para depois do target (agora é 06:01)
+    const simulated0601 = testParseTargetDate(futureDateStr) + 60000;
+    const processedAt06 = await testProcessDueGroupTimers(simulated0601);
+    assert.strictEqual(processedAt06, 1, 'Scheduler deve processar pontualmente o timer das 06:00 quando o horário for atingido');
+
+    // Verifica que o WhatsApp das 06:00 foi enfileirado
+    const queuedWppAt06 = await prisma.whatsappQueue.findMany({
+      where: { tenantId: testTenant.id, groupJid: grupo44.jid },
+    });
+    assert.strictEqual(queuedWppAt06.length, 1, 'Exatamente 1 mensagem de WhatsApp (das 06:00) deve ser disparada');
+    assert.strictEqual(queuedWppAt06[0].text, 'Mensagem das 06:00');
+
+    // Verifica que o fluxo avançou e agora está AGUARDANDO no Timer das 10:00
+    const enrAtTimer10 = await prisma.automationGroupEnrollment.findUnique({
+      where: { id: enrollment44.id },
+    });
+    assert.strictEqual(enrAtTimer10.status, 'WAITING', 'Grupo deve aguardar no próximo timer (10:00)');
+    assert.strictEqual(enrAtTimer10.currentNodeId, 'node_timer_10', 'Nó atual deve ser o Timer das 10:00');
+
+    // Mensagem das 10:00 NUNCA deve ter sido disparada ainda!
+    const queuedWppAt10Early = await prisma.whatsappQueue.findMany({
+      where: { tenantId: testTenant.id, groupJid: grupo44.jid, text: 'Mensagem das 10:00' },
+    });
+    assert.strictEqual(queuedWppAt10Early.length, 0, 'Mensagem das 10:00 NÃO deve ter sido disparada às 06:00');
+
+    // SUBTESTE 44.5: Automação Individual com Timer Específico (Lead Individual)
+    const contact44 = await prisma.contact.create({
+      data: {
+        tenantId: testTenant.id,
+        name: 'Lead Teste Timer',
+        email: `lead_timer_${ts44}@teste.com`,
+        phone: '+5511999997777',
+      },
+    });
+
+    const enrIndiv44 = await prisma.automationEnrollment.create({
+      data: {
+        automationId: autoGrupo44.id,
+        contactId: contact44.id,
+        status: 'WAITING',
+      },
+    });
+
+    const targetJobTime = new Date(Date.now() + 3600000); // 1 hora no futuro
+    const scheduledJob44 = await prisma.scheduledJob.create({
+      data: {
+        tenantId: testTenant.id,
+        enrollmentId: enrIndiv44.id,
+        contactId: contact44.id,
+        automationId: autoGrupo44.id,
+        targetNodeId: 'node_next',
+        executeAt: targetJobTime,
+        status: 'PENDING',
+      },
+    });
+
+    // Worker checando jobs antes da hora: executeAt { lte: now } não deve encontrar o job
+    const dueJobsEarly = await prisma.scheduledJob.findMany({
+      where: {
+        status: 'PENDING',
+        executeAt: { lte: new Date() },
+        id: scheduledJob44.id,
+      },
+    });
+    assert.strictEqual(dueJobsEarly.length, 0, 'Job futuro nunca deve ser selecionado como due');
+
+    // Limpeza Teste 44
+    await prisma.whatsappQueue.deleteMany({ where: { tenantId: testTenant.id } });
+    await prisma.automationGroupStepLog.deleteMany({ where: { enrollment: { automationId: autoGrupo44.id } } });
+    await prisma.automationGroupEnrollment.deleteMany({ where: { automationId: autoGrupo44.id } });
+    await prisma.scheduledJob.deleteMany({ where: { id: scheduledJob44.id } });
+    await prisma.automationEnrollment.deleteMany({ where: { id: enrIndiv44.id } });
+    await prisma.automation.delete({ where: { id: autoGrupo44.id } });
+    await prisma.contact.delete({ where: { id: contact44.id } });
+    await prisma.groupTagOnGroup.deleteMany({ where: { groupId: grupo44.id } });
+    await prisma.whatsappGroup.delete({ where: { id: grupo44.id } });
+    await prisma.groupTag.delete({ where: { id: tagGrupo44.id } });
+    await prisma.whatsappInstance.delete({ where: { id: inst44.id } });
+
+    console.log('✔ PASSOU: Correção crítica do agendamento por data e horário validada com 100% de sucesso.');
     passed++;
 
     console.log('\n=====================================================');

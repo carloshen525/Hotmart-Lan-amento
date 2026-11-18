@@ -1,11 +1,21 @@
 import { PrismaClient } from '@prisma/client';
+import { ensureDatabaseSchema } from './db-init';
 
-const globalForPrisma = global as unknown as { prisma?: PrismaClient };
+const globalForPrisma = global as unknown as { prisma?: PrismaClient; dbEnsured?: boolean };
 
 function createPrismaClient(): PrismaClient {
-  return new PrismaClient({
+  const client = new PrismaClient({
     log: process.env.NODE_ENV === 'development' ? ['warn', 'error'] : ['error'],
   });
+
+  if (!globalForPrisma.dbEnsured) {
+    globalForPrisma.dbEnsured = true;
+    ensureDatabaseSchema(client).catch((e) => {
+      console.warn('[Prisma Init] Aviso ao garantir schema inicial:', e.message);
+    });
+  }
+
+  return client;
 }
 
 function getClient(): PrismaClient {

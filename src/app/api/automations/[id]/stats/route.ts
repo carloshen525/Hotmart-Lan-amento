@@ -209,12 +209,15 @@ export async function GET(request: Request, { params }: { params: { id: string }
       if (log.status === 'SUCCESS') {
         if (!nodeSuccessContacts.has(log.nodeId)) nodeSuccessContacts.set(log.nodeId, new Set());
         nodeSuccessContacts.get(log.nodeId)!.add(key);
+        nodeWaitingContacts.get(log.nodeId)?.delete(key);
       } else if (log.status === 'FAILED') {
         if (!nodeFailedContacts.has(log.nodeId)) nodeFailedContacts.set(log.nodeId, new Set());
         nodeFailedContacts.get(log.nodeId)!.add(key);
-      } else if (log.status === 'QUEUED' || log.status === 'PROCESSING') {
-        if (!nodeWaitingContacts.has(log.nodeId)) nodeWaitingContacts.set(log.nodeId, new Set());
-        nodeWaitingContacts.get(log.nodeId)!.add(key);
+      } else if (log.status === 'QUEUED' || log.status === 'PROCESSING' || log.status === 'WAITING') {
+        if (!nodeSuccessContacts.get(log.nodeId)?.has(key)) {
+          if (!nodeWaitingContacts.has(log.nodeId)) nodeWaitingContacts.set(log.nodeId, new Set());
+          nodeWaitingContacts.get(log.nodeId)!.add(key);
+        }
       }
     }
 

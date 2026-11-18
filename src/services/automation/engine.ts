@@ -4,21 +4,7 @@ import { WhatsappQueueService } from '@/services/whatsapp/queue.service';
 import { whatsappGroupService, computeGroupNameWithHashtagRule } from '@/services/whatsapp/group.service';
 import { WorkflowNode, WorkflowEdge } from './types';
 import { BackgroundSchedulerRunner } from './background-runner';
-
-// Helper para interpretar data/hora considerando o fuso horário de Brasília (UTC-3)
-function parseTargetDate(dateStr: string): number {
-  if (!dateStr) return NaN;
-  const clean = dateStr.trim();
-  if (/[Z+-]\d{2}(:?\d{2})?$/.test(clean) || clean.endsWith('Z')) {
-    return new Date(clean).getTime();
-  }
-  if (/^\d{4}-\d{2}-\d{2}[T ]\d{2}:\d{2}(:\d{2})?(\.\d+)?$/.test(clean)) {
-    const isoWithT = clean.replace(' ', 'T');
-    const withOffset = new Date(`${isoWithT}-03:00`).getTime();
-    if (!isNaN(withOffset)) return withOffset;
-  }
-  return new Date(clean).getTime();
-}
+import { parseTargetDate, formatBrasiliaDateTime, formatRemainingTime } from '@/lib/date-utils';
 
 export class AutomationEngine {
   private runningSyncs = new Set<string>(); // automationId
@@ -409,10 +395,21 @@ export class AutomationEngine {
         let executeAt: Date;
         let summaryText = '';
 
-        if (config.timerType === 'SPECIFIC_DATE' || config.delayType === 'specific_date' || config.specificDate) {
+        const isSpecific =
+          config.timerType === 'SPECIFIC_DATE' ||
+          config.delayType === 'specific_date' ||
+          Boolean(config.specificDate);
+
+        if (isSpecific) {
           const targetMs = parseTargetDate(config.specificDate);
-          executeAt = !isNaN(targetMs) ? new Date(targetMs) : new Date(Date.now() + 60 * 1000);
-          summaryText = `Data específica: ${executeAt.toISOString()}`;
+          if (isNaN(targetMs)) {
+            console.error(`[TIMER CRÍTICO] Formato de data inválido: "${config.specificDate}". Bloqueando execução antecipada.`);
+            stepStatus = 'WAITING';
+            shouldHaltExecution = true;
+            return;
+          }
+          executeAt = new Date(targetMs);
+          summaryText = `Data específica: ${formatBrasiliaDateTime(executeAt)}`;
         } else {
           const unit = config.unit || (config.minutes !== undefined ? 'minutes' : config.hours !== undefined ? 'hours' : 'days');
           const amount = Number(config.value ?? config.duration ?? config.minutes ?? config.hours ?? config.days ?? 1);
@@ -436,10 +433,6 @@ export class AutomationEngine {
         if (outgoing.length > 0) {
           const nowMs = Date.now();
           if (executeAt.getTime() <= nowMs) {
-            const isSpecific =
-              config.timerType === 'SPECIFIC_DATE' ||
-              config.delayType === 'specific_date' ||
-              Boolean(config.specificDate);
             const dispatchAfterPassed = isSpecific ? config.dispatchAfterPassed !== false : true;
 
             if (!dispatchAfterPassed) {
@@ -461,6 +454,11 @@ export class AutomationEngine {
             }
           } else {
             // Horário no futuro: Criar Job Agendado persistente e pausar execução
+            const remainingMs = executeAt.getTime() - nowMs;
+            console.log(
+              `[TIMER AGENDADO] Lead: ${contact.id} | Tipo: ${isSpecific ? 'SPECIFIC_DATE' : 'RELATIVE'} | Data programada: ${formatBrasiliaDateTime(executeAt)} (${executeAt.toISOString()}) | Horário atual: ${formatBrasiliaDateTime(nowMs)} (${new Date(nowMs).toISOString()}) | Tempo restante: ${formatRemainingTime(remainingMs)}`
+            );
+
             for (const nextEdge of outgoing) {
               await prisma.scheduledJob.create({
                 data: {
@@ -1266,10 +1264,20 @@ export class AutomationEngine {
           let executeAt: Date;
           let summaryText = '';
 
-          if (cfg.timerType === 'SPECIFIC_DATE' || cfg.delayType === 'specific_date' || cfg.specificDate) {
+          const isSpecific =
+            cfg.timerType === 'SPECIFIC_DATE' ||
+            cfg.delayType === 'specific_date' ||
+            Boolean(cfg.specificDate);
+
+          if (isSpecific) {
             const targetMs = parseTargetDate(cfg.specificDate);
-            executeAt = !isNaN(targetMs) ? new Date(targetMs) : new Date(Date.now() + 60 * 1000);
-            summaryText = `Data específica: ${executeAt.toISOString()}`;
+            if (isNaN(targetMs)) {
+              console.error(`[TIMER CRÍTICO - SUBFLOW] Formato de data inválido: "${cfg.specificDate}". Bloqueando execução antecipada.`);
+              shouldHalt = true;
+              return;
+            }
+            executeAt = new Date(targetMs);
+            summaryText = `Data específica: ${formatBrasiliaDateTime(executeAt)}`;
           } else {
             const unit = cfg.unit || (cfg.minutes !== undefined ? 'minutes' : cfg.hours !== undefined ? 'hours' : 'days');
             const amount = Number(cfg.value ?? cfg.duration ?? cfg.minutes ?? cfg.hours ?? cfg.days ?? 1);
@@ -1322,6 +1330,11 @@ export class AutomationEngine {
               }
             }
           } else {
+            const remainingMs = executeAt.getTime() - nowMs;
+            console.log(
+              `[TIMER AGENDADO - SUBFLOW] Lead: ${contact.id} | Tipo: ${isSpecific ? 'SPECIFIC_DATE' : 'RELATIVE'} | Data programada: ${formatBrasiliaDateTime(executeAt)} (${executeAt.toISOString()}) | Horário atual: ${formatBrasiliaDateTime(nowMs)} (${new Date(nowMs).toISOString()}) | Tempo restante: ${formatRemainingTime(remainingMs)}`
+            );
+
             for (const edge of outgoing) {
               await prisma.scheduledJob.create({
                 data: {
@@ -2229,11 +2242,13 @@ export class AutomationEngine {
     if (!node) return;
 
     // Regra: Evita reexecução do mesmo nó que já foi executado com sucesso para este grupo
+    // CRÍTICO: 'WAIT_TIMER' indica que o nó ainda está aguardando o horário, NUNCA que foi concluído!
     const alreadyLogged = await prisma.automationGroupStepLog.findFirst({
       where: {
         enrollmentId,
         nodeId,
         status: 'SUCCESS',
+        action: { not: 'WAIT_TIMER' },
       },
     });
 
@@ -2259,9 +2274,20 @@ export class AutomationEngine {
       const config = node.data?.config || {};
       let targetTimestamp: number;
       const targetTimeStr = config.specificDate || config.targetDate || config.targetTime;
+      const isSpecificGroup = Boolean(
+        config.timerType === 'SPECIFIC_DATE' ||
+        config.delayType === 'specific_date' ||
+        targetTimeStr
+      );
 
-      if (targetTimeStr) {
+      if (isSpecificGroup) {
         targetTimestamp = parseTargetDate(targetTimeStr);
+        if (isNaN(targetTimestamp)) {
+          console.error(
+            `[TIMER CRÍTICO - GRUPO] Data específica inválida: "${targetTimeStr}". Bloqueando execução antecipada.`
+          );
+          return;
+        }
       } else {
         const unit = config.unit || 'minutes';
         const val = Number(config.value) || 1;
@@ -2271,13 +2297,19 @@ export class AutomationEngine {
 
       const now = Date.now();
 
-      if (targetTimestamp && !isNaN(targetTimestamp) && targetTimestamp > now) {
-        // Horário futuro: grupo entra em WAITING até que o timer seja atingido
+      if (targetTimestamp > now) {
+        const remainingMs = targetTimestamp - now;
+        console.log(
+          `[TIMER AGENDADO - GRUPO] Enrollment: ${enrollmentId} | Grupo: ${group.name} | Tipo: ${isSpecificGroup ? 'SPECIFIC_DATE' : 'RELATIVE'} | Data programada: ${formatBrasiliaDateTime(targetTimestamp)} (${new Date(targetTimestamp).toISOString()}) | Horário atual: ${formatBrasiliaDateTime(now)} (${new Date(now).toISOString()}) | Tempo restante: ${formatRemainingTime(remainingMs)}`
+        );
+
+        // Horário futuro: grupo entra em WAITING até que o timer seja atingido pontualmente
         await prisma.automationGroupEnrollment.update({
           where: { id: enrollmentId },
           data: { status: 'WAITING', currentNodeId: nodeId },
         });
 
+        // CRÍTICO: Status DEVE SER 'WAITING', NUNCA 'SUCCESS'!
         await prisma.automationGroupStepLog.create({
           data: {
             enrollmentId,
@@ -2286,21 +2318,30 @@ export class AutomationEngine {
             nodeId,
             nodeType: 'timer',
             action: 'WAIT_TIMER',
-            status: 'SUCCESS',
+            status: 'WAITING',
             details: JSON.stringify({
               targetDate: new Date(targetTimestamp).toISOString(),
               scheduledFor: new Date(targetTimestamp).toISOString(),
+              timerType: isSpecificGroup ? 'SPECIFIC_DATE' : 'RELATIVE',
+              remainingMs,
             }),
           },
         });
         return; // Aguarda o horário
       }
 
+      // SEGURANÇA MÁXIMA: Se por qualquer razão tentar executar antes da hora:
+      if (targetTimestamp > now) {
+        console.error(
+          `[ERRO CRÍTICO] Bloqueio de segurança: tentativa de execução antecipada no grupo ${group.name}! Previsto: ${new Date(targetTimestamp).toISOString()} vs Atual: ${new Date(now).toISOString()}`
+        );
+        return;
+      }
+
       // Se o horário já chegou ou passou:
-      const isSpecificGroup = Boolean(config.specificDate || config.targetDate || config.targetTime);
       const dispatchAfterPassedGroup = isSpecificGroup ? config.dispatchAfterPassed !== false : true;
 
-      if (!dispatchAfterPassedGroup && targetTimestamp && targetTimestamp <= now) {
+      if (!dispatchAfterPassedGroup && targetTimestamp <= now) {
         // Condicional NÃO: grupo chegou após o horário e não deve disparar
         await prisma.automationGroupStepLog.create({
           data: {
@@ -2320,6 +2361,11 @@ export class AutomationEngine {
         return; // Não avança para os próximos nós do grupo
       }
 
+      const diffSec = Math.round((now - targetTimestamp) / 1000);
+      console.log(
+        `[TIMER EXECUTADO - GRUPO] Enrollment: ${enrollmentId} | Grupo: ${group.name} | Data prevista: ${formatBrasiliaDateTime(targetTimestamp)} | Data real: ${formatBrasiliaDateTime(now)} | Diferença: ${diffSec}s`
+      );
+
       await prisma.automationGroupStepLog.create({
         data: {
           enrollmentId,
@@ -2329,7 +2375,10 @@ export class AutomationEngine {
           nodeType: 'timer',
           action: 'TIMER_PASSED',
           status: 'SUCCESS',
-          details: JSON.stringify({ passedAt: new Date().toISOString() }),
+          details: JSON.stringify({
+            passedAt: new Date().toISOString(),
+            scheduledFor: new Date(targetTimestamp).toISOString(),
+          }),
         },
       });
 
@@ -2709,7 +2758,11 @@ export class AutomationEngine {
    */
   async checkAndAdvanceNewGroupNodes(enrollmentId: string, automation: any): Promise<void> {
     const executedLogs = await prisma.automationGroupStepLog.findMany({
-      where: { enrollmentId, status: 'SUCCESS' },
+      where: {
+        enrollmentId,
+        status: 'SUCCESS',
+        action: { not: 'WAIT_TIMER' },
+      },
       select: { nodeId: true },
     });
 

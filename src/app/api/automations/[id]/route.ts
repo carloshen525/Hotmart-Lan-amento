@@ -2,6 +2,7 @@ import { NextResponse } from 'next/server';
 import { prisma } from '@/lib/prisma';
 import { getActiveTenantId } from '@/lib/tenancy';
 import { automationEngine } from '@/services/automation/engine';
+import { parseTargetDate } from '@/lib/date-utils';
 
 export async function GET(request: Request, { params }: { params: { id: string } }) {
   try {
@@ -521,20 +522,7 @@ function stripMediaBase64FromNodes(nodes: any[]): any[] {
   });
 }
 
-// Helper para interpretar data/hora considerando o fuso horário de Brasília (UTC-3)
-function parseTargetDate(dateStr: string): number {
-  if (!dateStr) return NaN;
-  const clean = dateStr.trim();
-  if (/[Z+-]\d{2}(:?\d{2})?$/.test(clean) || clean.endsWith('Z')) {
-    return new Date(clean).getTime();
-  }
-  if (/^\d{4}-\d{2}-\d{2}[T ]\d{2}:\d{2}(:\d{2})?(\.\d+)?$/.test(clean)) {
-    const isoWithT = clean.replace(' ', 'T');
-    const withOffset = new Date(`${isoWithT}-03:00`).getTime();
-    if (!isNaN(withOffset)) return withOffset;
-  }
-  return new Date(clean).getTime();
-}
+
 
 // Validação de segurança para temporizadores de data específica
 function validateTimerNodes(nodes: any[]): string | null {
