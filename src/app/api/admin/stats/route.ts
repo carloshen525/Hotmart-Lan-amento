@@ -1,12 +1,14 @@
 import { NextResponse } from 'next/server';
 import { prisma } from '@/lib/prisma';
 import { requireSuperAdmin } from '@/lib/auth';
+import { healDatabaseSchemaIfNeeded } from '@/lib/db-healing';
 
 export const dynamic = 'force-dynamic';
 
 export async function GET() {
   try {
     await requireSuperAdmin();
+    await healDatabaseSchemaIfNeeded();
 
     const now = new Date();
     const thirtyDaysAgo = new Date(now.getTime() - 30 * 24 * 60 * 60 * 1000);

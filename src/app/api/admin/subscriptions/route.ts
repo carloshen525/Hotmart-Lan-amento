@@ -2,12 +2,14 @@ import { NextResponse } from 'next/server';
 import { prisma } from '@/lib/prisma';
 import { requireSuperAdmin } from '@/lib/auth';
 import { logSaasAudit } from '@/lib/saas-audit';
+import { healDatabaseSchemaIfNeeded } from '@/lib/db-healing';
 
 export const dynamic = 'force-dynamic';
 
 export async function GET() {
   try {
     await requireSuperAdmin();
+    await healDatabaseSchemaIfNeeded();
 
     const now = new Date();
 

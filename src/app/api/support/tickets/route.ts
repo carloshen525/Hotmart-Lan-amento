@@ -2,12 +2,14 @@ import { NextResponse } from 'next/server';
 import { prisma } from '@/lib/prisma';
 import { requireAuth } from '@/lib/auth';
 import { getActiveTenantId } from '@/lib/tenancy';
+import { healDatabaseSchemaIfNeeded } from '@/lib/db-healing';
 
 export const dynamic = 'force-dynamic';
 
 export async function GET() {
   try {
     const session = await requireAuth();
+    await healDatabaseSchemaIfNeeded();
 
     // Busca tickets vinculados ao usuário ou ao seu clientId
     const where: any = {
@@ -37,6 +39,7 @@ export async function GET() {
 export async function POST(request: Request) {
   try {
     const session = await requireAuth();
+    await healDatabaseSchemaIfNeeded();
     const tenantId = await getActiveTenantId();
     const body = await request.json();
 

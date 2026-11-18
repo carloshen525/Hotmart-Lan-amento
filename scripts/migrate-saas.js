@@ -62,12 +62,12 @@ async function migrateSaas() {
       await prisma.$executeRawUnsafe('ALTER TABLE "whatsapp_groups" ADD COLUMN "description" TEXT;');
     }
 
-    // 4. Criação da tabela SaasClient se não existir
+    // 4. Criação da tabela saas_clients se não existir
     await prisma.$executeRawUnsafe(`
-      CREATE TABLE IF NOT EXISTS "SaasClient" (
+      CREATE TABLE IF NOT EXISTS "saas_clients" (
         "id" TEXT NOT NULL PRIMARY KEY,
         "name" TEXT NOT NULL,
-        "company" TEXT NOT NULL,
+        "company" TEXT,
         "email" TEXT NOT NULL UNIQUE,
         "phone" TEXT,
         "status" TEXT NOT NULL DEFAULT 'ACTIVE',
@@ -77,7 +77,7 @@ async function migrateSaas() {
         "startDate" DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
         "accessDays" INTEGER NOT NULL DEFAULT 30,
         "expiresAt" DATETIME NOT NULL,
-        "maxExperts" INTEGER NOT NULL DEFAULT 3,
+        "maxExperts" INTEGER NOT NULL DEFAULT 5,
         "maxWhatsappInstances" INTEGER NOT NULL DEFAULT 3,
         "notes" TEXT,
         "createdAt" DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
@@ -85,53 +85,53 @@ async function migrateSaas() {
       );
     `);
 
-    // 5. Criação da tabela SupportTicket se não existir
+    // 5. Criação da tabela support_tickets se não existir
     await prisma.$executeRawUnsafe(`
-      CREATE TABLE IF NOT EXISTS "SupportTicket" (
+      CREATE TABLE IF NOT EXISTS "support_tickets" (
         "id" TEXT NOT NULL PRIMARY KEY,
-        "clientId" TEXT,
-        "tenantId" TEXT,
-        "userId" TEXT NOT NULL,
+        "client_id" TEXT,
+        "tenant_id" TEXT,
+        "user_id" TEXT NOT NULL,
         "subject" TEXT NOT NULL,
         "message" TEXT NOT NULL,
         "priority" TEXT NOT NULL DEFAULT 'MEDIUM',
         "status" TEXT NOT NULL DEFAULT 'OPEN',
-        "attachmentUrl" TEXT,
-        "createdAt" DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
-        "updatedAt" DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP
+        "attachment_url" TEXT,
+        "created_at" DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
+        "updated_at" DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP
       );
     `);
 
-    // 6. Criação da tabela SupportMessage se não existir
+    // 6. Criação da tabela support_messages se não existir
     await prisma.$executeRawUnsafe(`
-      CREATE TABLE IF NOT EXISTS "SupportMessage" (
+      CREATE TABLE IF NOT EXISTS "support_messages" (
         "id" TEXT NOT NULL PRIMARY KEY,
-        "ticketId" TEXT NOT NULL,
-        "senderId" TEXT NOT NULL,
-        "senderName" TEXT NOT NULL,
-        "senderRole" TEXT NOT NULL DEFAULT 'CLIENT',
+        "ticket_id" TEXT NOT NULL,
+        "sender_id" TEXT NOT NULL,
+        "sender_name" TEXT NOT NULL,
+        "sender_role" TEXT NOT NULL DEFAULT 'USUARIO',
         "message" TEXT NOT NULL,
-        "attachmentUrl" TEXT,
-        "createdAt" DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP
+        "attachment_url" TEXT,
+        "created_at" DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP
       );
     `);
 
-    // 7. Criação da tabela SaasAuditLog se não existir
+    // 7. Criação da tabela saas_audit_logs se não existir
     await prisma.$executeRawUnsafe(`
-      CREATE TABLE IF NOT EXISTS "SaasAuditLog" (
+      CREATE TABLE IF NOT EXISTS "saas_audit_logs" (
         "id" TEXT NOT NULL PRIMARY KEY,
-        "clientId" TEXT,
-        "userId" TEXT,
-        "userEmail" TEXT,
-        "userName" TEXT,
+        "client_id" TEXT,
+        "user_id" TEXT,
+        "user_email" TEXT,
+        "user_name" TEXT,
         "action" TEXT NOT NULL,
-        "entityType" TEXT NOT NULL,
-        "entityId" TEXT,
+        "entity_type" TEXT NOT NULL,
+        "entity_id" TEXT,
         "description" TEXT NOT NULL,
-        "beforeData" TEXT,
-        "afterData" TEXT,
-        "ipAddress" TEXT,
-        "createdAt" DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP
+        "before_data" TEXT,
+        "after_data" TEXT,
+        "ip_address" TEXT,
+        "created_at" DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP
       );
     `);
 

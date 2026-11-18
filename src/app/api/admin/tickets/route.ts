@@ -1,12 +1,14 @@
 import { NextResponse } from 'next/server';
 import { prisma } from '@/lib/prisma';
 import { requireSuperAdmin } from '@/lib/auth';
+import { healDatabaseSchemaIfNeeded } from '@/lib/db-healing';
 
 export const dynamic = 'force-dynamic';
 
 export async function GET(request: Request) {
   try {
     await requireSuperAdmin();
+    await healDatabaseSchemaIfNeeded();
 
     const { searchParams } = new URL(request.url);
     const statusFilter = searchParams.get('status') || '';
