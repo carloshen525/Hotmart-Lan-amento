@@ -301,6 +301,92 @@ export class AutomationScheduler {
           console.error(`[AutomationScheduler] Erro ao processar timer do grupo ${enr.id}:`, enrErr.message);
         }
       }
+
+      // 2. RECUPERAÇÃO AUTO-HEALING DE TIMERS E RAMIFICAÇÕES DE GRUPOS:
+      // Busca logs WAIT_TIMER em automações ativas que ainda não receberam TIMER_PASSED
+      const pendingWaitLogs = await prisma.automationGroupStepLog.findMany({
+        where: {
+          action: 'WAIT_TIMER',
+        },
+        orderBy: { executedAt: 'desc' },
+      });
+
+      for (const waitLog of pendingWaitLogs) {
+        try {
+          const alreadyPassed = await prisma.automationGroupStepLog.findFirst({
+            where: {
+              enrollmentId: waitLog.enrollmentId,
+              nodeId: waitLog.nodeId,
+              action: { in: ['TIMER_PASSED', 'TIMER_EXPIRED_SKIPPED'] },
+            },
+          });
+          if (alreadyPassed) continue;
+
+          const enr = await prisma.automationGroupEnrollment.findUnique({
+            where: { id: waitLog.enrollmentId },
+            include: { automation: true },
+          });
+
+          if (!enr || enr.status === 'CANCELLED' || enr.automation.status !== 'ACTIVE') {
+            continue;
+          }
+
+          const nodes: any[] = JSON.parse(enr.automation.nodes || '[]');
+          const edges: any[] = JSON.parse(enr.automation.edges || '[]');
+          const currentNode = nodes.find((n) => n.id === waitLog.nodeId);
+          if (!currentNode) continue;
+
+          const cfg = currentNode.data?.config || {};
+          let targetTime = parseTargetDate(cfg.specificDate || cfg.targetDate || cfg.targetTime);
+
+          if (isNaN(targetTime) && waitLog.details) {
+            try {
+              const parsed = JSON.parse(waitLog.details);
+              if (parsed.scheduledFor || parsed.targetDate) {
+                targetTime = parseTargetDate(parsed.scheduledFor || parsed.targetDate);
+              }
+            } catch {}
+          }
+
+          if (isNaN(targetTime)) continue;
+
+          if (targetTime <= now) {
+            console.log(
+              `[TIMER AUTO-HEALING - GRUPO] Enrollment: ${enr.id} | Grupo: ${enr.groupId} | Node: ${currentNode.id} | Horário atingido: ${formatBrasiliaDateTime(targetTime)}. Executando e avançando...`
+            );
+
+            await prisma.automationGroupEnrollment.update({
+              where: { id: enr.id },
+              data: { status: 'ACTIVE', currentNodeId: currentNode.id },
+            });
+
+            await prisma.automationGroupStepLog.create({
+              data: {
+                enrollmentId: enr.id,
+                groupId: enr.groupId,
+                tenantId: enr.tenantId,
+                nodeId: currentNode.id,
+                nodeType: 'timer',
+                action: 'TIMER_PASSED',
+                status: 'SUCCESS',
+                details: JSON.stringify({
+                  passedAt: new Date().toISOString(),
+                  scheduledFor: new Date(targetTime).toISOString(),
+                  recovery: true,
+                }),
+              },
+            });
+
+            const outgoingEdges = edges.filter((e) => e.source === currentNode.id);
+            for (const edge of outgoingEdges) {
+              await automationEngine.executeGroupNode(enr.id, edge.target, enr.tenantId);
+            }
+            processed++;
+          }
+        } catch (logErr: any) {
+          console.error(`[AutomationScheduler] Erro ao recuperar timer de grupo ${waitLog.id}:`, logErr.message);
+        }
+      }
     } catch (err: any) {
       console.error('[AutomationScheduler] Erro ao buscar timers de grupos:', err.message);
     }

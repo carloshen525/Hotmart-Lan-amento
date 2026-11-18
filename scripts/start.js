@@ -2,6 +2,26 @@ const { execSync, spawn } = require('child_process');
 
 console.log('[PROD START] Initializing LaunchFlow container...');
 
+// 0. Executa o push do esquema do banco de forma segura ANTES de qualquer script
+try {
+  console.log('[PROD START] Sincronizando schema do banco com Prisma (db push)...');
+  try {
+    execSync('npx prisma db push --accept-data-loss --skip-generate', {
+      stdio: 'inherit',
+      timeout: 60000,
+    });
+  } catch (npxErr) {
+    console.log('[PROD START] Fallback: executando prisma localmente...');
+    execSync('node ./node_modules/prisma/build/index.js db push --accept-data-loss --skip-generate', {
+      stdio: 'inherit',
+      timeout: 60000,
+    });
+  }
+  console.log('[PROD START] Schema do banco sincronizado com sucesso.');
+} catch (err) {
+  console.error('[PROD START] Aviso na sincronização do schema Prisma:', err.message);
+}
+
 // 1. Executa migração de compatibilidade de instâncias do WhatsApp (remove UNIQUE em tenantId)
 try {
   console.log('[PROD START] Verificando e atualizando índices do WhatsApp (multi-tenant)...');
@@ -24,36 +44,6 @@ try {
   console.log('[PROD START] Migração do SaaS concluída com sucesso.');
 } catch (err) {
   console.error('[PROD START] Aviso na migração do SaaS (continuando com segurança):', err.message);
-}
-
-// 2. Executa o push do esquema do banco de forma segura
-try {
-  console.log('[PROD START] Sincronizando schema do banco com Prisma...');
-  try {
-    execSync('npx prisma db push --accept-data-loss --skip-generate', {
-      stdio: 'inherit',
-      timeout: 60000,
-    });
-  } catch (npxErr) {
-    console.log('[PROD START] Fallback: executando prisma localmente...');
-    execSync('node ./node_modules/prisma/build/index.js db push --accept-data-loss --skip-generate', {
-      stdio: 'inherit',
-      timeout: 60000,
-    });
-  }
-  console.log('[PROD START] Schema do banco sincronizado.');
-} catch (err) {
-  console.error('[PROD START] Aviso na sincronização do schema Prisma (continuando com migração via código):', err.message);
-}
-
-// 2.1. Executa migração do SaaS novamente após db push para garantir o super admin
-try {
-  execSync('node scripts/migrate-saas.js', {
-    stdio: 'inherit',
-    timeout: 30000,
-  });
-} catch (err) {
-  // Ignora se já estiver ok
 }
 
 // 3. Executa seed de dados essenciais (admin e expert) se necessario

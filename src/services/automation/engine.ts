@@ -108,8 +108,17 @@ export class AutomationEngine {
       },
     });
 
-    if (!enrollment || enrollment.status === 'CANCELLED' || enrollment.status === 'COMPLETED') {
+    if (!enrollment || enrollment.status === 'CANCELLED') {
       return;
+    }
+
+    if (enrollment.status === 'COMPLETED') {
+      // Reativa a inscrição se um novo nó ou ramo pendente precisa ser executado
+      await prisma.automationEnrollment.update({
+        where: { id: enrollmentId },
+        data: { status: 'ACTIVE', completedAt: null },
+      });
+      enrollment.status = 'ACTIVE';
     }
 
     const { automation, contact } = enrollment;
@@ -183,7 +192,7 @@ export class AutomationEngine {
 
     const nodeType = (node.data?.type || node.type) as string;
     const subtype = node.data.subtype;
-    const config = node.data.config || {};
+    const config = node?.data?.config || {};
 
     let stepStatus = 'SUCCESS';
     let stepDetails: any = {};
@@ -565,7 +574,7 @@ export class AutomationEngine {
 
     // Helper para verificar se um nó de Tag satisfaz os critérios (Tags de Entrada, Tags de Exclusão e Data Limite)
     const isTagNodeSatisfied = (tagNode: WorkflowNode): boolean => {
-      const cfg = tagNode.data.config || {};
+      const cfg = tagNode?.data?.config || {};
 
       // 1. Agendar data e hora limite? (Se expirou, não libera)
       if (cfg.hasDateLimit && cfg.dateLimit) {
@@ -1127,7 +1136,7 @@ export class AutomationEngine {
         data: { currentNodeId: node.id },
       });
 
-    const cfg = node.data.config || {};
+    const cfg = node?.data?.config || {};
     let shouldHalt = false;
     let stepStatus = 'SUCCESS';
     let stepDetails: any = {};
@@ -1715,7 +1724,7 @@ export class AutomationEngine {
     let totalEnrolled = 0;
 
     for (const tagNode of entryTagNodes) {
-      const cfg = tagNode.data.config || {};
+      const cfg = tagNode?.data?.config || {};
       const tagList: string[] =
         cfg.entryTags && Array.isArray(cfg.entryTags) && cfg.entryTags.length > 0
           ? cfg.entryTags
@@ -2230,8 +2239,17 @@ export class AutomationEngine {
       },
     });
 
-    if (!enrollment || enrollment.status === 'CANCELLED' || enrollment.status === 'COMPLETED') {
+    if (!enrollment || enrollment.status === 'CANCELLED') {
       return;
+    }
+
+    if (enrollment.status === 'COMPLETED') {
+      // Reativa a inscrição se um novo nó ou ramo pendente precisa ser executado
+      await prisma.automationGroupEnrollment.update({
+        where: { id: enrollmentId },
+        data: { status: 'ACTIVE', completedAt: null },
+      });
+      enrollment.status = 'ACTIVE';
     }
 
     const { automation, group } = enrollment;
@@ -2741,6 +2759,58 @@ export class AutomationEngine {
     const outgoingEdges = edges.filter((e) => e.source === currentNodeId);
 
     if (outgoingEdges.length === 0) {
+      // Verifica se outros ramos ainda estão aguardando timers ou possuem nós pendentes
+      const waitLogs = await prisma.automationGroupStepLog.findMany({
+        where: {
+          enrollmentId,
+          action: 'WAIT_TIMER',
+        },
+      });
+      const passedLogs = await prisma.automationGroupStepLog.findMany({
+        where: {
+          enrollmentId,
+          action: { in: ['TIMER_PASSED', 'TIMER_EXPIRED_SKIPPED'] },
+        },
+        select: { nodeId: true },
+      });
+      const passedNodeIds = new Set(passedLogs.map((p) => p.nodeId));
+      const hasPendingTimers = waitLogs.some((w) => !passedNodeIds.has(w.nodeId));
+
+      const successLogs = await prisma.automationGroupStepLog.findMany({
+        where: {
+          enrollmentId,
+          status: 'SUCCESS',
+          action: { not: 'WAIT_TIMER' },
+        },
+        select: { nodeId: true },
+      });
+      const executedNodeIds = new Set(successLogs.map((l) => l.nodeId));
+      executedNodeIds.add(currentNodeId);
+
+      // Verifica se existe alguma aresta cujo source foi executado mas o target ainda não foi executado
+      const hasUnexecutedConnectedNodes = edges.some(
+        (edge) => executedNodeIds.has(edge.source) && !executedNodeIds.has(edge.target)
+      );
+
+      if (hasPendingTimers) {
+        const pendingTimerNodeId = waitLogs.find((w) => !passedNodeIds.has(w.nodeId))?.nodeId || null;
+        await prisma.automationGroupEnrollment.update({
+          where: { id: enrollmentId },
+          data: { status: 'WAITING', currentNodeId: pendingTimerNodeId },
+        });
+        return;
+      }
+
+      if (hasUnexecutedConnectedNodes) {
+        await prisma.automationGroupEnrollment.update({
+          where: { id: enrollmentId },
+          data: { status: 'ACTIVE' },
+        });
+        await this.checkAndAdvanceNewGroupNodes(enrollmentId, automation);
+        return;
+      }
+
+      // Todos os ramos foram concluídos com sucesso!
       await prisma.automationGroupEnrollment.update({
         where: { id: enrollmentId },
         data: { status: 'COMPLETED', completedAt: new Date(), currentNodeId: null },
@@ -2854,13 +2924,18 @@ export class AutomationEngine {
   async syncAllActiveAutomations(): Promise<number> {
     try {
       const activeAutos = await prisma.automation.findMany({
-        where: { status: 'ACTIVE', targetType: 'INDIVIDUAL' },
-        select: { id: true, tenantId: true },
+        where: { status: 'ACTIVE' },
+        select: { id: true, tenantId: true, targetType: true },
       });
 
       let totalSynced = 0;
       for (const auto of activeAutos) {
-        totalSynced += await this.syncExistingLeadsForAutomation(auto.id, auto.tenantId);
+        if (auto.targetType === 'GROUP') {
+          await this.enrollGroupsByAutomation(auto.id);
+          totalSynced++;
+        } else {
+          totalSynced += await this.syncExistingLeadsForAutomation(auto.id, auto.tenantId);
+        }
       }
       return totalSynced;
     } catch (err: any) {

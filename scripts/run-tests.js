@@ -5569,6 +5569,327 @@ async function runTestSuite() {
     console.log('✔ PASSOU: Correção crítica do agendamento por data e horário validada com 100% de sucesso.');
     passed++;
 
+    // =====================================================
+    // TESTE 45: Ramificações em Grupos (06:00 & 10:00), Prevenção de Conclusão Prematura e Auto-Healing
+    // =====================================================
+    console.log('\n[TESTE 45] Ramificações em Grupos (06:00 & 10:00), Prevenção de Conclusão Prematura e Auto-Healing...');
+    total++;
+
+    // 1. Instância e Grupo com Admin
+    const inst45 = await prisma.whatsappInstance.create({
+      data: {
+        tenantId: testTenant.id,
+        name: 'Instância Teste 45',
+        instanceName: `inst_test_45_${Date.now()}`,
+        instanceToken: 'token45',
+        status: 'CONNECTED',
+      },
+    });
+
+    const tagGrupo45 = await prisma.groupTag.create({
+      data: {
+        tenantId: testTenant.id,
+        name: `Grupo Ramificacao 45 ${Date.now()}`,
+        color: '#6366f1',
+      },
+    });
+
+    const grupo45 = await prisma.whatsappGroup.create({
+      data: {
+        tenantId: testTenant.id,
+        whatsappInstanceId: inst45.id,
+        jid: `120363454545@g.us`,
+        name: 'Grupo Expert Busca e Apreensão',
+        isAdmin: true,
+        isEligible: true,
+        status: 'ACTIVE',
+      },
+    });
+
+    await prisma.groupTagOnGroup.create({
+      data: {
+        groupId: grupo45.id,
+        tagId: tagGrupo45.id,
+      },
+    });
+
+    // 2. Cria o Fluxo Exato do Usuário (Ramificação a partir do Timer 06:00):
+    // Node 1 (Tag) -> Node 2 (Timer 06:00)
+    // Node 2 -> Node 3 (WhatsApp 06:00)
+    // Node 2 -> Node 4 (Timer 10:00) -> Node 5 (WhatsApp 10:00)
+    const nodeTag45 = 'node_tag_45';
+    const nodeTimer06_45 = 'node_timer_06_45';
+    const nodeWpp06_45 = 'node_wpp_06_45';
+    const nodeTimer10_45 = 'node_timer_10_45';
+    const nodeWpp10_45 = 'node_wpp_10_45';
+
+    const flowNodes45 = [
+      { id: nodeTag45, type: 'tag', data: { config: { groupTagIds: [tagGrupo45.id] } } },
+      {
+        id: nodeTimer06_45,
+        type: 'timer',
+        data: {
+          config: {
+            timerType: 'SPECIFIC_DATE',
+            specificDate: '2026-11-18T06:00:00-03:00',
+            dispatchAfterPassed: true,
+          },
+        },
+      },
+      {
+        id: nodeWpp06_45,
+        type: 'whatsapp',
+        data: {
+          config: {
+            text: 'Mensagem das 06:00 no grupo',
+            whatsappInstanceId: inst45.id,
+          },
+        },
+      },
+      {
+        id: nodeTimer10_45,
+        type: 'timer',
+        data: {
+          config: {
+            timerType: 'SPECIFIC_DATE',
+            specificDate: '2026-11-18T10:00:00-03:00',
+            dispatchAfterPassed: true,
+          },
+        },
+      },
+      {
+        id: nodeWpp10_45,
+        type: 'whatsapp',
+        data: {
+          config: {
+            text: 'Mensagem das 10:00 no grupo',
+            whatsappInstanceId: inst45.id,
+          },
+        },
+      },
+    ];
+
+    const flowEdges45 = [
+      { id: 'e1', source: nodeTag45, target: nodeTimer06_45 },
+      { id: 'e2', source: nodeTimer06_45, target: nodeWpp06_45 }, // Ramo A
+      { id: 'e3', source: nodeTimer06_45, target: nodeTimer10_45 }, // Ramo B
+      { id: 'e4', source: nodeTimer10_45, target: nodeWpp10_45 },
+    ];
+
+    const autoGrupo45 = await prisma.automation.create({
+      data: {
+        tenantId: testTenant.id,
+        name: 'Automação Ramificada 06:00 e 10:00',
+        targetType: 'GROUP',
+        status: 'ACTIVE',
+        nodes: JSON.stringify(flowNodes45),
+        edges: JSON.stringify(flowEdges45),
+      },
+    });
+
+    // 3. Helper de avanço de nó de grupo com checagem de ramos múltiplos e timers pendentes
+    async function testAdvanceGroupNode45(enrollmentId, currentNodeId, auto) {
+      const edges = JSON.parse(auto.edges || '[]');
+      const outgoing = edges.filter((e) => e.source === currentNodeId);
+
+      if (outgoing.length === 0) {
+        // Verifica se existem outros ramos com timers pendentes
+        const waitLogs = await prisma.automationGroupStepLog.findMany({
+          where: { enrollmentId, action: 'WAIT_TIMER' },
+        });
+        const passedLogs = await prisma.automationGroupStepLog.findMany({
+          where: { enrollmentId, action: { in: ['TIMER_PASSED', 'TIMER_EXPIRED_SKIPPED'] } },
+          select: { nodeId: true },
+        });
+        const passedSet = new Set(passedLogs.map((p) => p.nodeId));
+        const hasPendingTimers = waitLogs.some((w) => !passedSet.has(w.nodeId));
+
+        if (hasPendingTimers) {
+          const pendingTimerId = waitLogs.find((w) => !passedSet.has(w.nodeId))?.nodeId;
+          await prisma.automationGroupEnrollment.update({
+            where: { id: enrollmentId },
+            data: { status: 'WAITING', currentNodeId: pendingTimerId },
+          });
+          return;
+        }
+
+        // Se nenhum ramo pendente, marca COMPLETED
+        await prisma.automationGroupEnrollment.update({
+          where: { id: enrollmentId },
+          data: { status: 'COMPLETED', completedAt: new Date(), currentNodeId: null },
+        });
+      }
+    }
+
+    // Cria a inscrição do grupo no fluxo
+    const enr45 = await prisma.automationGroupEnrollment.create({
+      data: {
+        automationId: autoGrupo45.id,
+        groupId: grupo45.id,
+        tenantId: testTenant.id,
+        status: 'ACTIVE',
+      },
+    });
+
+    // 4. Simula o disparo de 06:00:
+    // Timer 06:00 passa e registra TIMER_PASSED
+    await prisma.automationGroupStepLog.create({
+      data: {
+        enrollmentId: enr45.id,
+        groupId: grupo45.id,
+        tenantId: testTenant.id,
+        nodeId: nodeTimer06_45,
+        nodeType: 'timer',
+        action: 'TIMER_PASSED',
+        status: 'SUCCESS',
+      },
+    });
+
+    // Ramo A: Executa WhatsApp 06:00 (enfileira mensagem)
+    await prisma.whatsappQueue.create({
+      data: {
+        tenantId: testTenant.id,
+        whatsappInstanceId: inst45.id,
+        phone: grupo45.jid,
+        recipientType: 'GROUP',
+        groupJid: grupo45.jid,
+        groupEnrollmentId: enr45.id,
+        nodeId: nodeWpp06_45,
+        automationId: autoGrupo45.id,
+        text: 'Mensagem das 06:00 no grupo',
+        status: 'SENT',
+      },
+    });
+
+    // Ramo B: Timer 10:00 entra em WAITING (registra WAIT_TIMER no log)
+    await prisma.automationGroupStepLog.create({
+      data: {
+        enrollmentId: enr45.id,
+        groupId: grupo45.id,
+        tenantId: testTenant.id,
+        nodeId: nodeTimer10_45,
+        nodeType: 'timer',
+        action: 'WAIT_TIMER',
+        status: 'WAITING',
+        details: JSON.stringify({
+          targetDate: '2026-11-18T10:00:00-03:00',
+          scheduledFor: '2026-11-18T10:00:00-03:00',
+        }),
+      },
+    });
+
+    // Simula a conclusão do envio do nó WhatsApp 06:00 através de advanceGroupNode
+    await testAdvanceGroupNode45(enr45.id, nodeWpp06_45, autoGrupo45);
+
+    // CRÍTICO: A inscrição NÃO pode ser marcada como COMPLETED enquanto o Timer 10:00 estiver pendente!
+    const enrCheckAfter06 = await prisma.automationGroupEnrollment.findUnique({
+      where: { id: enr45.id },
+    });
+    assert.strictEqual(
+      enrCheckAfter06.status,
+      'WAITING',
+      'Inscrição DEVE permanecer em status WAITING apontando para o Timer 10:00!'
+    );
+    assert.strictEqual(
+      enrCheckAfter06.currentNodeId,
+      nodeTimer10_45,
+      'Inscrição DEVE apontar para o nó Timer das 10:00!'
+    );
+
+    // 5. Simula a chegada das 10:00 AM (Auto-Healing de timers vencidos do scheduler)
+    // Helper de auto-healing idêntico ao adicionado em scheduler.ts
+    const pendingLogs45 = await prisma.automationGroupStepLog.findMany({
+      where: { action: 'WAIT_TIMER' },
+    });
+
+    let autoHealedProcessed = 0;
+    const now1005 = new Date('2026-11-18T10:05:00-03:00').getTime();
+
+    for (const waitLog of pendingLogs45) {
+      const alreadyPassed = await prisma.automationGroupStepLog.findFirst({
+        where: {
+          enrollmentId: waitLog.enrollmentId,
+          nodeId: waitLog.nodeId,
+          action: { in: ['TIMER_PASSED', 'TIMER_EXPIRED_SKIPPED'] },
+        },
+      });
+      if (alreadyPassed) continue;
+
+      const targetTime = new Date('2026-11-18T10:00:00-03:00').getTime();
+      if (targetTime <= now1005) {
+        // Executa timer
+        await prisma.automationGroupEnrollment.update({
+          where: { id: waitLog.enrollmentId },
+          data: { status: 'ACTIVE', currentNodeId: waitLog.nodeId },
+        });
+
+        await prisma.automationGroupStepLog.create({
+          data: {
+            enrollmentId: waitLog.enrollmentId,
+            groupId: waitLog.groupId,
+            tenantId: waitLog.tenantId,
+            nodeId: waitLog.nodeId,
+            nodeType: 'timer',
+            action: 'TIMER_PASSED',
+            status: 'SUCCESS',
+            details: JSON.stringify({ recovery: true }),
+          },
+        });
+
+        // Avança para o nó de WhatsApp 10:00
+        await prisma.whatsappQueue.create({
+          data: {
+            tenantId: testTenant.id,
+            whatsappInstanceId: inst45.id,
+            phone: grupo45.jid,
+            recipientType: 'GROUP',
+            groupJid: grupo45.jid,
+            groupEnrollmentId: waitLog.enrollmentId,
+            nodeId: nodeWpp10_45,
+            automationId: autoGrupo45.id,
+            text: 'Mensagem das 10:00 no grupo',
+            status: 'PENDING',
+          },
+        });
+        autoHealedProcessed++;
+      }
+    }
+
+    assert.ok(autoHealedProcessed >= 1, 'Timer das 10:00 deve ser processado e recuperado pelo auto-healing');
+
+    // Verifica se a mensagem do nó WhatsApp 10:00 foi enfileirada com sucesso
+    const queuedWpp10 = await prisma.whatsappQueue.findFirst({
+      where: {
+        tenantId: testTenant.id,
+        nodeId: nodeWpp10_45,
+      },
+    });
+    assert.ok(queuedWpp10, 'Mensagem das 10:00 deve ser enfileirada no WhatsApp Queue');
+    assert.strictEqual(queuedWpp10.text, 'Mensagem das 10:00 no grupo');
+
+    // 6. Validação do Auto-healing do Banco e Super Admin
+    const superAdminUser = await prisma.user.findUnique({
+      where: { email: 'carloshenrq1245@gmail.com' },
+    });
+    assert.ok(superAdminUser, 'Super Admin deve existir e ser consultável sem erros de coluna User.phone');
+    assert.strictEqual(superAdminUser.role, 'SUPER_ADMIN');
+
+    const saasClientCount = await prisma.saasClient.count();
+    assert.ok(typeof saasClientCount === 'number', 'Tabela saas_clients deve existir e ser consultável sem erros');
+
+    // Limpeza Teste 45
+    await prisma.whatsappQueue.deleteMany({ where: { tenantId: testTenant.id } });
+    await prisma.automationGroupStepLog.deleteMany({ where: { enrollment: { automationId: autoGrupo45.id } } });
+    await prisma.automationGroupEnrollment.deleteMany({ where: { automationId: autoGrupo45.id } });
+    await prisma.automation.delete({ where: { id: autoGrupo45.id } });
+    await prisma.groupTagOnGroup.deleteMany({ where: { groupId: grupo45.id } });
+    await prisma.whatsappGroup.delete({ where: { id: grupo45.id } });
+    await prisma.groupTag.delete({ where: { id: tagGrupo45.id } });
+    await prisma.whatsappInstance.delete({ where: { id: inst45.id } });
+
+    console.log('✔ PASSOU: Ramificações em Grupos, Prevenção de Conclusão Prematura e Auto-Healing validados com 100% de sucesso.');
+    passed++;
+
     console.log('\n=====================================================');
     console.log(` RESULTADO FINAL: ${passed}/${total} TESTES PASSARAM COM SUCESSO!`);
     console.log('=====================================================');

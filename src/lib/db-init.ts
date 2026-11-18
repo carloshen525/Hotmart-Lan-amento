@@ -1,4 +1,5 @@
 import { PrismaClient } from '@prisma/client';
+import bcrypt from 'bcryptjs';
 
 let isMigrating = false;
 let isMigrated = false;
@@ -134,6 +135,36 @@ export async function ensureDatabaseSchema(prisma: PrismaClient): Promise<void> 
         );
       `);
     } catch {}
+
+    // 7. Garante o usuário Super Admin (carloshenrq1245@gmail.com / 12277891)
+    try {
+      const adminEmail = 'carloshenrq1245@gmail.com';
+      const existingUser: any = await prisma.$queryRawUnsafe(
+        `SELECT id FROM "User" WHERE email = ? LIMIT 1;`,
+        adminEmail
+      );
+
+      const passHash = await bcrypt.hash('12277891', 10);
+
+      if (Array.isArray(existingUser) && existingUser.length > 0) {
+        await prisma.$executeRawUnsafe(
+          `UPDATE "User" SET role = 'SUPER_ADMIN', status = 'ACTIVE', passwordHash = ? WHERE email = ?;`,
+          passHash,
+          adminEmail
+        );
+      } else {
+        const newId = 'admin_' + Math.random().toString(36).substring(2, 12);
+        await prisma.$executeRawUnsafe(
+          `INSERT INTO "User" ("id", "email", "passwordHash", "name", "role", "status", "createdAt", "updatedAt")
+           VALUES (?, ?, ?, 'Carlos Henrique (Super Admin)', 'SUPER_ADMIN', 'ACTIVE', CURRENT_TIMESTAMP, CURRENT_TIMESTAMP);`,
+          newId,
+          adminEmail,
+          passHash
+        );
+      }
+    } catch (adminErr: any) {
+      console.warn('[DB Init] Aviso ao garantir super admin:', adminErr.message);
+    }
 
     isMigrated = true;
   } catch (err: any) {
