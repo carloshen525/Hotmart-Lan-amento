@@ -1,6 +1,6 @@
 'use client';
 
-import { useState, useEffect } from 'react';
+import React, { useState, useEffect } from 'react';
 import {
   UsersRound,
   RefreshCw,
@@ -20,6 +20,10 @@ import {
   Users,
   Filter,
   X,
+  ChevronDown,
+  ChevronUp,
+  Globe,
+  Layers,
 } from 'lucide-react';
 
 interface GroupTag {
@@ -40,6 +44,13 @@ interface WhatsappGroup {
   adminRole?: string | null;
   status: string; // 'ACTIVE', 'LEFT', 'UNVERIFIED', 'NOT_ADMIN'
   isEligible: boolean;
+  isCommunity?: boolean;
+  isCommunityAnnounce?: boolean;
+  parentCommunityJid?: string | null;
+  parentCommunityName?: string | null;
+  description?: string | null;
+  subgroups?: WhatsappGroup[];
+  subgroupsCount?: number;
   metadata?: string | null;
   lastSyncedAt: string;
   whatsappInstance?: {
@@ -64,6 +75,13 @@ export default function GroupsPage() {
   const [selectedTagFilter, setSelectedTagFilter] = useState<string>('ALL');
   const [selectedGroups, setSelectedGroups] = useState<string[]>([]);
   const [copiedJid, setCopiedJid] = useState<string | null>(null);
+  const [expandedCommunities, setExpandedCommunities] = useState<string[]>([]);
+
+  const toggleExpandCommunity = (id: string) => {
+    setExpandedCommunities((prev) =>
+      prev.includes(id) ? prev.filter((item) => item !== id) : [...prev, id]
+    );
+  };
 
   // Modals
   const [isTagModalOpen, setIsTagModalOpen] = useState(false);
@@ -243,16 +261,30 @@ export default function GroupsPage() {
     }
   };
 
-  // Helper para verificar se o grupo é uma Comunidade ou Canal de Comunidade
+  // Helper para verificar se o grupo é uma Comunidade, Canal de Comunidade ou Subgrupo
   const getCommunityStatus = (g: WhatsappGroup) => {
+    let meta: any = {};
     try {
-      const meta = g.metadata ? JSON.parse(g.metadata) : {};
-      const isAnnounce = Boolean(meta.isCommunityAnnounce);
-      const isCom = Boolean(meta.isCommunity || meta.isParentGroup || meta.linkedParentJid || (g.name && g.name.toLowerCase().includes('comunidade')));
-      return { isCommunity: isCom || isAnnounce, isCommunityAnnounce: isAnnounce };
-    } catch {
-      return { isCommunity: Boolean(g.name && g.name.toLowerCase().includes('comunidade')), isCommunityAnnounce: false };
-    }
+      meta = g.metadata ? JSON.parse(g.metadata) : {};
+    } catch {}
+
+    const isCom = Boolean(
+      g.isCommunity ||
+      meta.isCommunity ||
+      meta.isParent ||
+      meta.isParentGroup ||
+      (g.name && g.name.toLowerCase().startsWith('[comunidade]'))
+    );
+    const isAnnounce = Boolean(g.isCommunityAnnounce || meta.isCommunityAnnounce);
+    const parentJid = g.parentCommunityJid || meta.linkedParentJid || null;
+    const isSubgroup = Boolean(parentJid && !isCom);
+
+    return {
+      isCommunity: isCom,
+      isCommunityAnnounce: isAnnounce,
+      isSubgroup,
+      parentCommunityJid: parentJid,
+    };
   };
 
   // Filtragem dos grupos
@@ -582,179 +614,289 @@ export default function GroupsPage() {
               ) : (
                 filteredGroups.map((g) => {
                   const isSelected = selectedGroups.includes(g.id);
+                  const comStatus = getCommunityStatus(g);
 
                   return (
-                    <tr
-                      key={g.id}
-                      className={`hover:bg-slate-50/80 dark:hover:bg-slate-800/40 transition-all ${
-                        isSelected ? 'bg-emerald-50/40 dark:bg-emerald-950/20' : ''
-                      }`}
-                    >
-                      {/* Checkbox */}
-                      <td className="p-4">
-                        <input
-                          type="checkbox"
-                          checked={isSelected}
-                          onChange={() => toggleSelectGroup(g.id)}
-                          className="rounded text-emerald-600 focus:ring-emerald-500 cursor-pointer"
-                        />
-                      </td>
+                    <React.Fragment key={g.id}>
+                      <tr
+                        className={`hover:bg-slate-50/80 dark:hover:bg-slate-800/40 transition-all ${
+                          isSelected ? 'bg-emerald-50/40 dark:bg-emerald-950/20' : ''
+                        } ${comStatus.isCommunity ? 'bg-indigo-50/20 dark:bg-indigo-950/10' : ''}`}
+                      >
+                        {/* Checkbox */}
+                        <td className="p-4">
+                          <input
+                            type="checkbox"
+                            checked={isSelected}
+                            onChange={() => toggleSelectGroup(g.id)}
+                            className="rounded text-emerald-600 focus:ring-emerald-500 cursor-pointer"
+                          />
+                        </td>
 
-                      {/* Nome e Foto */}
-                      <td className="py-4 px-3">
-                        <div className="flex items-center gap-3">
-                          {g.pictureUrl ? (
-                            <img
-                              src={g.pictureUrl}
-                              alt={g.name}
-                              className="w-10 h-10 rounded-xl object-cover border border-slate-200 dark:border-slate-700 shrink-0"
-                            />
-                          ) : (
-                            <div className="w-10 h-10 rounded-xl bg-slate-100 dark:bg-slate-800 text-slate-500 dark:text-slate-400 flex items-center justify-center shrink-0 border border-slate-200 dark:border-slate-700">
-                              <UsersRound className="w-5 h-5" />
-                            </div>
-                          )}
-                          <div className="min-w-0 max-w-xs">
-                            <span className="font-bold text-slate-900 dark:text-white block truncate text-sm">
-                              {g.name}
-                            </span>
-                            <div className="flex items-center gap-1.5 mt-0.5">
-                              {(() => {
-                                const { isCommunity, isCommunityAnnounce } = getCommunityStatus(g);
-                                if (isCommunityAnnounce) {
-                                  return (
-                                    <span className="inline-flex items-center gap-0.5 px-1.5 py-0.5 rounded text-[10px] font-semibold bg-purple-100 dark:bg-purple-950/60 text-purple-700 dark:text-purple-300 border border-purple-200 dark:border-purple-800/40">
-                                      📢 Canal de Avisos
-                                    </span>
-                                  );
-                                }
-                                if (isCommunity) {
-                                  return (
-                                    <span className="inline-flex items-center gap-0.5 px-1.5 py-0.5 rounded text-[10px] font-semibold bg-blue-100 dark:bg-blue-950/60 text-blue-700 dark:text-blue-300 border border-blue-200 dark:border-blue-800/40">
-                                      🌐 Comunidade
-                                    </span>
-                                  );
-                                }
-                                return (
-                                  <span className="inline-flex items-center gap-0.5 px-1.5 py-0.5 rounded text-[10px] font-semibold bg-slate-100 dark:bg-slate-800 text-slate-600 dark:text-slate-400">
-                                    👥 Grupo
-                                  </span>
-                                );
-                              })()}
-                              <span className="text-[10px] text-slate-400 block truncate">
-                                {new Date(g.lastSyncedAt).toLocaleDateString('pt-BR')}
-                              </span>
-                            </div>
-                          </div>
-                        </div>
-                      </td>
-
-                      {/* JID com cópia rápida */}
-                      <td className="py-4 px-3 font-mono text-[11px] text-slate-500 dark:text-slate-400">
-                        <div className="flex items-center gap-1.5">
-                          <span className="truncate max-w-[140px]">{g.jid}</span>
-                          <button
-                            onClick={() => handleCopyJid(g.jid)}
-                            className="p-1 hover:bg-slate-200 dark:hover:bg-slate-800 rounded transition-all text-slate-400 hover:text-slate-700 dark:hover:text-slate-200"
-                            title="Copiar JID"
-                          >
-                            {copiedJid === g.jid ? (
-                              <Check className="w-3.5 h-3.5 text-emerald-600" />
+                        {/* Nome e Foto */}
+                        <td className="py-4 px-3">
+                          <div className="flex items-center gap-3">
+                            {g.pictureUrl ? (
+                              <img
+                                src={g.pictureUrl}
+                                alt={g.name}
+                                className={`w-10 h-10 rounded-xl object-cover shrink-0 ${
+                                  comStatus.isCommunity
+                                    ? 'border-2 border-indigo-400 dark:border-indigo-500 ring-2 ring-indigo-500/20'
+                                    : 'border border-slate-200 dark:border-slate-700'
+                                }`}
+                              />
                             ) : (
-                              <Copy className="w-3.5 h-3.5" />
-                            )}
-                          </button>
-                        </div>
-                      </td>
-
-                      {/* Quantidade de Participantes */}
-                      <td className="py-4 px-3">
-                        <span className="inline-flex items-center gap-1 px-2.5 py-1 bg-slate-100 dark:bg-slate-800 text-slate-700 dark:text-slate-300 rounded-lg font-medium text-xs">
-                          <Users className="w-3.5 h-3.5 text-slate-400" />
-                          {g.participantsCount} membros
-                        </span>
-                      </td>
-
-                      {/* Instância Responsável */}
-                      <td className="py-4 px-3">
-                        {g.whatsappInstance ? (
-                          <div>
-                            <span className="font-semibold text-slate-800 dark:text-slate-200 block text-xs">
-                              {g.whatsappInstance.name || g.whatsappInstance.instanceName}
-                            </span>
-                            <span className="text-[11px] text-slate-400">
-                              {g.whatsappInstance.phone || g.whatsappInstance.instanceName}
-                            </span>
-                          </div>
-                        ) : (
-                          <span className="text-slate-400 text-xs">Desconhecida</span>
-                        )}
-                      </td>
-
-                      {/* Status de Administrador */}
-                      <td className="py-4 px-3">
-                        {g.isEligible ? (
-                          <div className="inline-flex items-center gap-1.5 px-2.5 py-1 rounded-lg text-xs font-semibold bg-emerald-100 dark:bg-emerald-950/60 text-emerald-800 dark:text-emerald-300 border border-emerald-200 dark:border-emerald-800">
-                            <ShieldCheck className="w-3.5 h-3.5 text-emerald-600 dark:text-emerald-400" />
-                            {g.adminRole === 'superadmin' ? 'Super Administrador' : 'Administrador'}
-                          </div>
-                        ) : g.status === 'UNVERIFIED' ? (
-                          <div className="inline-flex items-center gap-1.5 px-2.5 py-1 rounded-lg text-xs font-semibold bg-slate-100 dark:bg-slate-800 text-slate-600 dark:text-slate-300 border border-slate-200 dark:border-slate-700">
-                            <HelpCircle className="w-3.5 h-3.5" />
-                            Permissão não verificada
-                          </div>
-                        ) : g.status === 'LEFT' ? (
-                          <div className="inline-flex items-center gap-1.5 px-2.5 py-1 rounded-lg text-xs font-semibold bg-rose-100 dark:bg-rose-950/60 text-rose-800 dark:text-rose-300 border border-rose-200 dark:border-rose-800">
-                            <X className="w-3.5 h-3.5 text-rose-600" />
-                            Saiu do grupo
-                          </div>
-                        ) : (
-                          <div className="inline-flex items-center gap-1.5 px-2.5 py-1 rounded-lg text-xs font-semibold bg-amber-100 dark:bg-amber-950/60 text-amber-800 dark:text-amber-300 border border-amber-200 dark:border-amber-800">
-                            <ShieldAlert className="w-3.5 h-3.5 text-amber-600 dark:text-amber-400" />
-                            Não é Administrador
-                          </div>
-                        )}
-                      </td>
-
-                      {/* Tags Associadas */}
-                      <td className="py-4 px-3">
-                        <div className="flex flex-wrap items-center gap-1.5 max-w-[220px]">
-                          {g.tags && g.tags.length > 0 ? (
-                            g.tags.map(({ tag }) => (
-                              <span
-                                key={tag.id}
-                                style={{ backgroundColor: `${tag.color}15`, color: tag.color, borderColor: `${tag.color}40` }}
-                                className="px-2 py-0.5 rounded-md text-[11px] font-semibold border"
+                              <div
+                                className={`w-10 h-10 rounded-xl flex items-center justify-center shrink-0 border ${
+                                  comStatus.isCommunity
+                                    ? 'bg-indigo-50 dark:bg-indigo-950/50 text-indigo-600 dark:text-indigo-400 border-indigo-200 dark:border-indigo-800'
+                                    : 'bg-slate-100 dark:bg-slate-800 text-slate-500 dark:text-slate-400 border-slate-200 dark:border-slate-700'
+                                }`}
                               >
-                                #{tag.name}
+                                {comStatus.isCommunity ? <Globe className="w-5 h-5" /> : <UsersRound className="w-5 h-5" />}
+                              </div>
+                            )}
+                            <div className="min-w-0 max-w-xs">
+                              <span className="font-bold text-slate-900 dark:text-white block truncate text-sm">
+                                {g.name}
                               </span>
-                            ))
-                          ) : (
-                            <span className="text-[11px] text-slate-400 italic">Sem tags</span>
-                          )}
-                          <button
-                            onClick={() => handleOpenManageTags(g)}
-                            className="p-1 hover:bg-slate-100 dark:hover:bg-slate-800 rounded text-slate-400 hover:text-slate-700 dark:hover:text-slate-200"
-                            title="Gerenciar Tags"
-                          >
-                            <Plus className="w-3 h-3" />
-                          </button>
-                        </div>
-                      </td>
+                              {g.parentCommunityName && (
+                                <span className="text-[10px] text-indigo-600 dark:text-indigo-400 font-semibold block truncate">
+                                  ↳ Subgrupo de: {g.parentCommunityName}
+                                </span>
+                              )}
+                              <div className="flex items-center gap-1.5 mt-0.5">
+                                {(() => {
+                                  if (comStatus.isCommunityAnnounce) {
+                                    return (
+                                      <span className="inline-flex items-center gap-0.5 px-1.5 py-0.5 rounded text-[10px] font-semibold bg-purple-100 dark:bg-purple-950/60 text-purple-700 dark:text-purple-300 border border-purple-200 dark:border-purple-800/40">
+                                        📢 Canal de Avisos
+                                      </span>
+                                    );
+                                  }
+                                  if (comStatus.isCommunity) {
+                                    return (
+                                      <span className="inline-flex items-center gap-0.5 px-1.5 py-0.5 rounded text-[10px] font-semibold bg-indigo-100 dark:bg-indigo-950/60 text-indigo-700 dark:text-indigo-300 border border-indigo-200 dark:border-indigo-800/40">
+                                        🌐 Comunidade
+                                      </span>
+                                    );
+                                  }
+                                  return (
+                                    <span className="inline-flex items-center gap-0.5 px-1.5 py-0.5 rounded text-[10px] font-semibold bg-slate-100 dark:bg-slate-800 text-slate-600 dark:text-slate-400">
+                                      👥 Grupo
+                                    </span>
+                                  );
+                                })()}
+                                <span className="text-[10px] text-slate-400 block truncate">
+                                  {new Date(g.lastSyncedAt).toLocaleDateString('pt-BR')}
+                                </span>
+                              </div>
+                            </div>
+                          </div>
+                        </td>
 
-                      {/* Ações */}
-                      <td className="py-4 px-3 text-right">
-                        <div className="flex items-center justify-end gap-2">
-                          <button
-                            onClick={() => handleValidateLive(g)}
-                            className="px-2.5 py-1 text-slate-600 dark:text-slate-300 hover:bg-slate-100 dark:hover:bg-slate-800 rounded-lg text-xs font-medium border border-slate-200 dark:border-slate-700 transition-all"
-                            title="Verificar status real agora na Evolution API"
-                          >
-                            Validar
-                          </button>
-                        </div>
-                      </td>
-                    </tr>
+                        {/* JID com cópia rápida */}
+                        <td className="py-4 px-3 font-mono text-[11px] text-slate-500 dark:text-slate-400">
+                          <div className="flex items-center gap-1.5">
+                            <span className="truncate max-w-[140px]">{g.jid}</span>
+                            <button
+                              onClick={() => handleCopyJid(g.jid)}
+                              className="p-1 hover:bg-slate-200 dark:hover:bg-slate-800 rounded transition-all text-slate-400 hover:text-slate-700 dark:hover:text-slate-200"
+                              title="Copiar JID"
+                            >
+                              {copiedJid === g.jid ? (
+                                <Check className="w-3.5 h-3.5 text-emerald-600" />
+                              ) : (
+                                <Copy className="w-3.5 h-3.5" />
+                              )}
+                            </button>
+                          </div>
+                        </td>
+
+                        {/* Quantidade de Participantes / Grupos Vinculados */}
+                        <td className="py-4 px-3">
+                          <div>
+                            <span className="inline-flex items-center gap-1 px-2.5 py-1 bg-slate-100 dark:bg-slate-800 text-slate-700 dark:text-slate-300 rounded-lg font-medium text-xs">
+                              <Users className="w-3.5 h-3.5 text-slate-400" />
+                              {g.participantsCount} membros
+                            </span>
+                            {comStatus.isCommunity && (
+                              <button
+                                type="button"
+                                onClick={() => toggleExpandCommunity(g.id)}
+                                className="mt-1.5 flex items-center gap-1 px-2 py-0.5 rounded-md text-[10px] font-semibold bg-indigo-50 dark:bg-indigo-950/60 text-indigo-700 dark:text-indigo-300 border border-indigo-200 dark:border-indigo-800 hover:bg-indigo-100 dark:hover:bg-indigo-900/60 transition-all cursor-pointer"
+                              >
+                                <Layers className="w-3 h-3" />
+                                <span>{g.subgroupsCount || g.subgroups?.length || 0} grupos vinculados</span>
+                                {expandedCommunities.includes(g.id) ? (
+                                  <ChevronUp className="w-3 h-3 ml-0.5" />
+                                ) : (
+                                  <ChevronDown className="w-3 h-3 ml-0.5" />
+                                )}
+                              </button>
+                            )}
+                          </div>
+                        </td>
+
+                        {/* Instância Responsável */}
+                        <td className="py-4 px-3">
+                          {g.whatsappInstance ? (
+                            <div>
+                              <span className="font-semibold text-slate-800 dark:text-slate-200 block text-xs">
+                                {g.whatsappInstance.name || g.whatsappInstance.instanceName}
+                              </span>
+                              <span className="text-[11px] text-slate-400">
+                                {g.whatsappInstance.phone || g.whatsappInstance.instanceName}
+                              </span>
+                            </div>
+                          ) : (
+                            <span className="text-slate-400 text-xs">Desconhecida</span>
+                          )}
+                        </td>
+
+                        {/* Status de Administrador */}
+                        <td className="py-4 px-3">
+                          {g.isEligible ? (
+                            <div className="inline-flex items-center gap-1.5 px-2.5 py-1 rounded-lg text-xs font-semibold bg-emerald-100 dark:bg-emerald-950/60 text-emerald-800 dark:text-emerald-300 border border-emerald-200 dark:border-emerald-800">
+                              <ShieldCheck className="w-3.5 h-3.5 text-emerald-600 dark:text-emerald-400" />
+                              {g.adminRole === 'superadmin' ? 'Super Administrador' : 'Administrador'}
+                            </div>
+                          ) : g.status === 'UNVERIFIED' ? (
+                            <div className="inline-flex items-center gap-1.5 px-2.5 py-1 rounded-lg text-xs font-semibold bg-slate-100 dark:bg-slate-800 text-slate-600 dark:text-slate-300 border border-slate-200 dark:border-slate-700">
+                              <HelpCircle className="w-3.5 h-3.5" />
+                              Permissão não verificada
+                            </div>
+                          ) : g.status === 'LEFT' ? (
+                            <div className="inline-flex items-center gap-1.5 px-2.5 py-1 rounded-lg text-xs font-semibold bg-rose-100 dark:bg-rose-950/60 text-rose-800 dark:text-rose-300 border border-rose-200 dark:border-rose-800">
+                              <X className="w-3.5 h-3.5 text-rose-600" />
+                              Saiu do grupo
+                            </div>
+                          ) : (
+                            <div className="inline-flex items-center gap-1.5 px-2.5 py-1 rounded-lg text-xs font-semibold bg-amber-100 dark:bg-amber-950/60 text-amber-800 dark:text-amber-300 border border-amber-200 dark:border-amber-800">
+                              <ShieldAlert className="w-3.5 h-3.5 text-amber-600 dark:text-amber-400" />
+                              Não é Administrador
+                            </div>
+                          )}
+                        </td>
+
+                        {/* Tags Associadas */}
+                        <td className="py-4 px-3">
+                          <div className="flex flex-wrap items-center gap-1.5 max-w-[220px]">
+                            {g.tags && g.tags.length > 0 ? (
+                              g.tags.map(({ tag }) => (
+                                <span
+                                  key={tag.id}
+                                  style={{ backgroundColor: `${tag.color}15`, color: tag.color, borderColor: `${tag.color}40` }}
+                                  className="px-2 py-0.5 rounded-md text-[11px] font-semibold border"
+                                >
+                                  #{tag.name}
+                                </span>
+                              ))
+                            ) : (
+                              <span className="text-[11px] text-slate-400 italic">Sem tags</span>
+                            )}
+                            <button
+                              onClick={() => handleOpenManageTags(g)}
+                              className="p-1 hover:bg-slate-100 dark:hover:bg-slate-800 rounded text-slate-400 hover:text-slate-700 dark:hover:text-slate-200 cursor-pointer"
+                              title="Gerenciar Tags"
+                            >
+                              <Plus className="w-3 h-3" />
+                            </button>
+                          </div>
+                        </td>
+
+                        {/* Ações */}
+                        <td className="py-4 px-3 text-right">
+                          <div className="flex items-center justify-end gap-2">
+                            <button
+                              onClick={() => handleValidateLive(g)}
+                              className="px-2.5 py-1 text-slate-600 dark:text-slate-300 hover:bg-slate-100 dark:hover:bg-slate-800 rounded-lg text-xs font-medium border border-slate-200 dark:border-slate-700 transition-all cursor-pointer"
+                              title="Verificar status real agora na Evolution API"
+                            >
+                              Validar
+                            </button>
+                          </div>
+                        </td>
+                      </tr>
+
+                      {/* Accordion de Subgrupos Pertencentes à Comunidade */}
+                      {comStatus.isCommunity && expandedCommunities.includes(g.id) && (
+                        <tr key={`${g.id}-subgroups`} className="bg-indigo-50/15 dark:bg-indigo-950/20 border-b border-indigo-200 dark:border-indigo-900/40">
+                          <td colSpan={8} className="p-4 pl-12">
+                            <div className="bg-white dark:bg-slate-900 border border-indigo-100 dark:border-indigo-900/60 rounded-xl p-4 shadow-sm space-y-3">
+                              <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-2 border-b border-slate-100 dark:border-slate-800 pb-2.5">
+                                <div className="flex items-center gap-2">
+                                  <Layers className="w-4 h-4 text-indigo-600 dark:text-indigo-400" />
+                                  <span className="font-bold text-xs text-slate-900 dark:text-white">
+                                    Grupos Vinculados à Comunidade &quot;{g.name}&quot; ({g.subgroups?.length || 0})
+                                  </span>
+                                </div>
+                                <span className="text-[11px] text-slate-500 dark:text-slate-400">
+                                  Automações direcionadas a esta comunidade alcançarão todos os subgrupos elegíveis
+                                </span>
+                              </div>
+
+                              {(!g.subgroups || g.subgroups.length === 0) ? (
+                                <div className="text-xs text-slate-400 italic py-2 text-center">
+                                  Nenhum subgrupo individual vinculado a esta comunidade encontrado na sincronização.
+                                </div>
+                              ) : (
+                                <div className="grid grid-cols-1 md:grid-cols-2 gap-2.5">
+                                  {g.subgroups.map((sub: any) => (
+                                    <div
+                                      key={sub.id}
+                                      className="flex items-center justify-between p-2.5 rounded-lg bg-slate-50 dark:bg-slate-800/60 border border-slate-200/80 dark:border-slate-700/60"
+                                    >
+                                      <div className="flex items-center gap-2.5 min-w-0">
+                                        {sub.pictureUrl ? (
+                                          <img
+                                            src={sub.pictureUrl}
+                                            alt={sub.name}
+                                            className="w-8 h-8 rounded-lg object-cover shrink-0"
+                                          />
+                                        ) : (
+                                          <div className="w-8 h-8 rounded-lg bg-slate-200 dark:bg-slate-700 flex items-center justify-center shrink-0 text-slate-500">
+                                            <UsersRound className="w-4 h-4" />
+                                          </div>
+                                        )}
+                                        <div className="min-w-0">
+                                          <span className="font-semibold text-xs text-slate-800 dark:text-slate-200 block truncate">
+                                            {sub.name}
+                                          </span>
+                                          <div className="flex items-center gap-1.5 text-[10px] text-slate-400">
+                                            <span>{sub.participantsCount} membros</span>
+                                            <span>•</span>
+                                            <span className={sub.isEligible ? 'text-emerald-500 font-medium' : 'text-amber-500'}>
+                                              {sub.isEligible ? '👑 Admin' : '⚠️ Não admin'}
+                                            </span>
+                                          </div>
+                                        </div>
+                                      </div>
+
+                                      <div className="flex items-center gap-1.5 shrink-0">
+                                        {sub.tags && sub.tags.length > 0 && (
+                                          <span className="text-[10px] px-1.5 py-0.5 rounded bg-emerald-50 dark:bg-emerald-950/60 text-emerald-700 dark:text-emerald-300 border border-emerald-200 dark:border-emerald-800 font-medium">
+                                            #{sub.tags[0].tag.name}
+                                          </span>
+                                        )}
+                                        <button
+                                          onClick={() => handleOpenManageTags(sub)}
+                                          className="p-1 hover:bg-slate-200 dark:hover:bg-slate-700 rounded text-slate-400 hover:text-slate-200 cursor-pointer"
+                                          title="Gerenciar tags deste subgrupo"
+                                        >
+                                          <TagIcon className="w-3.5 h-3.5" />
+                                        </button>
+                                      </div>
+                                    </div>
+                                  ))}
+                                </div>
+                              )}
+                            </div>
+                          </td>
+                        </tr>
+                      )}
+                    </React.Fragment>
                   );
                 })
               )}

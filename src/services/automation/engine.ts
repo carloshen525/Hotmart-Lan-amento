@@ -1978,9 +1978,35 @@ export class AutomationEngine {
       },
     });
 
+    // SUPORTE A COMUNIDADES: Se uma comunidade foi selecionada diretamente ou através de Tag,
+    // expande automaticamente para todos os subgrupos elegíveis vinculados a ela
+    const targetGroupsMap = new Map<string, (typeof eligibleGroups)[0]>();
+    for (const group of eligibleGroups) {
+      targetGroupsMap.set(group.id, group);
+
+      if ((group as any).isCommunity) {
+        const subGroups = await prisma.whatsappGroup.findMany({
+          where: {
+            tenantId,
+            parentCommunityJid: group.jid,
+            status: { not: 'LEFT' },
+            isEligible: true,
+          },
+          include: {
+            whatsappInstance: true,
+            tags: { include: { tag: true } },
+          },
+        });
+        for (const sub of subGroups) {
+          targetGroupsMap.set(sub.id, sub);
+        }
+      }
+    }
+
+    const finalTargetGroups = Array.from(targetGroupsMap.values());
     let enrolledCount = 0;
 
-    for (const group of eligibleGroups) {
+    for (const group of finalTargetGroups) {
       try {
         const res = await this.enrollGroup(automationId, group.id);
         if (res && (res.started || res.alreadyEnrolled)) {
@@ -1992,7 +2018,7 @@ export class AutomationEngine {
     }
 
     return {
-      totalGroups: eligibleGroups.length,
+      totalGroups: finalTargetGroups.length,
       enrolledCount,
     };
   }

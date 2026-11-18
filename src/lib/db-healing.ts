@@ -35,6 +35,23 @@ export async function healDatabaseSchemaIfNeeded(): Promise<void> {
       }
     }
 
+    const groupColumns: any = await prisma.$queryRawUnsafe('PRAGMA table_info("whatsapp_groups");').catch(() => []);
+    if (Array.isArray(groupColumns)) {
+      const gnames = groupColumns.map((c: any) => c.name);
+      if (!gnames.includes('is_community')) {
+        await prisma.$executeRawUnsafe('ALTER TABLE "whatsapp_groups" ADD COLUMN "is_community" BOOLEAN NOT NULL DEFAULT 0;').catch(() => {});
+      }
+      if (!gnames.includes('is_community_announce')) {
+        await prisma.$executeRawUnsafe('ALTER TABLE "whatsapp_groups" ADD COLUMN "is_community_announce" BOOLEAN NOT NULL DEFAULT 0;').catch(() => {});
+      }
+      if (!gnames.includes('parent_community_jid')) {
+        await prisma.$executeRawUnsafe('ALTER TABLE "whatsapp_groups" ADD COLUMN "parent_community_jid" TEXT;').catch(() => {});
+      }
+      if (!gnames.includes('description')) {
+        await prisma.$executeRawUnsafe('ALTER TABLE "whatsapp_groups" ADD COLUMN "description" TEXT;').catch(() => {});
+      }
+    }
+
     healed = true;
   } catch (err) {
     // Non-blocking

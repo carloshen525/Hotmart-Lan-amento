@@ -671,6 +671,10 @@ model WhatsappGroup {
   adminRole          String?                    @map("admin_role") // 'admin', 'superadmin', 'none', 'unverified'
   status             String                     @default("ACTIVE") // 'ACTIVE', 'LEFT', 'UNVERIFIED', 'NOT_ADMIN'
   isEligible         Boolean                    @default(false) @map("is_eligible") // REGRA FUNDAMENTAL: true ONLY if connected AND confirmed real admin
+  isCommunity        Boolean                    @default(false) @map("is_community") // True se for Comunidade do WhatsApp
+  isCommunityAnnounce Boolean                   @default(false) @map("is_community_announce") // True se for o canal de Avisos da Comunidade
+  parentCommunityJid String?                    @map("parent_community_jid") // JID da Comunidade mãe (se for subgrupo)
+  description        String?                    // Descrição da comunidade ou grupo
   metadata           String?                    // JSON com dados adicionais (proprietário, comunidade, etc.)
   lastSyncedAt       DateTime                   @default(now()) @map("last_synced_at")
   createdAt          DateTime                   @default(now()) @map("created_at")
@@ -685,6 +689,8 @@ model WhatsappGroup {
   @@unique([whatsappInstanceId, jid])
   @@index([tenantId, isEligible])
   @@index([tenantId, status])
+  @@index([tenantId, isCommunity])
+  @@index([tenantId, parentCommunityJid])
   @@map("whatsapp_groups")
 }
 

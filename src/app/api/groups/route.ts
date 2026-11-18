@@ -32,6 +32,8 @@ export async function GET(request: Request) {
     const ineligibleCount = groups.filter((g) => !g.isEligible && g.status === 'NOT_ADMIN').length;
     const unverifiedCount = groups.filter((g) => g.status === 'UNVERIFIED').length;
     const leftCount = groups.filter((g) => g.status === 'LEFT').length;
+    const communitiesCount = groups.filter((g) => (g as any).isCommunity).length;
+    const standardGroupsCount = groups.filter((g) => !(g as any).isCommunity).length;
 
     return NextResponse.json({
       groups,
@@ -42,6 +44,8 @@ export async function GET(request: Request) {
         ineligibleCount,
         unverifiedCount,
         leftCount,
+        communitiesCount,
+        standardGroupsCount,
       },
     });
   } catch (err: any) {

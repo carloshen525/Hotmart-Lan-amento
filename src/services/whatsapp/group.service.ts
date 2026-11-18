@@ -209,6 +209,23 @@ export class WhatsappGroupService {
             leftCount++;
           }
 
+          // Identificação de Comunidades vs Grupos tradicionais
+          const isCommunity = Boolean(
+            group.isCommunity ||
+            group.isParent ||
+            group.isParentGroup ||
+            (group.linkedParent === null && group.isCommunityAnnounce) ||
+            (name && name.toLowerCase().startsWith('[comunidade]'))
+          );
+          const isCommunityAnnounce = Boolean(group.isCommunityAnnounce);
+          const parentCommunityJid = group.linkedParentJid || group.linkedParent || null;
+          const description =
+            typeof group.desc === 'string'
+              ? group.desc
+              : typeof group.description === 'string'
+              ? group.description
+              : null;
+
           // Gravação / Atualização no banco com integridade
           await prisma.whatsappGroup.upsert({
             where: {
@@ -228,13 +245,18 @@ export class WhatsappGroupService {
               adminRole,
               status,
               isEligible,
+              isCommunity,
+              isCommunityAnnounce,
+              parentCommunityJid,
+              description,
               metadata: JSON.stringify({
                 owner: group.owner,
-                isCommunity: Boolean(group.isCommunity || group.isParentGroup || group.linkedParent || group.linkedParentJid || (name && name.toLowerCase().includes('comunidade'))),
-                isCommunityAnnounce: Boolean(group.isCommunityAnnounce),
-                linkedParentJid: group.linkedParentJid || group.linkedParent || null,
+                isCommunity,
+                isCommunityAnnounce,
+                linkedParentJid: parentCommunityJid,
                 creation: group.creation,
                 myRole: adminRole,
+                desc: description,
               }),
               lastSyncedAt: new Date(),
             },
@@ -246,13 +268,18 @@ export class WhatsappGroupService {
               adminRole,
               status,
               isEligible,
+              isCommunity,
+              isCommunityAnnounce,
+              parentCommunityJid,
+              description,
               metadata: JSON.stringify({
                 owner: group.owner,
-                isCommunity: Boolean(group.isCommunity || group.isParentGroup || group.linkedParent || group.linkedParentJid || (name && name.toLowerCase().includes('comunidade'))),
-                isCommunityAnnounce: Boolean(group.isCommunityAnnounce),
-                linkedParentJid: group.linkedParentJid || group.linkedParent || null,
+                isCommunity,
+                isCommunityAnnounce,
+                linkedParentJid: parentCommunityJid,
                 creation: group.creation,
                 myRole: adminRole,
+                desc: description,
               }),
               lastSyncedAt: new Date(),
             },
@@ -468,6 +495,8 @@ export class WhatsappGroupService {
       instanceId?: string;
       tagId?: string;
       status?: string;
+      isCommunity?: boolean;
+      parentCommunityJid?: string;
     } = {}
   ) {
     const where: any = {
@@ -475,12 +504,15 @@ export class WhatsappGroupService {
       ...(options.eligibleOnly ? { isEligible: true } : {}),
       ...(options.instanceId ? { whatsappInstanceId: options.instanceId } : {}),
       ...(options.status ? { status: options.status } : {}),
+      ...(options.isCommunity !== undefined ? { isCommunity: options.isCommunity } : {}),
+      ...(options.parentCommunityJid ? { parentCommunityJid: options.parentCommunityJid } : {}),
     };
 
     if (options.search) {
       where.OR = [
         { name: { contains: options.search } },
         { jid: { contains: options.search } },
+        { description: { contains: options.search } },
       ];
     }
 
@@ -490,7 +522,7 @@ export class WhatsappGroupService {
       };
     }
 
-    return await prisma.whatsappGroup.findMany({
+    const groups = await prisma.whatsappGroup.findMany({
       where,
       include: {
         whatsappInstance: {
@@ -508,7 +540,52 @@ export class WhatsappGroupService {
           },
         },
       },
-      orderBy: [{ isEligible: 'desc' }, { name: 'asc' }],
+      orderBy: [{ isCommunity: 'desc' }, { isEligible: 'desc' }, { name: 'asc' }],
+    });
+
+    // Mapeia todas as comunidades e subgrupos do tenant para cruzamento rápido
+    const allTenantGroups = await prisma.whatsappGroup.findMany({
+      where: { tenantId },
+      select: {
+        id: true,
+        jid: true,
+        name: true,
+        pictureUrl: true,
+        participantsCount: true,
+        isAdmin: true,
+        isEligible: true,
+        isCommunity: true,
+        parentCommunityJid: true,
+        tags: { include: { tag: true } },
+      },
+    });
+
+    const groupsByParentJid = new Map<string, any[]>();
+    const communityNameByJid = new Map<string, string>();
+
+    for (const g of allTenantGroups) {
+      if (g.isCommunity) {
+        communityNameByJid.set(g.jid, g.name);
+      }
+      if (g.parentCommunityJid) {
+        const list = groupsByParentJid.get(g.parentCommunityJid) || [];
+        list.push(g);
+        groupsByParentJid.set(g.parentCommunityJid, list);
+      }
+    }
+
+    // Enriquece cada grupo com dados de comunidade e subgrupos
+    return groups.map((g) => {
+      const isCom = Boolean(g.isCommunity);
+      const subList = isCom ? groupsByParentJid.get(g.jid) || [] : [];
+      const parentName = g.parentCommunityJid ? communityNameByJid.get(g.parentCommunityJid) || null : null;
+
+      return {
+        ...g,
+        subgroups: subList,
+        subgroupsCount: subList.length,
+        parentCommunityName: parentName,
+      };
     });
   }
 

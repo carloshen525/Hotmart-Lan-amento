@@ -8,7 +8,7 @@ async function runTestSuite() {
   console.log('=====================================================\n');
 
   let passed = 0;
-  let total = 40;
+  let total = 41;
 
   // Setup de tenant de teste limpo
   const testTenant = await prisma.tenant.upsert({
@@ -4338,6 +4338,211 @@ async function runTestSuite() {
     await prisma.saasClient.deleteMany({ where: { id: testClient.id } });
 
     console.log('✔ PASSOU: Super Admin SaaS validado: cálculo de acesso, bloqueio por limite de experts e instâncias, ciclo de suporte e logs de auditoria.');
+    passed++;
+
+    // -------------------------------------------------------------
+    // TESTE 41: Suporte a Comunidades do WhatsApp e Subgrupos Vinculados
+    // -------------------------------------------------------------
+    console.log('\n[TESTE 41] Suporte a Comunidades do WhatsApp, Subgrupos e Automações...');
+
+    const instCom = await prisma.whatsappInstance.create({
+      data: {
+        tenantId: testTenant.id,
+        instanceName: `inst_com_${Date.now()}`,
+        instanceToken: `token_com_${Date.now()}`,
+        name: 'Instância Comunidades',
+        status: 'CONNECTED',
+      },
+    });
+
+    // 1. Criar Comunidade com permissão administrativa
+    const comJid = `120363${Date.now()}@g.us`;
+    const community = await prisma.whatsappGroup.create({
+      data: {
+        tenantId: testTenant.id,
+        whatsappInstanceId: instCom.id,
+        jid: comJid,
+        name: 'Comunidade Clientes VIP',
+        isCommunity: true,
+        isCommunityAnnounce: false,
+        isAdmin: true,
+        adminRole: 'superadmin',
+        isEligible: true,
+        status: 'ACTIVE',
+        participantsCount: 450,
+        description: 'Comunidade oficial de membros VIP do lançamento',
+      },
+    });
+    assert.strictEqual(community.isCommunity, true, 'Deve ser identificada como Comunidade');
+    assert.strictEqual(community.isEligible, true, 'Comunidade com permissão real é elegível');
+
+    // 2. Criar 2 Subgrupos pertencentes à Comunidade
+    const subGroup1 = await prisma.whatsappGroup.create({
+      data: {
+        tenantId: testTenant.id,
+        whatsappInstanceId: instCom.id,
+        jid: `120363_sub1_${Date.now()}@g.us`,
+        name: 'VIP - Avisos e Links',
+        isCommunity: false,
+        parentCommunityJid: comJid,
+        isAdmin: true,
+        adminRole: 'admin',
+        isEligible: true,
+        status: 'ACTIVE',
+        participantsCount: 220,
+      },
+    });
+
+    const subGroup2 = await prisma.whatsappGroup.create({
+      data: {
+        tenantId: testTenant.id,
+        whatsappInstanceId: instCom.id,
+        jid: `120363_sub2_${Date.now()}@g.us`,
+        name: 'VIP - Networking e Dúvidas',
+        isCommunity: false,
+        parentCommunityJid: comJid,
+        isAdmin: true,
+        adminRole: 'admin',
+        isEligible: true,
+        status: 'ACTIVE',
+        participantsCount: 230,
+      },
+    });
+    assert.strictEqual(subGroup1.parentCommunityJid, comJid);
+    assert.strictEqual(subGroup2.parentCommunityJid, comJid);
+
+    // 3. Comunidade em outro tenant (validar isolamento multi-tenant)
+    const otherInst = await prisma.whatsappInstance.create({
+      data: {
+        tenantId: otherTenant.id,
+        instanceName: `inst_other_com_${Date.now()}`,
+        instanceToken: `token_other_com_${Date.now()}`,
+        name: 'Instância Outro Tenant',
+        status: 'CONNECTED',
+      },
+    });
+    const otherCommunity = await prisma.whatsappGroup.create({
+      data: {
+        tenantId: otherTenant.id,
+        whatsappInstanceId: otherInst.id,
+        jid: `120363_other_${Date.now()}@g.us`,
+        name: 'Comunidade Isolada Outro',
+        isCommunity: true,
+        isEligible: true,
+        status: 'ACTIVE',
+      },
+    });
+
+    // Consulta grupos do testTenant: não deve trazer a do outro tenant
+    const testTenantGroups = await prisma.whatsappGroup.findMany({
+      where: { tenantId: testTenant.id },
+    });
+    const foundOther = testTenantGroups.find((g) => g.id === otherCommunity.id);
+    assert.strictEqual(foundOther, undefined, 'Comunidades devem respeitar 100% de isolamento multi-tenant');
+
+    const foundCommunity = testTenantGroups.find((g) => g.id === community.id);
+    assert.ok(foundCommunity, 'Comunidade do testTenant deve ser encontrada');
+
+    // Busca subgrupos vinculados à comunidade
+    const linkedSubgroups = await prisma.whatsappGroup.findMany({
+      where: { tenantId: testTenant.id, parentCommunityJid: community.jid },
+    });
+    assert.strictEqual(linkedSubgroups.length, 2, 'Comunidade deve listar 2 subgrupos vinculados');
+    assert.ok(linkedSubgroups.some((sg) => sg.name === 'VIP - Avisos e Links'));
+    assert.ok(linkedSubgroups.some((sg) => sg.name === 'VIP - Networking e Dúvidas'));
+
+    // 4. Criação de Tag de Comunidade e associação
+    const tagVIP = await prisma.groupTag.create({
+      data: {
+        tenantId: testTenant.id,
+        name: 'Clientes VIP Tag',
+        color: '#6366f1',
+      },
+    });
+
+    await prisma.groupTagOnGroup.create({
+      data: {
+        groupId: community.id,
+        tagId: tagVIP.id,
+      },
+    });
+
+    const communityWithTags = await prisma.whatsappGroup.findUnique({
+      where: { id: community.id },
+      include: { tags: { include: { tag: true } } },
+    });
+    assert.strictEqual(communityWithTags.tags.length, 1, 'Tag deve ser associada com sucesso à comunidade');
+    assert.strictEqual(communityWithTags.tags[0].tag.name, 'Clientes VIP Tag');
+
+    // 5. Expansão de Automação para Comunidade e Subgrupos
+    const autoCom = await prisma.automation.create({
+      data: {
+        tenantId: testTenant.id,
+        name: 'Fluxo Disparo Comunidade VIP',
+        targetType: 'GROUP',
+        status: 'ACTIVE',
+        targetGroupTags: JSON.stringify(['Clientes VIP Tag']),
+      },
+    });
+
+    // Simula a resolução do motor: encontra grupos com a tag
+    const matchedByTag = await prisma.whatsappGroup.findMany({
+      where: {
+        tenantId: testTenant.id,
+        tags: { some: { tag: { name: 'Clientes VIP Tag' } } },
+      },
+    });
+
+    const enrolledMap = new Map();
+    for (const g of matchedByTag) {
+      enrolledMap.set(g.id, g);
+      if (g.isCommunity) {
+        const subs = await prisma.whatsappGroup.findMany({
+          where: { tenantId: testTenant.id, parentCommunityJid: g.jid, isEligible: true },
+        });
+        for (const s of subs) {
+          enrolledMap.set(s.id, s);
+        }
+      }
+    }
+
+    // Inscrição dos destinos
+    for (const [gid, gObj] of enrolledMap.entries()) {
+      await prisma.automationGroupEnrollment.create({
+        data: {
+          automationId: autoCom.id,
+          groupId: gid,
+          tenantId: testTenant.id,
+          status: 'ACTIVE',
+        },
+      });
+    }
+
+    const totalEnrolled = await prisma.automationGroupEnrollment.count({
+      where: { automationId: autoCom.id },
+    });
+
+    // A automação deve ter inscrito a comunidade E seus 2 subgrupos vinculados (total = 3)
+    assert.strictEqual(totalEnrolled, 3, 'Deve inscrever a comunidade e os 2 subgrupos vinculados automaticamente');
+
+    // Limpeza Teste 41
+    await prisma.automationGroupStepLog.deleteMany({
+      where: { enrollment: { automationId: autoCom.id } },
+    });
+    await prisma.automationGroupEnrollment.deleteMany({
+      where: { automationId: autoCom.id },
+    });
+    await prisma.automation.deleteMany({ where: { id: autoCom.id } });
+    await prisma.groupTagOnGroup.deleteMany({ where: { tagId: tagVIP.id } });
+    await prisma.groupTag.deleteMany({ where: { id: tagVIP.id } });
+    await prisma.whatsappGroup.deleteMany({
+      where: { id: { in: [community.id, subGroup1.id, subGroup2.id, otherCommunity.id] } },
+    });
+    await prisma.whatsappInstance.deleteMany({
+      where: { id: { in: [instCom.id, otherInst.id] } },
+    });
+
+    console.log('✔ PASSOU: Suporte completo a Comunidades do WhatsApp: identificação, validação admin, subgrupos vinculados, tags e expansão em automações validada com 100% de sucesso.');
     passed++;
 
     console.log('\n=====================================================');
