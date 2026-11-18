@@ -294,14 +294,8 @@ export class AutomationScheduler {
               },
             });
 
-            const outgoingEdges = edges.filter((e) => e.source === currentNode.id);
-            if (outgoingEdges.length === 0) {
-              await automationEngine.advanceGroupNode(enr.id, currentNode.id, enr.tenantId, enr.automation.id);
-            } else {
-              for (const edge of outgoingEdges) {
-                await automationEngine.executeGroupNode(enr.id, edge.target, enr.tenantId);
-              }
-            }
+            // Avança para a próxima etapa através da máquina de estados
+            await automationEngine.advanceGroupNode(enr.id, currentNode.id, enr.tenantId, enr.automation.id);
             processed++;
           }
         } catch (enrErr: any) {
@@ -389,14 +383,8 @@ export class AutomationScheduler {
               },
             });
 
-            const outgoingEdges = edges.filter((e) => e.source === currentNode.id);
-            if (outgoingEdges.length === 0) {
-              await automationEngine.advanceGroupNode(enr.id, currentNode.id, enr.tenantId, enr.automation.id);
-            } else {
-              for (const edge of outgoingEdges) {
-                await automationEngine.executeGroupNode(enr.id, edge.target, enr.tenantId);
-              }
-            }
+            // Avança para a próxima etapa através da máquina de estados
+            await automationEngine.advanceGroupNode(enr.id, currentNode.id, enr.tenantId, enr.automation.id);
             processed++;
           }
         } catch (logErr: any) {

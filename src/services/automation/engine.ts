@@ -2164,8 +2164,8 @@ export class AutomationEngine {
     });
 
     if (existingEnrollment) {
-      // Se já estava concluído, verifica se foram adicionadas novas etapas ao fluxo!
-      await this.checkAndAdvanceNewGroupNodes(existingEnrollment.id, automation);
+      // O grupo já possui inscrição ativa nesta automação e evolui de forma autônoma pela máquina de estados.
+      // NUNCA percorre todos os nós para não atropelar a sequência!
       return { enrollmentId: existingEnrollment.id, alreadyEnrolled: true };
     }
 
@@ -2234,7 +2234,7 @@ export class AutomationEngine {
       include: {
         automation: true,
         group: {
-          include: { whatsappInstance: true },
+          include: { whatsappInstance: true, tags: { include: { tag: true } } },
         },
       },
     });
@@ -2243,24 +2243,29 @@ export class AutomationEngine {
       return;
     }
 
-    if (enrollment.status === 'COMPLETED') {
-      // Reativa a inscrição se um novo nó ou ramo pendente precisa ser executado
-      await prisma.automationGroupEnrollment.update({
-        where: { id: enrollmentId },
-        data: { status: 'ACTIVE', completedAt: null },
-      });
-      enrollment.status = 'ACTIVE';
+    const { automation, group } = enrollment;
+
+    // 1. Validação de fluxo ativo e integridade do grupo
+    if (automation.status !== 'ACTIVE') {
+      console.log(`[STATE MACHINE - BLOQUEIO] Fluxo "${automation.name}" não está ativo (status: ${automation.status}).`);
+      return;
     }
 
-    const { automation, group } = enrollment;
+    if (group.status === 'LEFT') {
+      console.log(`[STATE MACHINE - BLOQUEIO] Instância não participa mais do grupo ${group.name} (${group.jid}).`);
+      return;
+    }
+
     const nodes: WorkflowNode[] = JSON.parse(automation.nodes || '[]');
     const edges: WorkflowEdge[] = JSON.parse(automation.edges || '[]');
 
     const node = nodes.find((n) => n.id === nodeId);
     if (!node) return;
 
-    // Regra: Evita reexecução do mesmo nó que já foi executado ou está enfileirado/processando para este grupo
-    // CRÍTICO: 'WAIT_TIMER' indica que o nó ainda está aguardando o horário, NUNCA que foi concluído!
+    const nodeType = node.data?.type || node.type;
+
+    // 2. Regra Anti-Duplicação e Idempotência:
+    // Se o nó já foi concluído (SUCCESS) ou está em processamento (QUEUED / PROCESSING), NÃO reexecuta!
     const existingLog = await prisma.automationGroupStepLog.findFirst({
       where: {
         enrollmentId,
@@ -2271,24 +2276,117 @@ export class AutomationEngine {
     });
 
     if (existingLog) {
-      if (existingLog.status === 'SUCCESS') {
-        // Já foi concluído: avança diretamente para as próximas etapas
-        const outgoingEdges = edges.filter((e) => e.source === nodeId);
-        for (const edge of outgoingEdges) {
-          await this.executeGroupNode(enrollmentId, edge.target, tenantId);
-        }
-      }
-      // Se estiver em QUEUED ou PROCESSING, não re-executa nem duplica mensagem
+      console.log(
+        `[STATE MACHINE] Etapa "${node.data?.label || nodeType}" (${nodeId}) já executada/em fila para o grupo ${group.name} (status: ${existingLog.status}).`
+      );
       return;
     }
 
-    // Atualiza o nó atual do grupo
-    await prisma.automationGroupEnrollment.update({
-      where: { id: enrollmentId },
-      data: { currentNodeId: nodeId },
+    // 3. VALIDAÇÃO DE PRÉ-REQUISITOS (DEPENDÊNCIA SEQUENCIAL ESTRITA)
+    // Uma etapa SOMENTE pode ser executada se TODAS as etapas anteriores conectadas a ela
+    // tiverem sido previamente concluídas com SUCCESS (e nunca com WAIT_TIMER pendente).
+    const incomingEdges = edges.filter((e) => e.target === nodeId);
+    if (incomingEdges.length > 0) {
+      for (const inc of incomingEdges) {
+        const sourceLog = await prisma.automationGroupStepLog.findFirst({
+          where: {
+            enrollmentId,
+            nodeId: inc.source,
+            status: 'SUCCESS',
+            action: { not: 'WAIT_TIMER' },
+          },
+        });
+
+        if (!sourceLog) {
+          const sourceNode = nodes.find((n) => n.id === inc.source);
+          console.log(
+            `[STATE MACHINE - BLOQUEIO SEQUENCIAL]\n` +
+            `Grupo: ${group.name} (${group.jid})\n` +
+            `Fluxo: ${automation.name} (${automation.id})\n` +
+            `Etapa tentada: ${node.data?.label || nodeType} (${nodeId})\n` +
+            `Motivo do bloqueio: A etapa anterior "${sourceNode?.data?.label || inc.source}" ainda não foi concluída com sucesso.\n` +
+            `Horário: ${formatBrasiliaDateTime(Date.now())}`
+          );
+          return;
+        }
+      }
+    }
+
+    // 4. VALIDAÇÃO DE TIMER BLOQUEANTE
+    // O timer representa uma pausa obrigatória na execução.
+    // Enquanto qualquer timer estiver aguardando seu horário, NENHUMA etapa subsequente pode iniciar.
+    const waitLogs = await prisma.automationGroupStepLog.findMany({
+      where: {
+        enrollmentId,
+        action: 'WAIT_TIMER',
+      },
     });
 
-    const nodeType = node.data?.type || node.type;
+    if (waitLogs.length > 0) {
+      const passedLogs = await prisma.automationGroupStepLog.findMany({
+        where: {
+          enrollmentId,
+          action: { in: ['TIMER_PASSED', 'TIMER_EXPIRED_SKIPPED'] },
+        },
+        select: { nodeId: true },
+      });
+      const passedIds = new Set(passedLogs.map((p) => p.nodeId));
+      const pendingTimer = waitLogs.find((w) => !passedIds.has(w.nodeId));
+
+      if (pendingTimer && pendingTimer.nodeId !== nodeId) {
+        const timerNode = nodes.find((n) => n.id === pendingTimer.nodeId);
+        console.log(
+          `[STATE MACHINE - BLOQUEIO TIMER]\n` +
+          `Grupo: ${group.name} (${group.jid})\n` +
+          `Fluxo: ${automation.name} (${automation.id})\n` +
+          `Etapa tentada: ${node.data?.label || nodeType} (${nodeId})\n` +
+          `Motivo do bloqueio: O grupo está em pausa obrigatória no timer "${timerNode?.data?.label || pendingTimer.nodeId}". Nenhuma etapa futura pode ser executada até a conclusão do timer.\n` +
+          `Horário: ${formatBrasiliaDateTime(Date.now())}`
+        );
+        return;
+      }
+    }
+
+    if (enrollment.status === 'COMPLETED') {
+      await prisma.automationGroupEnrollment.update({
+        where: { id: enrollmentId },
+        data: { status: 'ACTIVE', completedAt: null },
+      });
+      enrollment.status = 'ACTIVE';
+    }
+
+    // 5. ATUALIZAÇÃO DA MÁQUINA DE ESTADOS (GRUPO / ETAPA ATUAL / PRÓXIMA ETAPA)
+    const outgoingEdges = edges.filter((e) => e.source === nodeId);
+    const nextNode = outgoingEdges.length > 0 ? nodes.find((n) => n.id === outgoingEdges[0].target) : null;
+    const nextStepLabel = nextNode?.data?.label || (nextNode ? nextNode.type : 'Fim do Fluxo');
+
+    await prisma.automationGroupEnrollment.update({
+      where: { id: enrollmentId },
+      data: {
+        currentNodeId: nodeId,
+        metadata: JSON.stringify({
+          currentStepId: nodeId,
+          currentStepType: nodeType,
+          currentStepLabel: node.data?.label || nodeType,
+          nextStepId: nextNode?.id || null,
+          nextStepLabel,
+          stepStatus: 'EXECUTING',
+          lastExecutedAt: new Date().toISOString(),
+          updatedAt: new Date().toISOString(),
+        }),
+      },
+    });
+
+    console.log(
+      `[STATE MACHINE - EXECUÇÃO]\n` +
+      `Grupo: ${group.name} (${group.jid})\n` +
+      `Fluxo: ${automation.name} (${automation.id})\n` +
+      `Etapa atual: ${node.data?.label || nodeType} (${nodeId})\n` +
+      `Próxima etapa: ${nextStepLabel} (${nextNode?.id || 'FIM'})\n` +
+      `Horário: ${formatBrasiliaDateTime(Date.now())}\n` +
+      `Resultado: INICIADO\n` +
+      `Tempo aguardado: 0s`
+    );
 
     // 1. Nó do tipo TIMER
     if (nodeType === 'timer' || nodeType === 'delay') {
@@ -2762,6 +2860,54 @@ export class AutomationEngine {
       return;
     }
 
+    // 2.3. Nó de Condição / Decisão
+    if ((nodeType as string) === 'condition' || (nodeType as string) === 'condicao') {
+      const config = node.data?.config || {};
+      const condType = config.conditionType || config.type || 'has_tag';
+      let conditionResult = false;
+      let reason = '';
+
+      if (condType === 'has_tag') {
+        const targetTag = (config.tagName || config.tag || '').toLowerCase().trim();
+        const groupTags = group.tags?.map((t: any) => t.tag?.name?.toLowerCase().trim()) || [];
+        conditionResult = groupTags.includes(targetTag) || groupTags.includes(`#${targetTag.replace(/^#/, '')}`);
+        reason = conditionResult ? `Grupo possui a tag "${targetTag}"` : `Grupo NÃO possui a tag "${targetTag}"`;
+      } else if (condType === 'is_admin') {
+        conditionResult = Boolean(group.isAdmin);
+        reason = conditionResult ? 'Instância é administradora do grupo' : 'Instância NÃO é administradora';
+      } else if (condType === 'is_community') {
+        conditionResult = Boolean((group as any).isCommunity);
+        reason = conditionResult ? 'Grupo é uma Comunidade' : 'Grupo NÃO é uma Comunidade';
+      } else {
+        conditionResult = true;
+        reason = 'Condição padrão atendida';
+      }
+
+      await prisma.automationGroupStepLog.create({
+        data: {
+          enrollmentId,
+          groupId: group.id,
+          tenantId,
+          nodeId,
+          nodeType: 'condition',
+          action: 'CONDITION_EVALUATED',
+          status: 'SUCCESS',
+          details: JSON.stringify({
+            conditionType: condType,
+            result: conditionResult,
+            reason,
+          }),
+        },
+      });
+
+      const chosenHandle = conditionResult ? 'true' : 'false';
+      console.log(
+        `[STATE MACHINE - CONDIÇÃO] Grupo: ${group.name} | Resultado: ${conditionResult} (${reason}) | Ramo selecionado: ${chosenHandle}`
+      );
+      await this.advanceGroupNode(enrollmentId, nodeId, tenantId, automation.id, chosenHandle);
+      return;
+    }
+
     // 3. Outros nós (Ações, Tags de Grupos, etc.)
     await prisma.automationGroupStepLog.create({
       data: {
@@ -2783,7 +2929,13 @@ export class AutomationEngine {
   /**
    * Avança a inscrição do grupo após a conclusão de um nó
    */
-  async advanceGroupNode(enrollmentId: string, currentNodeId: string, tenantId: string, automationId?: string): Promise<void> {
+  async advanceGroupNode(
+    enrollmentId: string,
+    currentNodeId: string,
+    tenantId: string,
+    automationId?: string,
+    chosenHandle?: string
+  ): Promise<void> {
     const enrollment = await prisma.automationGroupEnrollment.findUnique({
       where: { id: enrollmentId },
       include: { automation: true },
@@ -2794,7 +2946,15 @@ export class AutomationEngine {
     const automation = enrollment.automation;
     const edges: WorkflowEdge[] = JSON.parse(automation.edges || '[]');
 
-    const outgoingEdges = edges.filter((e) => e.source === currentNodeId);
+    let outgoingEdges = edges.filter((e) => e.source === currentNodeId);
+    if (chosenHandle) {
+      outgoingEdges = outgoingEdges.filter(
+        (e) =>
+          e.sourceHandle === chosenHandle ||
+          (chosenHandle === 'true' && ((e as any).label === 'SIM' || (e as any).label === 'Sim' || (e as any).sourceHandle === 'sim')) ||
+          (chosenHandle === 'false' && ((e as any).label === 'NÃO' || (e as any).label === 'Não' || (e as any).sourceHandle === 'nao'))
+      );
+    }
 
     if (outgoingEdges.length === 0) {
       // Verifica se outros ramos ainda estão aguardando timers ou possuem nós pendentes
@@ -2825,11 +2985,6 @@ export class AutomationEngine {
       const executedNodeIds = new Set(successLogs.map((l) => l.nodeId));
       executedNodeIds.add(currentNodeId);
 
-      // Verifica se existe alguma aresta cujo source foi executado mas o target ainda não foi executado
-      const hasUnexecutedConnectedNodes = edges.some(
-        (edge) => executedNodeIds.has(edge.source) && !executedNodeIds.has(edge.target)
-      );
-
       // Verifica se existem itens na fila do WhatsApp pendentes ou processando para este enrollment
       let hasPendingQueue = false;
       try {
@@ -2859,12 +3014,17 @@ export class AutomationEngine {
         return;
       }
 
+      // Verifica se existe alguma outra ramificação ainda em andamento no fluxo
+      const hasUnexecutedConnectedNodes = edges.some(
+        (edge) => executedNodeIds.has(edge.source) && !executedNodeIds.has(edge.target)
+      );
+
       if (hasUnexecutedConnectedNodes) {
+        // Outro ramo ainda está sendo processado na sua vez; mantém o grupo ativo sem avançar nós prematuramente
         await prisma.automationGroupEnrollment.update({
           where: { id: enrollmentId },
           data: { status: 'ACTIVE' },
         });
-        await this.checkAndAdvanceNewGroupNodes(enrollmentId, automation);
         return;
       }
 
