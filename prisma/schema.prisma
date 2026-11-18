@@ -11,15 +11,22 @@ datasource db {
 // 1. GESTÃO DE TENANTS (EXPERTS) E USUÁRIOS
 // -------------------------------------------------------------
 model User {
-  id           String             @id @default(cuid())
-  name         String
-  email        String             @unique
-  passwordHash String
-  role         String             @default("OPERATOR") // ADMIN, MANAGER, EXPERT, OPERATOR
-  createdAt    DateTime           @default(now())
-  updatedAt    DateTime           @updatedAt
-  memberships  TenantMembership[]
-  auditLogs    AuditLog[]
+  id                String             @id @default(cuid())
+  name              String
+  email             String             @unique
+  passwordHash      String
+  role              String             @default("USUARIO") // SUPER_ADMIN, ADMIN_CLIENTE, USUARIO (ADMIN, MANAGER, EXPERT, OPERATOR)
+  phone             String?
+  status            String             @default("ACTIVE") // ACTIVE, BLOCKED
+  clientId          String?
+  client            SaasClient?        @relation(fields: [clientId], references: [id], onDelete: SetNull)
+  createdAt         DateTime           @default(now())
+  updatedAt         DateTime           @updatedAt
+  memberships       TenantMembership[]
+  auditLogs         AuditLog[]
+  whatsappInstances WhatsappInstance[]
+  tickets           SupportTicket[]
+  messages          SupportMessage[]
 }
 
 model Tenant {
@@ -32,6 +39,8 @@ model Tenant {
   hotmartHottok      String?            // Token secreto Hotmart do expert
   hotmartAccountId   String?
   status             String             @default("ACTIVE") // ACTIVE, SUSPENDED
+  clientId           String?
+  client             SaasClient?        @relation(fields: [clientId], references: [id], onDelete: SetNull)
   createdAt          DateTime           @default(now())
   updatedAt          DateTime           @updatedAt
 
@@ -338,6 +347,7 @@ model AuditLog {
 model WhatsappInstance {
   id              String    @id @default(cuid())
   tenantId        String
+  userId          String?
   name            String?   // Apelido / Nome amigável (ex: "Denis Dominique - Principal", "Suporte Vendas")
   instanceName    String    @unique
   instanceToken   String
@@ -356,9 +366,11 @@ model WhatsappInstance {
   updatedAt       DateTime  @updatedAt
 
   tenant          Tenant    @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+  user            User?     @relation(fields: [userId], references: [id], onDelete: SetNull)
   whatsappQueue   WhatsappQueue[]
   whatsappGroups  WhatsappGroup[]
   @@index([tenantId])
+  @@index([tenantId, userId])
 }
 
 // -------------------------------------------------------------
@@ -748,4 +760,97 @@ model AutomationGroupStepLog {
   @@index([groupId])
   @@index([tenantId])
   @@map("automation_group_step_logs")
+}
+
+// -------------------------------------------------------------
+// 12. GESTÃO SAAS SUPER ADMINISTRADOR (CLIENTES, LIMITES, RECORRÊNCIA & SUPORTE)
+// -------------------------------------------------------------
+model SaasClient {
+  id                   String          @id @default(cuid())
+  name                 String
+  company              String?
+  email                String          @unique
+  phone                String?
+  status               String          @default("ACTIVE") // ACTIVE, BLOCKED, EXPIRED
+  plan                 String          @default("Pro") // Starter, Pro, Enterprise, etc.
+  monthlyPrice         Float           @default(197.0) // MRR
+  billingCycle         String          @default("MONTHLY") // MONTHLY, QUARTERLY, ANNUAL
+  startDate            DateTime        @default(now())
+  accessDays           Int             @default(30)
+  expiresAt            DateTime
+  maxExperts           Int             @default(5)
+  maxWhatsappInstances Int             @default(3)
+  notes                String?
+  createdAt            DateTime        @default(now())
+  updatedAt            DateTime        @updatedAt
+
+  users                User[]
+  tenants              Tenant[]
+  tickets              SupportTicket[]
+  auditLogs            SaasAuditLog[]
+
+  @@map("saas_clients")
+}
+
+model SupportTicket {
+  id            String           @id @default(cuid())
+  clientId      String?          @map("client_id")
+  tenantId      String?          @map("tenant_id")
+  userId        String           @map("user_id")
+  subject       String
+  message       String
+  priority      String           @default("MEDIUM") // LOW, MEDIUM, HIGH, URGENT
+  status        String           @default("OPEN") // OPEN, IN_PROGRESS, RESOLVED
+  attachmentUrl String?          @map("attachment_url")
+  createdAt     DateTime         @default(now()) @map("created_at")
+  updatedAt     DateTime         @updatedAt @map("updated_at")
+
+  client        SaasClient?      @relation(fields: [clientId], references: [id], onDelete: Cascade)
+  user          User             @relation(fields: [userId], references: [id], onDelete: Cascade)
+  messages      SupportMessage[]
+
+  @@index([clientId])
+  @@index([userId])
+  @@index([status])
+  @@map("support_tickets")
+}
+
+model SupportMessage {
+  id            String        @id @default(cuid())
+  ticketId      String        @map("ticket_id")
+  senderId      String        @map("sender_id")
+  senderName    String        @map("sender_name")
+  senderRole    String        @default("USUARIO") @map("sender_role") // SUPER_ADMIN, ADMIN_CLIENTE, USUARIO
+  message       String
+  attachmentUrl String?       @map("attachment_url")
+  createdAt     DateTime      @default(now()) @map("created_at")
+
+  ticket        SupportTicket @relation(fields: [ticketId], references: [id], onDelete: Cascade)
+  sender        User          @relation(fields: [senderId], references: [id], onDelete: Cascade)
+
+  @@index([ticketId])
+  @@map("support_messages")
+}
+
+model SaasAuditLog {
+  id          String      @id @default(cuid())
+  clientId    String?     @map("client_id")
+  userId      String?     @map("user_id")
+  userEmail   String?     @map("user_email")
+  userName    String?     @map("user_name")
+  action      String
+  entityType  String      @map("entity_type")
+  entityId    String?     @map("entity_id")
+  description String
+  beforeData  String?     @map("before_data")
+  afterData   String?     @map("after_data")
+  ipAddress   String?     @map("ip_address")
+  createdAt   DateTime    @default(now()) @map("created_at")
+
+  client      SaasClient? @relation(fields: [clientId], references: [id], onDelete: Cascade)
+
+  @@index([clientId])
+  @@index([action])
+  @@index([createdAt])
+  @@map("saas_audit_logs")
 }

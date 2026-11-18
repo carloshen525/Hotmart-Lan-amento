@@ -52,7 +52,7 @@ export async function getActiveTenant() {
 }
 
 export async function ensureTenantAccess(tenantId: string, userId: string, userGlobalRole: string) {
-  if (userGlobalRole === 'ADMIN') return true;
+  if (userGlobalRole === 'SUPER_ADMIN' || userGlobalRole === 'ADMIN') return true;
 
   const membership = await prisma.tenantMembership.findUnique({
     where: {
@@ -61,11 +61,79 @@ export async function ensureTenantAccess(tenantId: string, userId: string, userG
         userId,
       },
     },
+    include: {
+      tenant: {
+        include: { client: true },
+      },
+    },
   });
 
   if (!membership) {
     throw new Error('Acesso negado: você não tem permissão para acessar este expert');
   }
 
+  // Verifica se o cliente do tenant está ativo e dentro da validade
+  const client = membership.tenant.client;
+  if (client) {
+    if (client.status === 'BLOCKED') {
+      throw new Error('Acesso suspenso: Sua conta de cliente foi bloqueada pelo administrador.');
+    }
+    if (client.expiresAt && client.expiresAt.getTime() < Date.now()) {
+      throw new Error('Acesso expirado: O período de validade do seu plano expirou. Contate o suporte para renovar.');
+    }
+  }
+
   return true;
+}
+
+/**
+ * Valida se o cliente ainda pode criar novos experts de acordo com o plano
+ */
+export async function checkCanCreateExpert(clientId?: string | null): Promise<void> {
+  if (!clientId) return;
+  const client = await prisma.saasClient.findUnique({
+    where: { id: clientId },
+    include: { _count: { select: { tenants: true } } },
+  });
+  if (!client) return;
+
+  if (client.status === 'BLOCKED') {
+    throw new Error('Sua conta está bloqueada pelo administrador.');
+  }
+  if (client.expiresAt && client.expiresAt.getTime() < Date.now()) {
+    throw new Error('Seu plano está expirado. Renove para criar novos experts.');
+  }
+
+  const currentCount = client._count.tenants;
+  if (currentCount >= client.maxExperts) {
+    throw new Error('Você atingiu o limite de experts do seu plano.');
+  }
+}
+
+/**
+ * Valida se o cliente ainda pode conectar novas instâncias de WhatsApp de acordo com o plano
+ */
+export async function checkCanCreateWhatsappInstance(tenantId: string): Promise<void> {
+  const tenant = await prisma.tenant.findUnique({
+    where: { id: tenantId },
+    include: { client: true },
+  });
+  if (!tenant || !tenant.clientId || !tenant.client) return;
+
+  const client = tenant.client;
+  if (client.status === 'BLOCKED') {
+    throw new Error('Sua conta está bloqueada pelo administrador.');
+  }
+  if (client.expiresAt && client.expiresAt.getTime() < Date.now()) {
+    throw new Error('Seu plano está expirado. Renove para conectar novas instâncias.');
+  }
+
+  // Conta total de instâncias cadastradas em todos os experts deste cliente
+  const currentCount = await prisma.whatsappInstance.count({
+    where: { tenant: { clientId: client.id } },
+  });
+
+  if (currentCount >= client.maxWhatsappInstances) {
+    throw new Error('Você atingiu o limite de instâncias WhatsApp do seu plano.');
+  }
 }

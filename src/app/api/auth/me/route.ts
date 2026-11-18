@@ -1,6 +1,6 @@
 import { NextResponse } from 'next/server';
 import { cookies } from 'next/headers';
-import { getCurrentSession } from '@/lib/auth';
+import { getCurrentSession, isSuperAdmin } from '@/lib/auth';
 import { prisma } from '@/lib/prisma';
 
 export async function GET() {
@@ -24,11 +24,13 @@ export async function GET() {
 
     return NextResponse.json({
       authenticated: true,
+      isSuperAdmin: isSuperAdmin(session.globalRole),
       user: {
         id: session.userId,
         name: session.name,
         email: session.email,
         role: session.globalRole,
+        clientId: session.clientId,
       },
       activeTenant,
       allTenants: userWithTenants?.memberships.map((m) => m.tenant) || [],

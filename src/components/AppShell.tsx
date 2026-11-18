@@ -7,6 +7,7 @@ import { Header } from '@/components/Header';
 export function AppShell({ children }: { children: React.ReactNode }) {
   const pathname = usePathname();
   const isAuthPage = pathname === '/login';
+  const isAdminPage = pathname.startsWith('/admin');
 
   if (isAuthPage) {
     return (
@@ -14,6 +15,11 @@ export function AppShell({ children }: { children: React.ReactNode }) {
         {children}
       </div>
     );
+  }
+
+  // O Painel Super Admin possui seu próprio layout completo, isolado e autônomo
+  if (isAdminPage) {
+    return <>{children}</>;
   }
 
   return (

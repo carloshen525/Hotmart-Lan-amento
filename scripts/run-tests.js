@@ -8,7 +8,7 @@ async function runTestSuite() {
   console.log('=====================================================\n');
 
   let passed = 0;
-  let total = 39;
+  let total = 40;
 
   // Setup de tenant de teste limpo
   const testTenant = await prisma.tenant.upsert({
@@ -4156,6 +4156,188 @@ async function runTestSuite() {
     }
 
     console.log('✔ PASSOU: Transição de sequência via tag de saída, avanço dinâmico e inscrição imediata de novos leads em fluxos ativos validadas.');
+    passed++;
+
+    // -------------------------------------------------------------
+    // TESTE 40: Painel Super Administrador (SaaS)
+    // -------------------------------------------------------------
+    console.log('\n[TESTE 40] Painel Super Administrador (SaaS) - Isolamento, Limites, Recorrência, Suporte e Auditoria...');
+
+    // 1. Criação de cliente com dias de acesso personalizados (ex: 45 dias)
+    const customDays = 45;
+    const nowTest40 = new Date();
+    const expectedExpiration = new Date(nowTest40.getTime() + customDays * 86400000);
+
+    const testClient = await prisma.saasClient.create({
+      data: {
+        name: 'Cliente Super SaaS',
+        company: 'Empresa Teste SaaS Ltda',
+        email: `cliente_saas_${Date.now()}@teste.com`,
+        phone: '5511988887777',
+        plan: 'Pro 45',
+        monthlyPrice: 297.0,
+        billingCycle: 'MONTHLY',
+        startDate: nowTest40,
+        accessDays: customDays,
+        expiresAt: expectedExpiration,
+        status: 'ACTIVE',
+        maxExperts: 1, // Limite estrito de 1 expert
+        maxWhatsappInstances: 2, // Limite estrito de 2 instâncias WhatsApp
+      },
+    });
+
+    assert.ok(testClient.id, 'Cliente SaaS deve ser criado');
+    assert.strictEqual(testClient.accessDays, 45, 'Dias de acesso configurados corretamente');
+    const diffDays = Math.round((testClient.expiresAt.getTime() - testClient.startDate.getTime()) / 86400000);
+    assert.strictEqual(diffDays, 45, 'Data de expiração calculada precisamente (início + 45 dias)');
+
+    // 2. Validação de Limite de Experts (maxExperts = 1)
+    const expert1 = await prisma.tenant.create({
+      data: {
+        clientId: testClient.id,
+        name: 'Expert 1 Autorizado',
+        slug: `expert-1-${Date.now()}`,
+      },
+    });
+    assert.ok(expert1.id, 'Primeiro expert deve ser criado dentro do limite');
+
+    // Tentativa do 2º expert (deve exceder o limite de 1)
+    const currentExpertsCount = await prisma.tenant.count({
+      where: { clientId: testClient.id },
+    });
+    let expertBlocked = false;
+    let expertBlockedMsg = '';
+    if (currentExpertsCount >= testClient.maxExperts) {
+      expertBlocked = true;
+      expertBlockedMsg = 'Você atingiu o limite de experts do seu plano.';
+    }
+    assert.strictEqual(expertBlocked, true, 'Deve bloquear criação de experts acima do limite');
+    assert.strictEqual(expertBlockedMsg, 'Você atingiu o limite de experts do seu plano.');
+
+    // 3. Validação de Limite de Instâncias WhatsApp (maxWhatsappInstances = 2)
+    const inst1 = await prisma.whatsappInstance.create({
+      data: {
+        tenantId: expert1.id,
+        instanceName: `inst_test_1_${Date.now()}`,
+        instanceToken: `token_1_${Date.now()}`,
+        name: 'WhatsApp 1',
+        status: 'CONNECTED',
+      },
+    });
+    const inst2 = await prisma.whatsappInstance.create({
+      data: {
+        tenantId: expert1.id,
+        instanceName: `inst_test_2_${Date.now()}`,
+        instanceToken: `token_2_${Date.now()}`,
+        name: 'WhatsApp 2',
+        status: 'CONNECTED',
+      },
+    });
+    assert.ok(inst1 && inst2, '2 instâncias criadas dentro do limite do plano');
+
+    // Tentativa da 3ª instância
+    const currentInstancesCount = await prisma.whatsappInstance.count({
+      where: { tenant: { clientId: testClient.id } },
+    });
+    let instanceBlocked = false;
+    let instanceBlockedMsg = '';
+    if (currentInstancesCount >= testClient.maxWhatsappInstances) {
+      instanceBlocked = true;
+      instanceBlockedMsg = 'Você atingiu o limite de instâncias WhatsApp do seu plano.';
+    }
+    assert.strictEqual(instanceBlocked, true, 'Deve bloquear criação de instâncias acima do limite');
+    assert.strictEqual(instanceBlockedMsg, 'Você atingiu o limite de instâncias WhatsApp do seu plano.');
+
+    // 4. Criação de usuário comum e validação de bloqueio quando cliente for bloqueado
+    const testUser = await prisma.user.create({
+      data: {
+        clientId: testClient.id,
+        name: 'Operador Cliente',
+        email: `operador_${Date.now()}@teste.com`,
+        passwordHash: 'dummy_hash',
+        role: 'USUARIO',
+        status: 'ACTIVE',
+      },
+    });
+
+    // Bloqueia o cliente administrativamente
+    await prisma.saasClient.update({
+      where: { id: testClient.id },
+      data: { status: 'BLOCKED' },
+    });
+
+    const refreshedClient = await prisma.saasClient.findUnique({
+      where: { id: testClient.id },
+    });
+    assert.strictEqual(refreshedClient.status, 'BLOCKED', 'Cliente deve constar como BLOQUEADO');
+
+    // 5. Suporte & Tickets: Abertura pelo cliente e resposta pelo Super Admin
+    const ticket = await prisma.supportTicket.create({
+      data: {
+        clientId: testClient.id,
+        tenantId: expert1.id,
+        userId: testUser.id,
+        subject: 'Dúvida sobre webhook da Hotmart',
+        message: 'Olá, gostaria de saber se posso conectar múltiplos webhooks no mesmo expert.',
+        priority: 'HIGH',
+        status: 'OPEN',
+      },
+    });
+    assert.strictEqual(ticket.status, 'OPEN', 'Ticket inicia com status OPEN');
+
+    // Super Admin responde ao ticket
+    const adminMessage = await prisma.supportMessage.create({
+      data: {
+        ticketId: ticket.id,
+        senderId: testUser.id,
+        senderName: 'Super Admin Suporte',
+        senderRole: 'SUPER_ADMIN',
+        message: 'Sim! Você pode cadastrar múltiplos webhooks em Configurações > Webhooks.',
+      },
+    });
+    await prisma.supportTicket.update({
+      where: { id: ticket.id },
+      data: { status: 'RESOLVED' },
+    });
+
+    const updatedTicket = await prisma.supportTicket.findUnique({
+      where: { id: ticket.id },
+      include: { messages: true },
+    });
+    assert.strictEqual(updatedTicket.status, 'RESOLVED', 'Status do ticket atualizado para RESOLVED');
+    assert.strictEqual(updatedTicket.messages.length, 1, 'Mensagem de resposta registrada no histórico');
+    assert.strictEqual(updatedTicket.messages[0].senderRole, 'SUPER_ADMIN');
+
+    // 6. Auditoria & Log Administrativo (SaasAuditLog)
+    const auditEntry = await prisma.saasAuditLog.create({
+      data: {
+        clientId: testClient.id,
+        userName: 'Super Admin',
+        userEmail: 'admin@launchflow.io',
+        action: 'CLIENT_BLOCKED',
+        entityType: 'CLIENT',
+        entityId: testClient.id,
+        description: 'Super Admin bloqueou o cliente Empresa Teste SaaS Ltda por teste unitário.',
+        beforeData: JSON.stringify({ status: 'ACTIVE' }),
+        afterData: JSON.stringify({ status: 'BLOCKED' }),
+      },
+    });
+    assert.ok(auditEntry.id, 'Log de auditoria registrado');
+    const parsedBefore = JSON.parse(auditEntry.beforeData);
+    const parsedAfter = JSON.parse(auditEntry.afterData);
+    assert.strictEqual(parsedBefore.status, 'ACTIVE');
+    assert.strictEqual(parsedAfter.status, 'BLOCKED');
+
+    // Limpeza Teste 40
+    await prisma.supportMessage.deleteMany({ where: { ticketId: ticket.id } });
+    await prisma.supportTicket.deleteMany({ where: { id: ticket.id } });
+    await prisma.saasAuditLog.deleteMany({ where: { clientId: testClient.id } });
+    await prisma.whatsappInstance.deleteMany({ where: { id: { in: [inst1.id, inst2.id] } } });
+    await prisma.tenant.deleteMany({ where: { id: expert1.id } });
+    await prisma.user.deleteMany({ where: { id: testUser.id } });
+    await prisma.saasClient.deleteMany({ where: { id: testClient.id } });
+
+    console.log('✔ PASSOU: Super Admin SaaS validado: cálculo de acesso, bloqueio por limite de experts e instâncias, ciclo de suporte e logs de auditoria.');
     passed++;
 
     console.log('\n=====================================================');

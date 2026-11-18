@@ -2,6 +2,7 @@
 
 import Link from 'next/link';
 import { usePathname } from 'next/navigation';
+import { useState, useEffect } from 'react';
 import {
   LayoutDashboard,
   Users,
@@ -15,6 +16,8 @@ import {
   Settings,
   Flame,
   LogOut,
+  Headphones,
+  ShieldCheck,
 } from 'lucide-react';
 import { ThemeToggle } from '@/components/ThemeToggle';
 
@@ -28,11 +31,24 @@ const menuItems = [
   { name: 'E-mail', href: '/email', icon: Mail },
   { name: 'Relatórios', href: '/reports', icon: BarChart3 },
   { name: 'Integrações', href: '/integrations', icon: Plug },
+  { name: 'Suporte', href: '/support', icon: Headphones },
   { name: 'Configurações', href: '/settings', icon: Settings },
 ];
 
 export function Sidebar() {
   const pathname = usePathname();
+  const [isSuperAdmin, setIsSuperAdmin] = useState(false);
+
+  useEffect(() => {
+    fetch('/api/auth/me')
+      .then((res) => res.json())
+      .then((data) => {
+        if (data.authenticated && data.isSuperAdmin) {
+          setIsSuperAdmin(true);
+        }
+      })
+      .catch(() => {});
+  }, []);
 
   return (
     <aside className="w-64 bg-slate-900 text-slate-300 flex flex-col shrink-0 border-r border-slate-800">
@@ -68,6 +84,17 @@ export function Sidebar() {
             </Link>
           );
         })}
+        {isSuperAdmin && (
+          <div className="pt-2">
+            <Link
+              href="/admin"
+              className="flex items-center gap-2.5 px-3 py-2.5 rounded-lg text-xs font-bold text-amber-300 bg-amber-500/10 hover:bg-amber-500/20 border border-amber-500/30 transition-all shadow-sm shadow-amber-500/10"
+            >
+              <ShieldCheck className="w-4 h-4 text-amber-400" />
+              <span>Painel Super Admin</span>
+            </Link>
+          </div>
+        )}
       </nav>
 
       {/* Status da Fila & Logout */}

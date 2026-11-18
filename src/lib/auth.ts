@@ -11,7 +11,8 @@ export interface UserSession {
   userId: string;
   email: string;
   name: string;
-  globalRole: string; // ADMIN, MANAGER, EXPERT, OPERATOR
+  globalRole: string; // SUPER_ADMIN, ADMIN_CLIENTE, USUARIO (ADMIN, MANAGER, OPERATOR)
+  clientId?: string;
   tenantId?: string;
   tenantRole?: string;
 }
@@ -68,6 +69,7 @@ export async function getCurrentSession(): Promise<UserSession | null> {
       email: user.email,
       name: user.name,
       globalRole: user.role,
+      clientId: user.clientId || undefined,
       tenantId: selectedMembership?.tenantId,
       tenantRole: selectedMembership?.role || user.role,
     };
@@ -76,13 +78,32 @@ export async function getCurrentSession(): Promise<UserSession | null> {
   }
 }
 
+export function isSuperAdmin(role?: string): boolean {
+  return role === 'SUPER_ADMIN' || role === 'ADMIN';
+}
+
 export async function requireAuth(requiredRoles?: string[]): Promise<UserSession> {
   const session = await getCurrentSession();
   if (!session) {
     throw new Error('Não autenticado');
   }
-  if (requiredRoles && !requiredRoles.includes(session.globalRole) && (!session.tenantRole || !requiredRoles.includes(session.tenantRole))) {
+  if (
+    requiredRoles &&
+    !requiredRoles.includes(session.globalRole) &&
+    (!session.tenantRole || !requiredRoles.includes(session.tenantRole))
+  ) {
     throw new Error('Acesso não autorizado');
+  }
+  return session;
+}
+
+export async function requireSuperAdmin(): Promise<UserSession> {
+  const session = await getCurrentSession();
+  if (!session) {
+    throw new Error('Não autenticado');
+  }
+  if (!isSuperAdmin(session.globalRole)) {
+    throw new Error('Acesso negado: Requer privilégios de Super Administrador');
   }
   return session;
 }
