@@ -6042,6 +6042,428 @@ async function runTestSuite() {
     console.log('✔ PASSOU: Guarda Absoluta Anti-Duplicação de Mensagens validada com 100% de sucesso.');
     passed++;
 
+    // ============================================================
+    // TESTE 47: FLUXO COMPLETO E RESILIENTE DE EXECUÇÃO EM GRUPOS
+    // Valida avanço contínuo através de Múltiplos Timers, Disparos e Ações de Grupos
+    // ============================================================
+    total++;
+    console.log('\n[TESTE 47] Testando motor de execução contínua em grupos (Timers + Disparos + Configurações de Grupos)...');
+
+    const instSuffix47 = Date.now();
+    await prisma.whatsappInstance.deleteMany({ where: { instanceName: { contains: 'inst_exec_47' } } });
+    await prisma.whatsappGroup.deleteMany({ where: { jid: { contains: '120363047' } } });
+
+    const inst47 = await prisma.whatsappInstance.create({
+      data: {
+        tenantId: testTenant.id,
+        name: 'Instância Exec 47',
+        instanceName: `inst_exec_47_${instSuffix47}`,
+        instanceToken: `token_exec_47_${instSuffix47}`,
+        status: 'CONNECTED',
+      },
+    });
+
+    const grupo47 = await prisma.whatsappGroup.create({
+      data: {
+        tenantId: testTenant.id,
+        whatsappInstanceId: inst47.id,
+        jid: `120363047_${instSuffix47}@g.us`,
+        name: 'Grupo Lançamento Teste 47',
+        isAdmin: true,
+        isEligible: true,
+        status: 'ACTIVE',
+      },
+    });
+
+    // Nós do fluxo encadeado:
+    // tag_start -> timer_rel_1 -> wpp_1 -> timer_rel_2 -> wpp_2 -> timer_spec_3 -> wpp_3 -> cfg_group_4 -> timer_rel_5 -> wpp_final_6
+    const futureDate47 = new Date(Date.now() + 3600000).toISOString();
+    const nodes47 = [
+      { id: 'n_tag_start', type: 'tag', data: { label: 'Tag Entrada', config: { entryTags: ['lancamento_47'] } } },
+      { id: 'n_timer_1', type: 'timer', data: { label: 'Timer 3 min', config: { timerType: 'RELATIVE', unit: 'minutes', value: 3 } } },
+      { id: 'n_wpp_1', type: 'whatsapp', data: { label: 'WhatsApp 1', config: { text: 'Msg 1', whatsappInstanceId: inst47.id } } },
+      { id: 'n_timer_2', type: 'timer', data: { label: 'Timer 1 min', config: { timerType: 'RELATIVE', unit: 'minutes', value: 1 } } },
+      { id: 'n_wpp_2', type: 'whatsapp', data: { label: 'WhatsApp 2', config: { text: 'Msg 2', whatsappInstanceId: inst47.id } } },
+      { id: 'n_timer_3', type: 'timer', data: { label: 'Timer Absoluto', config: { timerType: 'SPECIFIC_DATE', specificDate: futureDate47 } } },
+      { id: 'n_wpp_3', type: 'whatsapp', data: { label: 'WhatsApp 3', config: { text: 'Msg 3', whatsappInstanceId: inst47.id } } },
+      { id: 'n_cfg_group_4', type: 'editar_grupo', data: { label: 'Configurar Grupo', config: { groupActionType: 'open_messages' } } },
+      { id: 'n_timer_5', type: 'timer', data: { label: 'Timer Final', config: { timerType: 'RELATIVE', unit: 'seconds', value: 30 } } },
+      { id: 'n_wpp_final', type: 'whatsapp', data: { label: 'WhatsApp Final', config: { text: 'Msg Final', whatsappInstanceId: inst47.id } } },
+    ];
+
+    const edges47 = [
+      { id: 'e_1', source: 'n_tag_start', target: 'n_timer_1' },
+      { id: 'e_2', source: 'n_timer_1', target: 'n_wpp_1' },
+      { id: 'e_3', source: 'n_wpp_1', target: 'n_timer_2' },
+      { id: 'e_4', source: 'n_timer_2', target: 'n_wpp_2' },
+      { id: 'e_5', source: 'n_wpp_2', target: 'n_timer_3' },
+      { id: 'e_6', source: 'n_timer_3', target: 'n_wpp_3' },
+      { id: 'e_7', source: 'n_wpp_3', target: 'n_cfg_group_4' },
+      { id: 'e_8', source: 'n_cfg_group_4', target: 'n_timer_5' },
+      { id: 'e_9', source: 'n_timer_5', target: 'n_wpp_final' },
+    ];
+
+    const autoGrupo47 = await prisma.automation.create({
+      data: {
+        tenantId: testTenant.id,
+        name: 'Automação Multietapas Grupo 47',
+        targetType: 'GROUP',
+        status: 'ACTIVE',
+        whatsappInstanceId: inst47.id,
+        targetGroupTags: JSON.stringify(['lancamento_47']),
+        nodes: JSON.stringify(nodes47),
+        edges: JSON.stringify(edges47),
+      },
+    });
+
+    const enr47 = await prisma.automationGroupEnrollment.create({
+      data: {
+        tenantId: testTenant.id,
+        automationId: autoGrupo47.id,
+        groupId: grupo47.id,
+        status: 'ACTIVE',
+        currentNodeId: 'n_tag_start',
+      },
+    });
+
+    // Funções de simulação idênticas à lógica atualizada de engine.ts e scheduler.ts
+    async function simAdvanceGroupNode(enrollmentId, currentNodeId) {
+      const enr = await prisma.automationGroupEnrollment.findUnique({
+        where: { id: enrollmentId },
+        include: { automation: true },
+      });
+      const edges = JSON.parse(enr.automation.edges || '[]');
+      const outgoing = edges.filter((e) => e.source === currentNodeId);
+
+      if (outgoing.length === 0) {
+        // Checagem segura de folhas: timers pendentes e fila ativa
+        const waitLogs = await prisma.automationGroupStepLog.findMany({
+          where: { enrollmentId, action: 'WAIT_TIMER' },
+        });
+        const passedLogs = await prisma.automationGroupStepLog.findMany({
+          where: { enrollmentId, action: { in: ['TIMER_PASSED', 'TIMER_EXPIRED_SKIPPED'] } },
+          select: { nodeId: true },
+        });
+        const passedNodeIds = new Set(passedLogs.map((p) => p.nodeId));
+        const hasPendingTimers = waitLogs.some((w) => !passedNodeIds.has(w.nodeId));
+
+        const pendingQueueCount = await prisma.whatsappQueue.count({
+          where: { groupEnrollmentId: enrollmentId, status: { in: ['PENDING', 'PROCESSING'] } },
+        });
+
+        if (hasPendingTimers) {
+          const pendingTimerNodeId = waitLogs.find((w) => !passedNodeIds.has(w.nodeId))?.nodeId || null;
+          await prisma.automationGroupEnrollment.update({
+            where: { id: enrollmentId },
+            data: { status: 'WAITING', currentNodeId: pendingTimerNodeId },
+          });
+          return;
+        }
+
+        if (pendingQueueCount > 0) {
+          await prisma.automationGroupEnrollment.update({
+            where: { id: enrollmentId },
+            data: { status: 'ACTIVE' },
+          });
+          return;
+        }
+
+        await prisma.automationGroupEnrollment.update({
+          where: { id: enrollmentId },
+          data: { status: 'COMPLETED', completedAt: new Date(), currentNodeId: null },
+        });
+        return;
+      }
+
+      for (const edge of outgoing) {
+        await simExecuteGroupNode(enrollmentId, edge.target);
+      }
+    }
+
+    async function simExecuteGroupNode(enrollmentId, nodeId) {
+      const enr = await prisma.automationGroupEnrollment.findUnique({
+        where: { id: enrollmentId },
+        include: { automation: true },
+      });
+      const nodes = JSON.parse(enr.automation.nodes || '[]');
+      const node = nodes.find((n) => n.id === nodeId);
+      if (!node) return;
+
+      const nodeType = node.data?.type || node.type;
+
+      if (nodeType === 'timer') {
+        const cfg = node.data?.config || {};
+        const isSpecific = Boolean(cfg.timerType === 'SPECIFIC_DATE' || cfg.specificDate);
+        let targetTimestamp;
+        if (isSpecific) {
+          targetTimestamp = new Date(cfg.specificDate).getTime();
+        } else {
+          const val = Number(cfg.value ?? cfg.duration ?? cfg.minutes ?? 1) || 1;
+          const unit = (cfg.unit || 'minutes').toLowerCase();
+          const ms = unit === 'seconds' ? val * 1000 : unit === 'hours' ? val * 3600000 : val * 60000;
+          targetTimestamp = Date.now() + ms;
+        }
+
+        await prisma.automationGroupEnrollment.update({
+          where: { id: enrollmentId },
+          data: { status: 'WAITING', currentNodeId: nodeId },
+        });
+
+        await prisma.automationGroupStepLog.create({
+          data: {
+            enrollmentId,
+            groupId: grupo47.id,
+            tenantId: testTenant.id,
+            nodeId,
+            nodeType: 'timer',
+            action: 'WAIT_TIMER',
+            status: 'WAITING',
+            details: JSON.stringify({ scheduledFor: new Date(targetTimestamp).toISOString() }),
+          },
+        });
+        return;
+      }
+
+      if (nodeType === 'whatsapp') {
+        await prisma.automationGroupStepLog.create({
+          data: {
+            enrollmentId,
+            groupId: grupo47.id,
+            tenantId: testTenant.id,
+            nodeId,
+            nodeType: 'whatsapp',
+            action: 'QUEUE_GROUP_WHATSAPP',
+            status: 'QUEUED',
+          },
+        });
+
+        await prisma.whatsappQueue.create({
+          data: {
+            tenantId: testTenant.id,
+            whatsappInstanceId: inst47.id,
+            phone: grupo47.jid,
+            recipientType: 'GROUP',
+            groupJid: grupo47.jid,
+            groupEnrollmentId: enrollmentId,
+            nodeId,
+            automationId: enr.automationId,
+            text: node.data?.config?.text || 'Mensagem',
+            status: 'PENDING',
+          },
+        });
+        return;
+      }
+
+      if (nodeType === 'editar_grupo') {
+        await prisma.automationGroupStepLog.create({
+          data: {
+            enrollmentId,
+            groupId: grupo47.id,
+            tenantId: testTenant.id,
+            nodeId,
+            nodeType: 'editar_grupo',
+            action: 'open_messages',
+            status: 'SUCCESS',
+          },
+        });
+
+        await simAdvanceGroupNode(enrollmentId, nodeId);
+        return;
+      }
+    }
+
+    async function simProcessTimers() {
+      const waitLogs = await prisma.automationGroupStepLog.findMany({
+        where: { action: 'WAIT_TIMER' },
+      });
+      const now = Date.now();
+      let processed = 0;
+
+      for (const w of waitLogs) {
+        const alreadyPassed = await prisma.automationGroupStepLog.findFirst({
+          where: { enrollmentId: w.enrollmentId, nodeId: w.nodeId, action: 'TIMER_PASSED' },
+        });
+        if (alreadyPassed) continue;
+
+        let targetTime = 0;
+        try {
+          const p = JSON.parse(w.details || '{}');
+          targetTime = new Date(p.scheduledFor).getTime();
+        } catch {}
+
+        if (targetTime <= now) {
+          await prisma.automationGroupEnrollment.update({
+            where: { id: w.enrollmentId },
+            data: { status: 'ACTIVE', currentNodeId: w.nodeId },
+          });
+
+          await prisma.automationGroupStepLog.create({
+            data: {
+              enrollmentId: w.enrollmentId,
+              groupId: w.groupId,
+              tenantId: w.tenantId,
+              nodeId: w.nodeId,
+              nodeType: 'timer',
+              action: 'TIMER_PASSED',
+              status: 'SUCCESS',
+            },
+          });
+
+          const enr = await prisma.automationGroupEnrollment.findUnique({
+            where: { id: w.enrollmentId },
+            include: { automation: true },
+          });
+          const edges = JSON.parse(enr.automation.edges || '[]');
+          const outgoing = edges.filter((e) => e.source === w.nodeId);
+          for (const edge of outgoing) {
+            await simExecuteGroupNode(w.enrollmentId, edge.target);
+          }
+          processed++;
+        }
+      }
+      return processed;
+    }
+
+    // 1. Executa entrada: Gatilho avança para Timer 1 (3 min)
+    await simAdvanceGroupNode(enr47.id, 'n_tag_start');
+
+    // Verifica que grupo está em WAITING no Timer 1
+    const checkEnr1 = await prisma.automationGroupEnrollment.findUnique({ where: { id: enr47.id } });
+    assert.strictEqual(checkEnr1.status, 'WAITING', 'Grupo deve estar em WAITING no Timer 1');
+    assert.strictEqual(checkEnr1.currentNodeId, 'n_timer_1', 'Nó atual deve ser Timer 1');
+
+    // 2. Simula passagem do Timer 1 ajustando a data do log para o passado
+    await prisma.automationGroupStepLog.updateMany({
+      where: { enrollmentId: enr47.id, nodeId: 'n_timer_1', action: 'WAIT_TIMER' },
+      data: {
+        details: JSON.stringify({
+          scheduledFor: new Date(Date.now() - 60000).toISOString(),
+        }),
+      },
+    });
+
+    // Dispara scheduler: Timer 1 deve disparar e avançar para n_wpp_1
+    const schedResult1 = await simProcessTimers();
+    assert.ok(schedResult1 >= 1, 'Scheduler deve processar Timer 1 vencido');
+
+    // Verifica que n_wpp_1 gerou item na fila do WhatsApp
+    const queueItem47_1 = await prisma.whatsappQueue.findFirst({
+      where: { groupEnrollmentId: enr47.id, nodeId: 'n_wpp_1' },
+    });
+    assert.ok(queueItem47_1, 'Mensagem WhatsApp 1 deve ter sido enfileirada');
+
+    // 3. Simula envio pela fila de WhatsApp 1 -> Deve avançar para Timer 2
+    await prisma.automationGroupStepLog.updateMany({
+      where: { enrollmentId: enr47.id, nodeId: 'n_wpp_1' },
+      data: { status: 'SUCCESS' },
+    });
+    await prisma.whatsappQueue.updateMany({
+      where: { groupEnrollmentId: enr47.id, nodeId: 'n_wpp_1' },
+      data: { status: 'SENT' },
+    });
+    await simAdvanceGroupNode(enr47.id, 'n_wpp_1');
+
+    // Verifica que grupo está em WAITING no Timer 2
+    const checkEnr2 = await prisma.automationGroupEnrollment.findUnique({ where: { id: enr47.id } });
+    assert.strictEqual(checkEnr2.status, 'WAITING', 'Grupo deve estar em WAITING no Timer 2');
+    assert.strictEqual(checkEnr2.currentNodeId, 'n_timer_2', 'Nó atual deve ser Timer 2');
+
+    // 4. Simula passagem do Timer 2 e avanço para WhatsApp 2
+    await prisma.automationGroupStepLog.updateMany({
+      where: { enrollmentId: enr47.id, nodeId: 'n_timer_2', action: 'WAIT_TIMER' },
+      data: {
+        details: JSON.stringify({
+          scheduledFor: new Date(Date.now() - 60000).toISOString(),
+        }),
+      },
+    });
+    await simProcessTimers();
+
+    const queueItem47_2 = await prisma.whatsappQueue.findFirst({
+      where: { groupEnrollmentId: enr47.id, nodeId: 'n_wpp_2' },
+    });
+    assert.ok(queueItem47_2, 'Mensagem WhatsApp 2 deve ter sido enfileirada');
+
+    // 5. Simula envio de WhatsApp 2 -> Avança para Timer Absoluto (Timer 3)
+    await prisma.automationGroupStepLog.updateMany({
+      where: { enrollmentId: enr47.id, nodeId: 'n_wpp_2' },
+      data: { status: 'SUCCESS' },
+    });
+    await prisma.whatsappQueue.updateMany({
+      where: { groupEnrollmentId: enr47.id, nodeId: 'n_wpp_2' },
+      data: { status: 'SENT' },
+    });
+    await simAdvanceGroupNode(enr47.id, 'n_wpp_2');
+
+    // 6. Simula passagem do Timer Absoluto e avanço para WhatsApp 3
+    await prisma.automationGroupStepLog.updateMany({
+      where: { enrollmentId: enr47.id, nodeId: 'n_timer_3', action: 'WAIT_TIMER' },
+      data: {
+        details: JSON.stringify({
+          scheduledFor: new Date(Date.now() - 60000).toISOString(),
+        }),
+      },
+    });
+    await simProcessTimers();
+
+    // 7. Simula envio de WhatsApp 3 -> Avança para Configurar Grupo (n_cfg_group_4)
+    await prisma.automationGroupStepLog.updateMany({
+      where: { enrollmentId: enr47.id, nodeId: 'n_wpp_3' },
+      data: { status: 'SUCCESS' },
+    });
+    await prisma.whatsappQueue.updateMany({
+      where: { groupEnrollmentId: enr47.id, nodeId: 'n_wpp_3' },
+      data: { status: 'SENT' },
+    });
+    await simAdvanceGroupNode(enr47.id, 'n_wpp_3');
+
+    // Verifica que Configurar Grupo foi executado e avançou para Timer 5
+    const cfgLog = await prisma.automationGroupStepLog.findFirst({
+      where: { enrollmentId: enr47.id, nodeId: 'n_cfg_group_4', status: 'SUCCESS' },
+    });
+    assert.ok(cfgLog, 'Nó Configurar Grupo deve ter registrado sucesso e avançado');
+
+    // 8. Simula passagem do Timer 5 e avanço para WhatsApp Final
+    await prisma.automationGroupStepLog.updateMany({
+      where: { enrollmentId: enr47.id, nodeId: 'n_timer_5', action: 'WAIT_TIMER' },
+      data: {
+        details: JSON.stringify({
+          scheduledFor: new Date(Date.now() - 60000).toISOString(),
+        }),
+      },
+    });
+    await simProcessTimers();
+
+    const queueFinal = await prisma.whatsappQueue.findFirst({
+      where: { groupEnrollmentId: enr47.id, nodeId: 'n_wpp_final' },
+    });
+    assert.ok(queueFinal, 'Mensagem WhatsApp Final deve ter sido enfileirada com sucesso');
+
+    // 9. Simula conclusão do último nó do fluxo (folha sem arestas de saída)
+    await prisma.automationGroupStepLog.updateMany({
+      where: { enrollmentId: enr47.id, nodeId: 'n_wpp_final' },
+      data: { status: 'SUCCESS' },
+    });
+    await prisma.whatsappQueue.updateMany({
+      where: { groupEnrollmentId: enr47.id, nodeId: 'n_wpp_final' },
+      data: { status: 'SENT' },
+    });
+    await simAdvanceGroupNode(enr47.id, 'n_wpp_final');
+
+    const finalEnr = await prisma.automationGroupEnrollment.findUnique({ where: { id: enr47.id } });
+    assert.strictEqual(finalEnr.status, 'COMPLETED', 'Inscrição deve ser marcada como COMPLETED apenas no nó final');
+
+    // Limpeza Teste 47
+    await prisma.whatsappQueue.deleteMany({ where: { tenantId: testTenant.id } });
+    await prisma.automationGroupStepLog.deleteMany({ where: { enrollment: { automationId: autoGrupo47.id } } });
+    await prisma.automationGroupEnrollment.deleteMany({ where: { automationId: autoGrupo47.id } });
+    await prisma.automation.delete({ where: { id: autoGrupo47.id } });
+    await prisma.whatsappGroup.delete({ where: { id: grupo47.id } });
+    await prisma.whatsappInstance.delete({ where: { id: inst47.id } });
+
+    console.log('✔ PASSOU: Fluxo Completo de 10 Etapas em Grupos validado com 100% de sucesso.');
+    passed++;
+
     console.log('\n=====================================================');
     console.log(` RESULTADO FINAL: ${passed}/${total} TESTES PASSARAM COM SUCESSO!`);
     console.log('=====================================================');

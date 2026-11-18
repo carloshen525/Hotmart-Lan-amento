@@ -2310,9 +2310,25 @@ export class AutomationEngine {
           return;
         }
       } else {
-        const unit = config.unit || 'minutes';
-        const val = Number(config.value) || 1;
-        const delayMs = unit === 'hours' ? val * 3600000 : unit === 'days' ? val * 86400000 : val * 60000;
+        const rawUnit = (config.unit || 'minutes').toLowerCase().trim();
+        const rawVal = Number(
+          config.value ??
+          config.duration ??
+          config.minutes ??
+          config.delayValue ??
+          config.timeValue ??
+          1
+        ) || 1;
+        let delayMs = rawVal * 60000;
+        if (rawUnit === 'seconds' || rawUnit === 'segundos' || rawUnit === 's') {
+          delayMs = rawVal * 1000;
+        } else if (rawUnit === 'hours' || rawUnit === 'horas' || rawUnit === 'h') {
+          delayMs = rawVal * 3600000;
+        } else if (rawUnit === 'days' || rawUnit === 'dias' || rawUnit === 'd') {
+          delayMs = rawVal * 86400000;
+        } else {
+          delayMs = rawVal * 60000;
+        }
         targetTimestamp = Date.now() + delayMs;
       }
 
@@ -2678,6 +2694,26 @@ export class AutomationEngine {
       // Se houver mensagem configurada junto ou for do tipo message
       const hasMessage = actionType === 'message' || Boolean(cfg.message || cfg.text || (cfg.blocks && cfg.blocks.length > 0));
       if (hasMessage) {
+        // Registra log em status QUEUED para rastreabilidade, cálculo de badges e atualização correta pela fila
+        await prisma.automationGroupStepLog.create({
+          data: {
+            enrollmentId,
+            groupId: group.id,
+            tenantId,
+            nodeId,
+            nodeType: 'editar_grupo',
+            action: 'QUEUE_GROUP_WHATSAPP',
+            status: 'QUEUED',
+            details: JSON.stringify({
+              actionType,
+              groupJid: group.jid,
+              actions: updatedActions,
+              text: (cfg.message || cfg.text || cfg.caption || '').slice(0, 100),
+              label: node.data?.label || 'Configurar grupo',
+            }),
+          },
+        });
+
         await WhatsappQueueService.enqueue({
           tenantId,
           whatsappInstanceId: (automation as any).whatsappInstanceId || group.whatsappInstanceId,
@@ -2699,7 +2735,7 @@ export class AutomationEngine {
           minDelaySeconds: (automation as any).minDelaySeconds ?? 20,
           maxDelaySeconds: (automation as any).maxDelaySeconds ?? 45,
         });
-        return; // A fila concluirá o passo e avançará para os nós seguintes
+        return; // A fila concluirá o passo e avançará para os nós seguintes através de advanceGroupNode
       }
 
       // Se não enviou mensagem (apenas configurou o grupo), registra log de sucesso
@@ -2721,18 +2757,8 @@ export class AutomationEngine {
         },
       });
 
-      const outgoingEdges = edges.filter((e) => e.source === nodeId);
-      if (outgoingEdges.length === 0) {
-        await prisma.automationGroupEnrollment.update({
-          where: { id: enrollmentId },
-          data: { status: 'COMPLETED', completedAt: new Date() },
-        });
-        return;
-      }
-
-      for (const edge of outgoingEdges) {
-        await this.executeGroupNode(enrollmentId, edge.target, tenantId);
-      }
+      // Avança de forma segura e inteligente respeitando outros ramos e timers pendentes
+      await this.advanceGroupNode(enrollmentId, nodeId, tenantId, automation.id);
       return;
     }
 
@@ -2750,18 +2776,8 @@ export class AutomationEngine {
       },
     });
 
-    const outgoingEdges = edges.filter((e) => e.source === nodeId);
-    if (outgoingEdges.length === 0) {
-      await prisma.automationGroupEnrollment.update({
-        where: { id: enrollmentId },
-        data: { status: 'COMPLETED', completedAt: new Date() },
-      });
-      return;
-    }
-
-    for (const edge of outgoingEdges) {
-      await this.executeGroupNode(enrollmentId, edge.target, tenantId);
-    }
+    // Avança de forma segura e inteligente respeitando outros ramos e timers pendentes
+    await this.advanceGroupNode(enrollmentId, nodeId, tenantId, automation.id);
   }
 
   /**
@@ -2814,11 +2830,31 @@ export class AutomationEngine {
         (edge) => executedNodeIds.has(edge.source) && !executedNodeIds.has(edge.target)
       );
 
+      // Verifica se existem itens na fila do WhatsApp pendentes ou processando para este enrollment
+      let hasPendingQueue = false;
+      try {
+        const pendingCount = await (prisma as any).whatsappQueue.count({
+          where: {
+            groupEnrollmentId: enrollmentId,
+            status: { in: ['PENDING', 'PROCESSING'] },
+          },
+        });
+        hasPendingQueue = pendingCount > 0;
+      } catch {}
+
       if (hasPendingTimers) {
         const pendingTimerNodeId = waitLogs.find((w) => !passedNodeIds.has(w.nodeId))?.nodeId || null;
         await prisma.automationGroupEnrollment.update({
           where: { id: enrollmentId },
           data: { status: 'WAITING', currentNodeId: pendingTimerNodeId },
+        });
+        return;
+      }
+
+      if (hasPendingQueue) {
+        await prisma.automationGroupEnrollment.update({
+          where: { id: enrollmentId },
+          data: { status: 'ACTIVE' },
         });
         return;
       }
@@ -2858,6 +2894,15 @@ export class AutomationEngine {
       select: { nodeId: true },
     });
 
+    const activeWaitLogs = await prisma.automationGroupStepLog.findMany({
+      where: {
+        enrollmentId,
+        action: 'WAIT_TIMER',
+      },
+      select: { nodeId: true },
+    });
+    const waitingNodeIds = new Set(activeWaitLogs.map((w) => w.nodeId));
+
     const executedNodeIds = new Set(executedLogs.map((l) => l.nodeId));
     const nodes: WorkflowNode[] = JSON.parse(automation.nodes || '[]');
     const edges: WorkflowEdge[] = JSON.parse(automation.edges || '[]');
@@ -2865,8 +2910,14 @@ export class AutomationEngine {
     const unexecutedConnectedNodes: string[] = [];
 
     for (const edge of edges) {
-      if (executedNodeIds.has(edge.source) && !executedNodeIds.has(edge.target)) {
-        unexecutedConnectedNodes.push(edge.target);
+      if (
+        executedNodeIds.has(edge.source) &&
+        !executedNodeIds.has(edge.target) &&
+        !waitingNodeIds.has(edge.target)
+      ) {
+        if (!unexecutedConnectedNodes.includes(edge.target)) {
+          unexecutedConnectedNodes.push(edge.target);
+        }
       }
     }
 

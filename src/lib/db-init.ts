@@ -1,7 +1,7 @@
 import { PrismaClient } from '@prisma/client';
 import bcrypt from 'bcryptjs';
 
-let isMigrating = false;
+let migrationPromise: Promise<void> | null = null;
 let isMigrated = false;
 
 async function getExistingColumns(prisma: PrismaClient, table: string): Promise<Set<string>> {
@@ -18,12 +18,14 @@ async function getExistingColumns(prisma: PrismaClient, table: string): Promise<
  * Auto-healing para o banco de dados (SQLite / Multi-tenant / SaaS).
  * Garante que todas as colunas e tabelas essenciais (como User.phone, saas_clients, etc.)
  * existam mesmo que o container tenha sido iniciado sem rodar prisma db push manualmente.
+ * Protegido contra concorrência por Promise compartilhada.
  */
-export async function ensureDatabaseSchema(prisma: PrismaClient): Promise<void> {
-  if (isMigrated || isMigrating) return;
-  isMigrating = true;
+export function ensureDatabaseSchema(prisma: PrismaClient): Promise<void> {
+  if (isMigrated) return Promise.resolve();
+  if (migrationPromise) return migrationPromise;
 
-  try {
+  migrationPromise = (async () => {
+    try {
     // 1. Colunas na tabela User
     const userCols = await getExistingColumns(prisma, 'User');
     if (!userCols.has('phone')) {
@@ -170,6 +172,9 @@ export async function ensureDatabaseSchema(prisma: PrismaClient): Promise<void> 
   } catch (err: any) {
     console.warn('[DB Init] Aviso na verificação de schema:', err.message);
   } finally {
-    isMigrating = false;
+    migrationPromise = null;
   }
+})();
+
+  return migrationPromise;
 }

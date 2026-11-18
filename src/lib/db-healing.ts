@@ -1,10 +1,13 @@
 import { prisma } from './prisma';
+import { ensureDatabaseSchema } from './db-init';
 
 let healed = false;
 
 export async function healDatabaseSchemaIfNeeded(): Promise<void> {
   if (healed) return;
   try {
+    // Garante inicialização central e síncrona
+    await ensureDatabaseSchema(prisma as any);
     // 1. Colunas na tabela User (executa seguro e direto)
     await prisma.$executeRawUnsafe('ALTER TABLE "User" ADD COLUMN "phone" TEXT;').catch(() => {});
     await prisma.$executeRawUnsafe('ALTER TABLE "User" ADD COLUMN "status" TEXT NOT NULL DEFAULT \'ACTIVE\';').catch(() => {});

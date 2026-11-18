@@ -295,8 +295,12 @@ export class AutomationScheduler {
             });
 
             const outgoingEdges = edges.filter((e) => e.source === currentNode.id);
-            for (const edge of outgoingEdges) {
-              await automationEngine.executeGroupNode(enr.id, edge.target, enr.tenantId);
+            if (outgoingEdges.length === 0) {
+              await automationEngine.advanceGroupNode(enr.id, currentNode.id, enr.tenantId, enr.automation.id);
+            } else {
+              for (const edge of outgoingEdges) {
+                await automationEngine.executeGroupNode(enr.id, edge.target, enr.tenantId);
+              }
             }
             processed++;
           }
@@ -386,8 +390,12 @@ export class AutomationScheduler {
             });
 
             const outgoingEdges = edges.filter((e) => e.source === currentNode.id);
-            for (const edge of outgoingEdges) {
-              await automationEngine.executeGroupNode(enr.id, edge.target, enr.tenantId);
+            if (outgoingEdges.length === 0) {
+              await automationEngine.advanceGroupNode(enr.id, currentNode.id, enr.tenantId, enr.automation.id);
+            } else {
+              for (const edge of outgoingEdges) {
+                await automationEngine.executeGroupNode(enr.id, edge.target, enr.tenantId);
+              }
             }
             processed++;
           }
