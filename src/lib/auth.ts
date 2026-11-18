@@ -46,14 +46,32 @@ export async function getCurrentSession(): Promise<UserSession | null> {
     const payload = verifyToken(token);
     if (!payload || !payload.userId) return null;
 
-    const user = await prisma.user.findUnique({
-      where: { id: payload.userId },
-      include: {
-        memberships: {
-          include: { tenant: true },
+    let user;
+    try {
+      user = await prisma.user.findUnique({
+        where: { id: payload.userId },
+        include: {
+          memberships: {
+            include: { tenant: true },
+          },
         },
-      },
-    });
+      });
+    } catch (err: any) {
+      if (err.message?.includes('User.phone') || err.message?.includes('does not exist')) {
+        const { healDatabaseSchemaIfNeeded } = await import('./db-healing');
+        await healDatabaseSchemaIfNeeded();
+        user = await prisma.user.findUnique({
+          where: { id: payload.userId },
+          include: {
+            memberships: {
+              include: { tenant: true },
+            },
+          },
+        });
+      } else {
+        throw err;
+      }
+    }
 
     if (!user) return null;
 

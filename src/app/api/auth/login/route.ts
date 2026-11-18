@@ -1,6 +1,7 @@
 import { NextResponse } from 'next/server';
 import { prisma } from '@/lib/prisma';
 import { verifyPassword, signToken } from '@/lib/auth';
+import { healDatabaseSchemaIfNeeded } from '@/lib/db-healing';
 
 export async function POST(request: Request) {
   try {
@@ -10,14 +11,31 @@ export async function POST(request: Request) {
       return NextResponse.json({ error: 'E-mail e senha são obrigatórios' }, { status: 400 });
     }
 
-    const user = await prisma.user.findUnique({
-      where: { email: email.toLowerCase().trim() },
-      include: {
-        memberships: {
-          include: { tenant: true },
+    let user;
+    try {
+      user = await prisma.user.findUnique({
+        where: { email: email.toLowerCase().trim() },
+        include: {
+          memberships: {
+            include: { tenant: true },
+          },
         },
-      },
-    });
+      });
+    } catch (err: any) {
+      if (err.message?.includes('User.phone') || err.message?.includes('does not exist')) {
+        await healDatabaseSchemaIfNeeded();
+        user = await prisma.user.findUnique({
+          where: { email: email.toLowerCase().trim() },
+          include: {
+            memberships: {
+              include: { tenant: true },
+            },
+          },
+        });
+      } else {
+        throw err;
+      }
+    }
 
     if (!user) {
       return NextResponse.json({ error: 'Credenciais inválidas' }, { status: 401 });

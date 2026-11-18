@@ -14,6 +14,18 @@ try {
   console.error('[PROD START] Aviso na migração de índices (continuando com segurança):', err.message);
 }
 
+// 1.1. Executa migração de colunas e integridade do SaaS
+try {
+  console.log('[PROD START] Verificando colunas e tabelas do SaaS...');
+  execSync('node scripts/migrate-saas.js', {
+    stdio: 'inherit',
+    timeout: 10000,
+  });
+  console.log('[PROD START] Migração do SaaS concluída com sucesso.');
+} catch (err) {
+  console.error('[PROD START] Aviso na migração do SaaS (continuando com segurança):', err.message);
+}
+
 // 2. Executa o push do esquema do banco de forma segura e não-bloqueante
 try {
   console.log('[PROD START] Sincronizando schema do banco com Prisma...');
