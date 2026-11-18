@@ -354,47 +354,68 @@ export async function GET(request: Request, { params }: { params: { id: string }
         const cfg = n.data?.config || {};
         const tags: string[] =
           cfg.entryTags || cfg.tagNames || (cfg.tagName ? [cfg.tagName] : (n.data as any)?.tagName ? [(n.data as any).tagName] : []) || [];
-        if (tags.length > 0) {
-          if (isGroupMode) {
-            const count = await prisma.whatsappGroup.count({
-              where: {
-                tenantId,
-                status: { not: 'LEFT' },
-                tags: {
-                  some: {
-                    tag: {
-                      OR: [
-                        { id: { in: tags } },
-                        { name: { in: tags } },
-                        ...tags.map((t) => ({ name: t.toLowerCase() })),
-                        ...tags.map((t) => ({ name: t.toUpperCase() })),
-                        ...tags.map((t) => ({ name: t.replace(/^#/, '') })),
-                        ...tags.map((t) => ({ name: `#${t.replace(/^#/, '')}` })),
-                        ...tags.map((t) => ({ name: t.replace(/^#/, '').toLowerCase() })),
-                        ...tags.map((t) => ({ name: t.replace(/^#/, '').toUpperCase() })),
-                      ],
+
+        // Verifica se é uma TAG DE SAÍDA (possui aresta de entrada vinda de sequence_lead)
+        const isExitTag = parsedEdges.some(
+          (e) => e.target === n.id && parsedNodes.some((sn) => sn.id === e.source && sn.type === 'sequence_lead')
+        );
+
+        if (isExitTag) {
+          // TAG DE SAÍDA: exibe o número exato de leads que EFETIVAMENTE saíram por esta tag neste funil
+          const exitedContactIds = new Set<string>();
+          for (const log of allStepLogs) {
+            if (log.nodeId === n.id) {
+              exitedContactIds.add(log.contactId);
+            }
+          }
+          tagStat.leadsCount = exitedContactIds.size;
+          tagStat.successCount = exitedContactIds.size;
+          tagStat.waitingCount = 0;
+          tagStat.failedCount = 0;
+        } else {
+          // TAG DE ENTRADA RAIZ: exibe contatos elegíveis na base para alimentar o início do funil
+          if (tags.length > 0) {
+            if (isGroupMode) {
+              const count = await prisma.whatsappGroup.count({
+                where: {
+                  tenantId,
+                  status: { not: 'LEFT' },
+                  tags: {
+                    some: {
+                      tag: {
+                        OR: [
+                          { id: { in: tags } },
+                          { name: { in: tags } },
+                          ...tags.map((t) => ({ name: t.toLowerCase() })),
+                          ...tags.map((t) => ({ name: t.toUpperCase() })),
+                          ...tags.map((t) => ({ name: t.replace(/^#/, '') })),
+                          ...tags.map((t) => ({ name: `#${t.replace(/^#/, '')}` })),
+                          ...tags.map((t) => ({ name: t.replace(/^#/, '').toLowerCase() })),
+                          ...tags.map((t) => ({ name: t.replace(/^#/, '').toUpperCase() })),
+                        ],
+                      },
                     },
                   },
                 },
-              },
-            });
-            tagStat.leadsCount = count;
-          } else {
-            const count = await prisma.contact.count({
-              where: {
-                tenantId,
-                status: { not: 'UNSUBSCRIBED' },
-                tags: {
-                  some: {
-                    tag: { name: { in: tags } },
+              });
+              tagStat.leadsCount = count;
+            } else {
+              const count = await prisma.contact.count({
+                where: {
+                  tenantId,
+                  status: { not: 'UNSUBSCRIBED' },
+                  tags: {
+                    some: {
+                      tag: { name: { in: tags } },
+                    },
                   },
                 },
-              },
-            });
-            tagStat.leadsCount = count;
+              });
+              tagStat.leadsCount = count;
+            }
+          } else {
+            tagStat.leadsCount = 0;
           }
-        } else {
-          tagStat.leadsCount = 0;
         }
       }
     }
@@ -423,7 +444,7 @@ export async function GET(request: Request, { params }: { params: { id: string }
       return upstream;
     };
 
-    // 6. Harmoniza as estatísticas de nós de Timer/Delay e de Sequências de acordo com as Tags que os alimentam
+    // 6. Harmoniza as estatísticas de nós de Timer/Delay e de Sequências
     for (const n of parsedNodes) {
       if (n.type === 'timer' || n.type === 'delay') {
         const timerStat = getNodeStat(n.id);
@@ -446,82 +467,62 @@ export async function GET(request: Request, { params }: { params: { id: string }
         }
       } else if (n.type === 'sequence_lead') {
         const seqStat = getNodeStat(n.id);
-
-        // Identifica os nós de Tag de entrada que alimentam esta sequência (direta ou indiretamente)
-        const upstreamNodes = getUpstreamNodes(n.id);
-        let sourceTagNodes = upstreamNodes.filter((pn) => pn.type === 'tag' || pn.type === 'trigger');
-        if (sourceTagNodes.length === 0) {
-          sourceTagNodes = parsedNodes.filter((pn) => pn.type === 'tag' || pn.type === 'trigger');
-        }
-
-        const sourceTagNames = new Set<string>();
-        let targetTagLeadsCap = Infinity;
-
-        sourceTagNodes.forEach((tn) => {
-          const cfg = tn.data?.config || {};
-          const tList: string[] =
-            cfg.entryTags || cfg.tagNames || (cfg.tagName ? [cfg.tagName] : (tn.data as any)?.tagName ? [(tn.data as any).tagName] : []) || [];
-          tList.forEach((t) => sourceTagNames.add(t.toLowerCase().trim()));
-
-          const tnStat = getNodeStat(tn.id);
-          if (tnStat.leadsCount !== undefined && tnStat.leadsCount < targetTagLeadsCap) {
-            targetTagLeadsCap = tnStat.leadsCount;
-          }
-        });
-
-        // Filtra os leads que realmente possuem as tags de entrada desta sequência
-        const seqEnrollments = sourceTagNames.size > 0
-          ? distinctEnrollments.filter((e) => {
-              if (!e.contact || e.contact.status === 'UNSUBSCRIBED') return false;
-              const cTags = e.contact.tags?.map((t: any) => t.tag?.name?.toLowerCase().trim()) || [];
-              return cTags.some((ct: string) => sourceTagNames.has(ct));
-            })
-          : distinctEnrollments.filter((e) => e.contact && e.contact.status !== 'UNSUBSCRIBED');
-
-        const computedCount = targetTagLeadsCap !== Infinity
-          ? Math.min(seqEnrollments.length, targetTagLeadsCap)
-          : seqEnrollments.length;
-
-        seqStat.leadsCount = computedCount;
-        seqStat.waitingCount = seqEnrollments.filter((e) => e.status === 'WAITING').length;
-        seqStat.successCount = seqEnrollments.filter((e) => e.status === 'COMPLETED').length;
-        seqStat.failedCount = seqEnrollments.filter(
-          (e) => e.status === 'FAILED' || e.status === 'CANCELLED'
-        ).length;
-
-        // Harmoniza a contagem dos badges para não ultrapassar a quantidade real da tag
-        if (seqStat.waitingCount + seqStat.successCount + seqStat.failedCount > computedCount) {
-          if (seqStat.waitingCount > computedCount) seqStat.waitingCount = computedCount;
-          seqStat.successCount = Math.max(0, computedCount - seqStat.waitingCount - seqStat.failedCount);
-        }
-
-        // Harmoniza rigorosamente o nó Start e nós internos do subfluxo da sequência
         const subflow = (n.data as any)?.subflow || {};
         const subNodes: any[] = subflow.nodes || [];
+        const subNodeIds = new Set<string>([n.id, ...subNodes.map((sn: any) => sn.id)]);
+
+        // 1. Leads com inscrições atualmente posicionadas nesta sequência (macro ou subfluxo interno)
+        const currentlyInThisSequence = distinctEnrollments.filter((e) => {
+          if (!e.currentNodeId) return false;
+          return subNodeIds.has(e.currentNodeId);
+        });
+
+        // 2. Leads que possuem histórico de execução (step logs) nesta sequência
+        const contactIdsWithLogsInSeq = new Set<string>();
+        for (const log of allStepLogs) {
+          if (subNodeIds.has(log.nodeId)) {
+            contactIdsWithLogsInSeq.add(log.contactId);
+          }
+        }
+
+        // Conjunto unificado de leads que estão ou passaram por esta sequência
+        const allSeqContactIds = new Set<string>([
+          ...currentlyInThisSequence.map((e) => e.contactId),
+          ...Array.from(contactIdsWithLogsInSeq),
+        ]);
+
+        const seqEnrollments = distinctEnrollments.filter((e) => allSeqContactIds.has(e.contactId));
+
+        seqStat.leadsCount = seqEnrollments.length;
+        seqStat.waitingCount = currentlyInThisSequence.filter(
+          (e) => e.status === 'WAITING' || e.status === 'WAITING_TAG'
+        ).length;
+        seqStat.successCount = seqEnrollments.filter(
+          (e) => e.status === 'COMPLETED' || (!currentlyInThisSequence.some((c) => c.contactId === e.contactId))
+        ).length;
+        seqStat.failedCount = currentlyInThisSequence.filter(
+          (e) => e.status === 'FAILED'
+        ).length;
+
+        // Harmoniza rigorosamente o nó Start e nós internos do subfluxo da sequência
         for (const sn of subNodes) {
           const subStat = getNodeStat(sn.id);
           if (sn.type === 'start' || sn.id === 'seq_start') {
-            subStat.leadsCount = computedCount;
-            subStat.successCount = computedCount;
+            subStat.leadsCount = seqStat.leadsCount;
+            subStat.successCount = seqStat.leadsCount;
             subStat.waitingCount = 0;
             subStat.failedCount = 0;
           } else {
-            // Garante que o nó da etapa reflita fielmente os disparos reais efetuados limitados ao teto da tag
             const realTotal = subStat.successCount + subStat.waitingCount + subStat.failedCount;
             if (realTotal > 0) {
-              subStat.leadsCount = Math.min(realTotal, computedCount);
-            } else if (subStat.leadsCount > computedCount) {
-              subStat.leadsCount = computedCount;
+              subStat.leadsCount = Math.min(realTotal, seqStat.leadsCount);
+            } else if (subStat.leadsCount > seqStat.leadsCount) {
+              subStat.leadsCount = seqStat.leadsCount;
             }
-            if (subStat.successCount > computedCount) subStat.successCount = computedCount;
-            if (subStat.waitingCount > computedCount) subStat.waitingCount = computedCount;
+            if (subStat.successCount > seqStat.leadsCount) subStat.successCount = seqStat.leadsCount;
+            if (subStat.waitingCount > seqStat.leadsCount) subStat.waitingCount = seqStat.leadsCount;
           }
         }
-
-        // Garante que o seq_start padrão e a contagem da sequência reflitam a contagem da tag
-        seqStat.leadsCount = computedCount;
-        startStat.leadsCount = computedCount;
-        startStat.successCount = computedCount;
       }
     }
 

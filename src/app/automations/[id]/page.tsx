@@ -2853,12 +2853,52 @@ export default function AutomationCanvasPage() {
     [isFlowActive, handleDeleteEdge]
   );
 
+  // Modal de Detalhamento de Leads por Bloco de Sequência (Seção 11)
+  const [sequenceLeadsModalNode, setSequenceLeadsModalNode] = useState<Node | null>(null);
+  const [sequenceLeadsData, setSequenceLeadsData] = useState<any>(null);
+  const [sequenceLeadsLoading, setSequenceLeadsLoading] = useState(false);
+  const [sequenceLeadsStatusFilter, setSequenceLeadsStatusFilter] = useState('ALL');
+  const [sequenceLeadsSearch, setSequenceLeadsSearch] = useState('');
+
+  const fetchSequenceLeads = useCallback(
+    async (nodeId: string, filter: string, search: string) => {
+      setSequenceLeadsLoading(true);
+      try {
+        const query = new URLSearchParams({
+          nodeId,
+          status: filter,
+          search,
+        });
+        const res = await fetch(`/api/automations/${automationId}/sequence-leads?${query.toString()}`);
+        const data = await res.json();
+        if (data && !data.error) {
+          setSequenceLeadsData(data);
+        }
+      } catch (err) {
+        console.error('Erro ao carregar leads da sequência:', err);
+      } finally {
+        setSequenceLeadsLoading(false);
+      }
+    },
+    [automationId]
+  );
+
+  const handleOpenSequenceLeads = useCallback(
+    (node: Node) => {
+      setSequenceLeadsModalNode(node);
+      setSequenceLeadsStatusFilter('ALL');
+      setSequenceLeadsSearch('');
+      fetchSequenceLeads(node.id, 'ALL', '');
+    },
+    [fetchSequenceLeads]
+  );
+
   const displayEdges = useMemo(() => {
     const currentList = viewMode === 'MACRO' ? macroEdges : sequenceEdges;
     return formatEdgesWithFlowState(currentList);
   }, [viewMode, macroEdges, sequenceEdges, formatEdgesWithFlowState]);
 
-  // Nós formatados com injeção dos handlers de Ações Rápidas (Duplicar e Lixeira)
+  // Nós formatados com injeção dos handlers de Ações Rápidas (Duplicar, Leads e Lixeira)
   const displayNodes = useMemo(() => {
     const currentNodes = viewMode === 'MACRO' ? macroNodes : sequenceNodes;
     return currentNodes.map((node) => ({
@@ -2867,9 +2907,10 @@ export default function AutomationCanvasPage() {
         ...node.data,
         onDuplicateNode: () => handleDuplicateNode(node.id),
         onDeleteNode: () => handleDeleteNode(node.id),
+        onViewLeads: node.type === 'sequence_lead' ? () => handleOpenSequenceLeads(node) : undefined,
       },
     }));
-  }, [viewMode, macroNodes, sequenceNodes, handleDuplicateNode, handleDeleteNode]);
+  }, [viewMode, macroNodes, sequenceNodes, handleDuplicateNode, handleDeleteNode, handleOpenSequenceLeads]);
 
   if (loading) {
     return (
@@ -5863,6 +5904,180 @@ export default function AutomationCanvasPage() {
               >
                 SALVAR
               </button>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* ============================================================ */}
+      {/* MODAL / DRAWER: DETALHAMENTO DE LEADS DA SEQUÊNCIA (SEÇÃO 11) */}
+      {/* ============================================================ */}
+      {sequenceLeadsModalNode && (
+        <div className="fixed inset-0 z-50 bg-black/80 backdrop-blur-sm flex items-center justify-center p-4">
+          <div className="bg-[#12141c] border border-slate-800 rounded-2xl w-full max-w-5xl max-h-[90vh] flex flex-col shadow-2xl shadow-black/90 overflow-hidden animate-in fade-in zoom-in-95">
+            {/* Cabeçalho */}
+            <div className="p-5 border-b border-slate-800/80 flex items-center justify-between bg-[#171a24]">
+              <div className="flex items-center gap-3">
+                <div className="w-10 h-10 rounded-xl bg-red-500/20 border border-red-500/40 text-red-400 flex items-center justify-center">
+                  <Users className="w-5 h-5" />
+                </div>
+                <div>
+                  <h3 className="text-base font-bold text-white flex items-center gap-2">
+                    {String(sequenceLeadsModalNode.data?.label || 'Sequência Lead')}
+                    <span className="text-xs px-2 py-0.5 rounded-full bg-slate-800 text-slate-300 font-normal">
+                      {sequenceLeadsData?.stats?.total ?? 0} leads vinculados
+                    </span>
+                  </h3>
+                  <p className="text-xs text-slate-400">
+                    Acompanhamento de status, agendamentos e transições por TAGs e eventos em tempo real
+                  </p>
+                </div>
+              </div>
+              <button
+                type="button"
+                onClick={() => setSequenceLeadsModalNode(null)}
+                className="w-8 h-8 rounded-lg flex items-center justify-center text-slate-400 hover:text-white hover:bg-slate-800 transition-colors cursor-pointer"
+              >
+                <X className="w-5 h-5" />
+              </button>
+            </div>
+
+            {/* Cards de Métricas e Filtros Rápidos */}
+            <div className="grid grid-cols-2 sm:grid-cols-3 md:grid-cols-6 gap-2 p-4 bg-[#0d0f15] border-b border-slate-800/80">
+              {[
+                { key: 'ALL', label: 'Todos', count: sequenceLeadsData?.stats?.total ?? 0, color: 'border-slate-700 bg-slate-800/40 text-slate-200' },
+                { key: 'WAITING_TAG', label: 'Aguardando TAG', count: sequenceLeadsData?.stats?.waitingTag ?? 0, color: 'border-amber-500/40 bg-amber-500/10 text-amber-400' },
+                { key: 'EXECUTING', label: 'Executando', count: sequenceLeadsData?.stats?.executing ?? 0, color: 'border-sky-500/40 bg-sky-500/10 text-sky-400' },
+                { key: 'WAITING_DELAY', label: 'Em Delay', count: sequenceLeadsData?.stats?.waitingDelay ?? 0, color: 'border-purple-500/40 bg-purple-500/10 text-purple-400' },
+                { key: 'TRANSFERRED', label: 'Transferidos', count: sequenceLeadsData?.stats?.transferred ?? 0, color: 'border-emerald-500/40 bg-emerald-500/10 text-emerald-400' },
+                { key: 'COMPLETED', label: 'Concluídos', count: sequenceLeadsData?.stats?.completed ?? 0, color: 'border-slate-600 bg-slate-700/20 text-slate-400' },
+              ].map((m) => (
+                <button
+                  key={m.key}
+                  type="button"
+                  onClick={() => {
+                    setSequenceLeadsStatusFilter(m.key);
+                    if (sequenceLeadsModalNode) {
+                      fetchSequenceLeads(sequenceLeadsModalNode.id, m.key, sequenceLeadsSearch);
+                    }
+                  }}
+                  className={`p-2.5 rounded-xl border text-left transition-all cursor-pointer ${
+                    sequenceLeadsStatusFilter === m.key
+                      ? 'ring-2 ring-indigo-500 ' + m.color
+                      : 'border-slate-800 bg-[#12141c] hover:border-slate-700 text-slate-400'
+                  }`}
+                >
+                  <div className="text-lg font-bold">{m.count}</div>
+                  <div className="text-[11px] font-medium">{m.label}</div>
+                </button>
+              ))}
+            </div>
+
+            {/* Barra de Busca */}
+            <div className="p-3 bg-[#12141c] border-b border-slate-800/80 flex items-center gap-3">
+              <div className="relative flex-1">
+                <Search className="w-4 h-4 text-slate-400 absolute left-3 top-1/2 -translate-y-1/2" />
+                <input
+                  type="text"
+                  value={sequenceLeadsSearch}
+                  onChange={(e) => {
+                    const val = e.target.value;
+                    setSequenceLeadsSearch(val);
+                    if (sequenceLeadsModalNode) {
+                      fetchSequenceLeads(sequenceLeadsModalNode.id, sequenceLeadsStatusFilter, val);
+                    }
+                  }}
+                  placeholder="Buscar lead por nome, telefone ou e-mail..."
+                  className="w-full pl-9 pr-4 py-2 bg-[#0c0e14] border border-slate-800 rounded-xl text-xs text-white placeholder-slate-500 focus:outline-none focus:border-indigo-500 transition-colors"
+                />
+              </div>
+              <button
+                type="button"
+                onClick={() => {
+                  if (sequenceLeadsModalNode) {
+                    fetchSequenceLeads(sequenceLeadsModalNode.id, sequenceLeadsStatusFilter, sequenceLeadsSearch);
+                  }
+                }}
+                className="px-3 py-2 bg-slate-800 hover:bg-slate-700 text-slate-200 rounded-xl text-xs flex items-center gap-1.5 transition-colors cursor-pointer"
+              >
+                <RefreshCw className={`w-3.5 h-3.5 ${sequenceLeadsLoading ? 'animate-spin' : ''}`} />
+                Atualizar
+              </button>
+            </div>
+
+            {/* Tabela de Leads */}
+            <div className="flex-1 overflow-y-auto p-4 space-y-2">
+              {sequenceLeadsLoading ? (
+                <div className="flex flex-col items-center justify-center py-16 text-slate-400">
+                  <div className="w-7 h-7 border-3 border-indigo-500 border-t-transparent rounded-full animate-spin mb-2" />
+                  <span className="text-xs">Carregando leads da sequência...</span>
+                </div>
+              ) : !sequenceLeadsData?.leads || sequenceLeadsData.leads.length === 0 ? (
+                <div className="text-center py-16 text-slate-500">
+                  <Users className="w-10 h-10 mx-auto mb-2 opacity-30" />
+                  <p className="text-sm font-medium">Nenhum lead encontrado nesta sequência.</p>
+                  <p className="text-xs text-slate-600 mt-1">Os leads aparecem aqui assim que ingressam pela TAG de entrada.</p>
+                </div>
+              ) : (
+                <div className="space-y-2">
+                  {sequenceLeadsData.leads.map((l: any) => (
+                    <div
+                      key={l.contactId}
+                      className="p-3.5 rounded-xl border border-slate-800/90 bg-[#0d0f16] hover:border-slate-700 transition-all flex flex-col md:flex-row md:items-center justify-between gap-3"
+                    >
+                      {/* Dados do Lead */}
+                      <div className="min-w-0 flex-1">
+                        <div className="flex items-center gap-2">
+                          <span className="text-xs font-bold text-white truncate">{l.name}</span>
+                          <span className={`text-[10px] font-semibold px-2 py-0.5 rounded-full ${
+                            l.sequenceStatus === 'WAITING_TAG'
+                              ? 'bg-amber-500/20 text-amber-400 border border-amber-500/30'
+                              : l.sequenceStatus === 'EXECUTING'
+                              ? 'bg-sky-500/20 text-sky-400 border border-sky-500/30'
+                              : l.sequenceStatus === 'WAITING_DELAY'
+                              ? 'bg-purple-500/20 text-purple-400 border border-purple-500/30'
+                              : l.sequenceStatus === 'TRANSFERRED'
+                              ? 'bg-emerald-500/20 text-emerald-400 border border-emerald-500/30'
+                              : 'bg-slate-700/40 text-slate-300'
+                          }`}>
+                            {l.sequenceStatusLabel}
+                          </span>
+                        </div>
+                        <div className="flex flex-wrap items-center gap-3 text-[11px] text-slate-400 mt-1">
+                          {l.phone && <span>📱 {l.phone}</span>}
+                          {l.email && <span>✉️ {l.email}</span>}
+                          {l.currentStepName && <span className="text-slate-500">Etapa: {l.currentStepName}</span>}
+                        </div>
+
+                        {/* Tags do Lead */}
+                        {l.tags && l.tags.length > 0 && (
+                          <div className="flex flex-wrap gap-1 mt-2">
+                            {l.tags.map((tg: string) => (
+                              <span key={tg} className="text-[10px] px-1.5 py-0.5 rounded bg-purple-950/60 border border-purple-800/40 text-purple-300 font-mono">
+                                #{tg}
+                              </span>
+                            ))}
+                          </div>
+                        )}
+                      </div>
+
+                      {/* Agendamento / Histórico */}
+                      <div className="shrink-0 flex flex-col md:items-end text-xs text-slate-400">
+                        {l.nextScheduledMessage && (
+                          <div className="text-[11px] text-purple-300 bg-purple-950/40 px-2 py-1 rounded border border-purple-800/30 mb-1">
+                            ⏳ Próximo envio: {new Date(l.nextScheduledMessage.executeAt).toLocaleDateString('pt-BR')} às {new Date(l.nextScheduledMessage.executeAt).toLocaleTimeString('pt-BR', { hour: '2-digit', minute: '2-digit' })}
+                          </div>
+                        )}
+                        {l.history && l.history.length > 0 && (
+                          <span className="text-[10px] text-slate-500">
+                            Última ação: {l.history[0].action} ({new Date(l.history[0].createdAt).toLocaleTimeString('pt-BR', { hour: '2-digit', minute: '2-digit' })})
+                          </span>
+                        )}
+                      </div>
+                    </div>
+                  ))}
+                </div>
+              )}
             </div>
           </div>
         </div>

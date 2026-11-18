@@ -5,56 +5,22 @@ let healed = false;
 export async function healDatabaseSchemaIfNeeded(): Promise<void> {
   if (healed) return;
   try {
-    // 1. Colunas na tabela User
-    const userColumns: any = await prisma.$queryRawUnsafe('PRAGMA table_info("User");').catch(() => []);
-    if (Array.isArray(userColumns)) {
-      const names = userColumns.map((c: any) => c.name);
-      if (!names.includes('phone')) {
-        await prisma.$executeRawUnsafe('ALTER TABLE "User" ADD COLUMN "phone" TEXT;').catch(() => {});
-      }
-      if (!names.includes('status')) {
-        await prisma.$executeRawUnsafe('ALTER TABLE "User" ADD COLUMN "status" TEXT NOT NULL DEFAULT \'ACTIVE\';').catch(() => {});
-      }
-      if (!names.includes('clientId')) {
-        await prisma.$executeRawUnsafe('ALTER TABLE "User" ADD COLUMN "clientId" TEXT;').catch(() => {});
-      }
-    }
+    // 1. Colunas na tabela User (executa seguro e direto)
+    await prisma.$executeRawUnsafe('ALTER TABLE "User" ADD COLUMN "phone" TEXT;').catch(() => {});
+    await prisma.$executeRawUnsafe('ALTER TABLE "User" ADD COLUMN "status" TEXT NOT NULL DEFAULT \'ACTIVE\';').catch(() => {});
+    await prisma.$executeRawUnsafe('ALTER TABLE "User" ADD COLUMN "clientId" TEXT;').catch(() => {});
 
     // 2. Coluna na tabela Tenant
-    const tenantColumns: any = await prisma.$queryRawUnsafe('PRAGMA table_info("Tenant");').catch(() => []);
-    if (Array.isArray(tenantColumns)) {
-      const tnames = tenantColumns.map((c: any) => c.name);
-      if (!tnames.includes('clientId')) {
-        await prisma.$executeRawUnsafe('ALTER TABLE "Tenant" ADD COLUMN "clientId" TEXT;').catch(() => {});
-      }
-    }
+    await prisma.$executeRawUnsafe('ALTER TABLE "Tenant" ADD COLUMN "clientId" TEXT;').catch(() => {});
 
     // 3. Coluna na tabela WhatsappInstance
-    const instanceColumns: any = await prisma.$queryRawUnsafe('PRAGMA table_info("WhatsappInstance");').catch(() => []);
-    if (Array.isArray(instanceColumns)) {
-      const inames = instanceColumns.map((c: any) => c.name);
-      if (!inames.includes('userId')) {
-        await prisma.$executeRawUnsafe('ALTER TABLE "WhatsappInstance" ADD COLUMN "userId" TEXT;').catch(() => {});
-      }
-    }
+    await prisma.$executeRawUnsafe('ALTER TABLE "WhatsappInstance" ADD COLUMN "userId" TEXT;').catch(() => {});
 
     // 4. Colunas na tabela whatsapp_groups
-    const groupColumns: any = await prisma.$queryRawUnsafe('PRAGMA table_info("whatsapp_groups");').catch(() => []);
-    if (Array.isArray(groupColumns)) {
-      const gnames = groupColumns.map((c: any) => c.name);
-      if (!gnames.includes('is_community')) {
-        await prisma.$executeRawUnsafe('ALTER TABLE "whatsapp_groups" ADD COLUMN "is_community" BOOLEAN NOT NULL DEFAULT 0;').catch(() => {});
-      }
-      if (!gnames.includes('is_community_announce')) {
-        await prisma.$executeRawUnsafe('ALTER TABLE "whatsapp_groups" ADD COLUMN "is_community_announce" BOOLEAN NOT NULL DEFAULT 0;').catch(() => {});
-      }
-      if (!gnames.includes('parent_community_jid')) {
-        await prisma.$executeRawUnsafe('ALTER TABLE "whatsapp_groups" ADD COLUMN "parent_community_jid" TEXT;').catch(() => {});
-      }
-      if (!gnames.includes('description')) {
-        await prisma.$executeRawUnsafe('ALTER TABLE "whatsapp_groups" ADD COLUMN "description" TEXT;').catch(() => {});
-      }
-    }
+    await prisma.$executeRawUnsafe('ALTER TABLE "whatsapp_groups" ADD COLUMN "is_community" BOOLEAN NOT NULL DEFAULT 0;').catch(() => {});
+    await prisma.$executeRawUnsafe('ALTER TABLE "whatsapp_groups" ADD COLUMN "is_community_announce" BOOLEAN NOT NULL DEFAULT 0;').catch(() => {});
+    await prisma.$executeRawUnsafe('ALTER TABLE "whatsapp_groups" ADD COLUMN "parent_community_jid" TEXT;').catch(() => {});
+    await prisma.$executeRawUnsafe('ALTER TABLE "whatsapp_groups" ADD COLUMN "description" TEXT;').catch(() => {});
 
     // 5. Tabela saas_clients
     await prisma.$executeRawUnsafe(`

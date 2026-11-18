@@ -7,7 +7,7 @@ try {
   console.log('[PROD START] Verificando e atualizando índices do WhatsApp (multi-tenant)...');
   execSync('node scripts/migrate-whatsapp.js', {
     stdio: 'inherit',
-    timeout: 10000,
+    timeout: 30000,
   });
   console.log('[PROD START] Migração de índices concluída com sucesso.');
 } catch (err) {
@@ -19,23 +19,41 @@ try {
   console.log('[PROD START] Verificando colunas e tabelas do SaaS...');
   execSync('node scripts/migrate-saas.js', {
     stdio: 'inherit',
-    timeout: 10000,
+    timeout: 30000,
   });
   console.log('[PROD START] Migração do SaaS concluída com sucesso.');
 } catch (err) {
   console.error('[PROD START] Aviso na migração do SaaS (continuando com segurança):', err.message);
 }
 
-// 2. Executa o push do esquema do banco de forma segura e não-bloqueante
+// 2. Executa o push do esquema do banco de forma segura
 try {
   console.log('[PROD START] Sincronizando schema do banco com Prisma...');
-  execSync('npx prisma db push --accept-data-loss --skip-generate', {
-    stdio: 'inherit',
-    timeout: 20000,
-  });
+  try {
+    execSync('npx prisma db push --accept-data-loss --skip-generate', {
+      stdio: 'inherit',
+      timeout: 60000,
+    });
+  } catch (npxErr) {
+    console.log('[PROD START] Fallback: executando prisma localmente...');
+    execSync('node ./node_modules/prisma/build/index.js db push --accept-data-loss --skip-generate', {
+      stdio: 'inherit',
+      timeout: 60000,
+    });
+  }
   console.log('[PROD START] Schema do banco sincronizado.');
 } catch (err) {
-  console.error('[PROD START] Aviso na sincronização do schema Prisma (continuando inicialização de forma controlada):', err.message);
+  console.error('[PROD START] Aviso na sincronização do schema Prisma (continuando com migração via código):', err.message);
+}
+
+// 2.1. Executa migração do SaaS novamente após db push para garantir o super admin
+try {
+  execSync('node scripts/migrate-saas.js', {
+    stdio: 'inherit',
+    timeout: 30000,
+  });
+} catch (err) {
+  // Ignora se já estiver ok
 }
 
 // 3. Executa seed de dados essenciais (admin e expert) se necessario

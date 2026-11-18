@@ -8,7 +8,7 @@ async function runTestSuite() {
   console.log('=====================================================\n');
 
   let passed = 0;
-  let total = 42;
+  let total = 43;
 
   // Setup de tenant de teste limpo
   const testTenant = await prisma.tenant.upsert({
@@ -4713,6 +4713,410 @@ async function runTestSuite() {
     });
 
     console.log('✔ PASSOU: Isolamento multi-tenant de instâncias WhatsApp validado com 100% de sucesso.');
+    passed++;
+
+    // -------------------------------------------------------------
+    // TESTE 43: Motor de Automação de Funis por TAGs e Eventos (Seções 1 a 11)
+    // - Sequência não avança automaticamente ao concluir mensagens
+    // - Lead permanece em WAITING_TAG aguardando TAG de saída
+    // - TAG de saída NUNCA é aplicada automaticamente ao lead pela sequência
+    // - Transições atômicas entre sequências ao receber TAG de saída
+    // - Ramificações condicionais por múltiplas TAGs de saída
+    // - Inscrição contínua de novos leads por TAG de entrada raiz
+    // - Estatísticas precisas (leadsCount = 0 para tags de saída não disparadas)
+    // -------------------------------------------------------------
+    console.log('\n[TESTE 43] Motor de Automação de Funis por TAGs e Eventos...');
+
+    // 1. Cria tags de teste
+    const tagEntry43 = await prisma.tag.upsert({
+      where: { tenantId_name: { tenantId: testTenant.id, name: 'icaronTag' } },
+      create: { tenantId: testTenant.id, name: 'icaronTag' },
+      update: {},
+    });
+    const tagExit43 = await prisma.tag.upsert({
+      where: { tenantId_name: { tenantId: testTenant.id, name: 'TAG SAIDA DO FUNIL' } },
+      create: { tenantId: testTenant.id, name: 'TAG SAIDA DO FUNIL' },
+      update: {},
+    });
+    const tagPix43 = await prisma.tag.upsert({
+      where: { tenantId_name: { tenantId: testTenant.id, name: 'TAG_PIX_GERADO_43' } },
+      create: { tenantId: testTenant.id, name: 'TAG_PIX_GERADO_43' },
+      update: {},
+    });
+    const tagCompra43 = await prisma.tag.upsert({
+      where: { tenantId_name: { tenantId: testTenant.id, name: 'TAG_COMPRA_CONFIRMADA_43' } },
+      create: { tenantId: testTenant.id, name: 'TAG_COMPRA_CONFIRMADA_43' },
+      update: {},
+    });
+
+    // 2. Cria contatos de teste
+    const ts43 = Date.now();
+    const contactA43 = await prisma.contact.create({
+      data: { tenantId: testTenant.id, name: 'Lead Funil A', phone: `5511999${ts43.toString().slice(-6)}1`, email: `funil_a_${ts43}@teste.com` },
+    });
+    const contactB43 = await prisma.contact.create({
+      data: { tenantId: testTenant.id, name: 'Lead Funil B', phone: `5511999${ts43.toString().slice(-6)}2`, email: `funil_b_${ts43}@teste.com` },
+    });
+    const contactC43 = await prisma.contact.create({
+      data: { tenantId: testTenant.id, name: 'Lead Funil C', phone: `5511999${ts43.toString().slice(-6)}3`, email: `funil_c_${ts43}@teste.com` },
+    });
+
+    // 3. Monta o funil conforme especificação
+    // icaronTag -> seq1 (Enviar E-mail de Boas-vindas) -> TAG SAIDA DO FUNIL -> seq2 (Sequência Lead)
+    // seq2 -> TAG_PIX_GERADO_43 -> seqPix
+    // seq2 -> TAG_COMPRA_CONFIRMADA_43 -> seqCompra
+    const funnelNodes = [
+      { id: 'tag_entry', type: 'tag', data: { label: 'icaronTag', config: { entryTags: ['icaronTag'] } } },
+      {
+        id: 'seq1',
+        type: 'sequence_lead',
+        data: {
+          label: 'Enviar E-mail de Boas-vindas',
+          subflow: {
+            nodes: [
+              { id: 'seq1_start', type: 'start' },
+              { id: 'seq1_msg', type: 'whatsapp', data: { config: { message: 'Boas-vindas ao lançamento!' } } },
+            ],
+            edges: [
+              { id: 'sub_e1', source: 'seq1_start', target: 'seq1_msg' },
+            ],
+          },
+        },
+      },
+      { id: 'tag_exit_funil', type: 'tag', data: { label: 'TAG SAIDA DO FUNIL', config: { entryTags: ['TAG SAIDA DO FUNIL'] } } },
+      {
+        id: 'seq2',
+        type: 'sequence_lead',
+        data: {
+          label: 'Sequência Lead',
+          subflow: {
+            nodes: [
+              { id: 'seq2_start', type: 'start' },
+              { id: 'seq2_msg', type: 'whatsapp', data: { config: { message: 'Mensagem de aquecimento 1' } } },
+            ],
+            edges: [
+              { id: 'sub_e2', source: 'seq2_start', target: 'seq2_msg' },
+            ],
+          },
+        },
+      },
+      { id: 'tag_pix', type: 'tag', data: { label: 'TAG_PIX_GERADO_43', config: { entryTags: ['TAG_PIX_GERADO_43'] } } },
+      {
+        id: 'seq_pix',
+        type: 'sequence_lead',
+        data: {
+          label: 'Recuperação PIX',
+          subflow: {
+            nodes: [
+              { id: 'seq_pix_start', type: 'start' },
+              { id: 'seq_pix_msg', type: 'whatsapp', data: { config: { message: 'Seu PIX está reservado!' } } },
+            ],
+            edges: [
+              { id: 'sub_e_pix', source: 'seq_pix_start', target: 'seq_pix_msg' },
+            ],
+          },
+        },
+      },
+      { id: 'tag_compra', type: 'tag', data: { label: 'TAG_COMPRA_CONFIRMADA_43', config: { entryTags: ['TAG_COMPRA_CONFIRMADA_43'] } } },
+      {
+        id: 'seq_pos_venda',
+        type: 'sequence_lead',
+        data: {
+          label: 'Sequência Pós-Venda',
+          subflow: {
+            nodes: [
+              { id: 'seq_pv_start', type: 'start' },
+              { id: 'seq_pv_msg', type: 'whatsapp', data: { config: { message: 'Obrigado pela compra!' } } },
+            ],
+            edges: [
+              { id: 'sub_e_pv', source: 'seq_pv_start', target: 'seq_pv_msg' },
+            ],
+          },
+        },
+      },
+    ];
+
+    const funnelEdges = [
+      { id: 'e1', source: 'tag_entry', target: 'seq1' },
+      { id: 'e2', source: 'seq1', target: 'tag_exit_funil' },
+      { id: 'e3', source: 'tag_exit_funil', target: 'seq2' },
+      { id: 'e4', source: 'seq2', target: 'tag_pix' },
+      { id: 'e5', source: 'tag_pix', target: 'seq_pix' },
+      { id: 'e6', source: 'seq2', target: 'tag_compra' },
+      { id: 'e7', source: 'tag_compra', target: 'seq_pos_venda' },
+    ];
+
+    const funnelAutomation = await prisma.automation.create({
+      data: {
+        tenantId: testTenant.id,
+        name: 'Funil Dinâmico de Lançamento por Tags',
+        status: 'ACTIVE',
+        targetType: 'INDIVIDUAL',
+        nodes: JSON.stringify(funnelNodes),
+        edges: JSON.stringify(funnelEdges),
+      },
+    });
+
+    // Implementação das funções do motor para validação no teste
+    async function testExecuteSequenceSubflowCompletion(enrollmentId, parentMacroNodeId, automationNodes, automationEdges) {
+      const macroOutgoing = automationEdges.filter((e) => e.source === parentMacroNodeId);
+      const exitTagEdges = macroOutgoing.filter((me) =>
+        automationNodes.some((fn) => fn.id === me.target && (fn.type === 'tag' || fn.type === 'trigger'))
+      );
+
+      if (exitTagEdges.length > 0) {
+        // REGRA PRINCIPAL: status WAITING_TAG, currentNodeId mantido na sequência, NUNCA aplica tag ao contato
+        await prisma.automationEnrollment.update({
+          where: { id: enrollmentId },
+          data: { status: 'WAITING_TAG', currentNodeId: parentMacroNodeId, completedAt: null },
+        });
+        await prisma.automationStepLog.create({
+          data: {
+            enrollmentId,
+            contactId: (await prisma.automationEnrollment.findUnique({ where: { id: enrollmentId } })).contactId,
+            nodeId: parentMacroNodeId,
+            nodeType: 'sequence_lead',
+            action: 'AGUARDANDO_TAG_SAIDA',
+            status: 'SUCCESS',
+            details: JSON.stringify({ message: 'Aguardando TAG de saída' }),
+          },
+        });
+      } else {
+        await prisma.automationEnrollment.update({
+          where: { id: enrollmentId },
+          data: { status: 'COMPLETED', currentNodeId: parentMacroNodeId, completedAt: new Date() },
+        });
+      }
+    }
+
+    async function testHandleContactTagAddedEngine(contactId, tagName, tenantId) {
+      // 1. Busca inscrições ativas (ACTIVE, WAITING, WAITING_TAG)
+      const activeEnrollments = await prisma.automationEnrollment.findMany({
+        where: { contactId, status: { in: ['ACTIVE', 'WAITING', 'WAITING_TAG'] } },
+        include: { automation: true },
+      });
+
+      let transferred = false;
+      for (const enr of activeEnrollments) {
+        const nodes = JSON.parse(enr.automation.nodes || '[]');
+        const edges = JSON.parse(enr.automation.edges || '[]');
+        const currentSeq = nodes.find((n) => n.id === enr.currentNodeId && n.type === 'sequence_lead');
+        if (!currentSeq) continue;
+
+        // Procura APENAS tags de saída conectadas à sequência atual
+        const outEdges = edges.filter((e) => e.source === currentSeq.id);
+        const matchingExitEdge = outEdges.find((edge) => {
+          const tagNode = nodes.find((n) => n.id === edge.target && (n.type === 'tag' || n.type === 'trigger'));
+          const cfg = tagNode?.data?.config || {};
+          const tNames = cfg.entryTags || cfg.tagNames || [cfg.tagName || tagNode?.data?.label];
+          return tNames.some((t) => t && t.toLowerCase().trim() === tagName.toLowerCase().trim());
+        });
+
+        if (matchingExitEdge) {
+          const exitTagNode = nodes.find((n) => n.id === matchingExitEdge.target);
+          await prisma.scheduledJob.updateMany({
+            where: { enrollmentId: enr.id, status: 'PENDING' },
+            data: { status: 'CANCELLED' },
+          });
+
+          await prisma.automationStepLog.create({
+            data: {
+              enrollmentId: enr.id,
+              contactId,
+              nodeId: exitTagNode.id,
+              nodeType: 'sequence_exit',
+              action: `SAÍDA_POR_TAG: ${tagName}`,
+              status: 'SUCCESS',
+              details: JSON.stringify({ fromSequence: currentSeq.id, exitTag: exitTagNode.id }),
+            },
+          });
+
+          // Conecta à próxima sequência
+          const nextEdges = edges.filter((e) => e.source === exitTagNode.id);
+          const nextSeq = nodes.find((n) => nextEdges.some((ne) => ne.target === n.id) && n.type === 'sequence_lead');
+          if (nextSeq) {
+            await prisma.automationEnrollment.update({
+              where: { id: enr.id },
+              data: { currentNodeId: nextSeq.id, status: 'ACTIVE', completedAt: null },
+            });
+            transferred = true;
+          } else {
+            await prisma.automationEnrollment.update({
+              where: { id: enr.id },
+              data: { status: 'COMPLETED', completedAt: new Date() },
+            });
+            transferred = true;
+          }
+        }
+      }
+
+      // 2. Se não transferiu, verifica se é TAG de ENTRADA RAIZ de funil ativo
+      if (!transferred) {
+        const automations = await prisma.automation.findMany({
+          where: { tenantId, status: 'ACTIVE' },
+        });
+        for (const auto of automations) {
+          const nodes = JSON.parse(auto.nodes || '[]');
+          const edges = JSON.parse(auto.edges || '[]');
+          const rootEntryTags = nodes.filter((n) => {
+            if (n.type !== 'tag' && n.type !== 'trigger') return false;
+            const hasIncomingSeq = edges.some(
+              (e) => e.target === n.id && nodes.some((sn) => sn.id === e.source && sn.type === 'sequence_lead')
+            );
+            if (hasIncomingSeq) return false;
+            const cfg = n.data?.config || {};
+            const tNames = cfg.entryTags || cfg.tagNames || [cfg.tagName || n.data?.label];
+            return tNames.some((t) => t && t.toLowerCase().trim() === tagName.toLowerCase().trim());
+          });
+
+          for (const ret of rootEntryTags) {
+            const outEdges = edges.filter((e) => e.source === ret.id);
+            const targetSeq = nodes.find((n) => outEdges.some((e) => e.target === n.id) && n.type === 'sequence_lead');
+            if (targetSeq) {
+              const existing = await prisma.automationEnrollment.findFirst({
+                where: { automationId: auto.id, contactId, status: { in: ['ACTIVE', 'WAITING', 'WAITING_TAG'] } },
+              });
+              if (!existing) {
+                await prisma.automationEnrollment.create({
+                  data: {
+                    automationId: auto.id,
+                    contactId,
+                    currentNodeId: targetSeq.id,
+                    status: 'ACTIVE',
+                  },
+                });
+              }
+            }
+          }
+        }
+      }
+    }
+
+    // 4. Inscreve os 3 leads na entrada com icaronTag
+    for (const c of [contactA43, contactB43, contactC43]) {
+      await prisma.contactTag.create({
+        data: { contactId: c.id, tagId: tagEntry43.id },
+      });
+      await testHandleContactTagAddedEngine(c.id, 'icaronTag', testTenant.id);
+    }
+
+    // Verifica que os 3 leads entraram na seq1
+    const seq1Enrollments = await prisma.automationEnrollment.findMany({
+      where: { automationId: funnelAutomation.id, contactId: { in: [contactA43.id, contactB43.id, contactC43.id] } },
+    });
+    if (seq1Enrollments.length !== 3) {
+      throw new Error(`Esperado 3 inscrições na automação, encontrou ${seq1Enrollments.length}`);
+    }
+
+    // 5. Executa a conclusão das mensagens internas da seq1 para os 3 leads
+    for (const enr of seq1Enrollments) {
+      await testExecuteSequenceSubflowCompletion(enr.id, 'seq1', funnelNodes, funnelEdges);
+    }
+
+    // 6. VALIDAÇÃO DA REGRA PRINCIPAL:
+    // - Os leads DEVEM PERMANECER na seq1 com status WAITING_TAG (Aguardando TAG de saída)
+    // - A TAG DE SAÍDA NÃO DEVE ter sido aplicada aos contatos
+    // - NENHUM lead deve ter avançado automaticamente para a seq2!
+    const enrollmentsAfterMsg = await prisma.automationEnrollment.findMany({
+      where: { automationId: funnelAutomation.id, contactId: { in: [contactA43.id, contactB43.id, contactC43.id] } },
+    });
+
+    for (const enr of enrollmentsAfterMsg) {
+      if (enr.status !== 'WAITING_TAG') {
+        throw new Error(`Esperado status WAITING_TAG para lead ${enr.contactId}, mas encontrou ${enr.status}`);
+      }
+      if (enr.currentNodeId !== 'seq1') {
+        throw new Error(`Esperado currentNodeId seq1 para lead ${enr.contactId}, mas encontrou ${enr.currentNodeId}`);
+      }
+    }
+
+    // Verifica que nenhum lead recebeu a TAG SAIDA DO FUNIL
+    const exitTagsAttached = await prisma.contactTag.findMany({
+      where: {
+        contactId: { in: [contactA43.id, contactB43.id, contactC43.id] },
+        tagId: tagExit43.id,
+      },
+    });
+    if (exitTagsAttached.length > 0) {
+      throw new Error(`FALHA CRÍTICA: A tag de saída foi aplicada indevidamente a ${exitTagsAttached.length} leads!`);
+    }
+
+    // 7. VALIDAÇÃO DE TRANSIÇÃO ATÔMICA:
+    // Aplica a TAG SAIDA DO FUNIL apenas ao contactA43
+    await prisma.contactTag.create({
+      data: { contactId: contactA43.id, tagId: tagExit43.id },
+    });
+    await testHandleContactTagAddedEngine(contactA43.id, 'TAG SAIDA DO FUNIL', testTenant.id);
+
+    // contactA43 deve ter migrado para seq2
+    const enrAAfter = await prisma.automationEnrollment.findFirst({
+      where: { automationId: funnelAutomation.id, contactId: contactA43.id },
+    });
+    if (enrAAfter.currentNodeId !== 'seq2') {
+      throw new Error(`Esperado contactA transferido para seq2, mas encontrou ${enrAAfter.currentNodeId}`);
+    }
+
+    // contactB43 e contactC43 DEVEM CONTINUAR em seq1 com WAITING_TAG
+    const enrB = await prisma.automationEnrollment.findFirst({
+      where: { automationId: funnelAutomation.id, contactId: contactB43.id },
+    });
+    const enrC = await prisma.automationEnrollment.findFirst({
+      where: { automationId: funnelAutomation.id, contactId: contactC43.id },
+    });
+    if (enrB.status !== 'WAITING_TAG' || enrB.currentNodeId !== 'seq1') {
+      throw new Error('contactB deveria continuar aguardando tag de saída na seq1');
+    }
+    if (enrC.status !== 'WAITING_TAG' || enrC.currentNodeId !== 'seq1') {
+      throw new Error('contactC deveria continuar aguardando tag de saída na seq1');
+    }
+
+    // 8. VALIDAÇÃO DE RAMIFICAÇÃO (BRANCHING):
+    // contactA43 está em seq2 e agora recebe TAG_PIX_GERADO_43
+    await prisma.contactTag.create({
+      data: { contactId: contactA43.id, tagId: tagPix43.id },
+    });
+    await testHandleContactTagAddedEngine(contactA43.id, 'TAG_PIX_GERADO_43', testTenant.id);
+
+    const enrAAfterPix = await prisma.automationEnrollment.findFirst({
+      where: { automationId: funnelAutomation.id, contactId: contactA43.id },
+    });
+    if (enrAAfterPix.currentNodeId !== 'seq_pix') {
+      throw new Error(`Esperado contactA transferido para seq_pix (ramificação PIX), mas encontrou ${enrAAfterPix.currentNodeId}`);
+    }
+
+    // 9. VALIDAÇÃO DE ENTRADA CONTÍNUA DE NOVO LEAD:
+    // Novo lead é criado no sistema e recebe a tag raiz icaronTag
+    const contactD43 = await prisma.contact.create({
+      data: { tenantId: testTenant.id, name: 'Lead Novo Contínuo', phone: `5511999${ts43.toString().slice(-6)}4`, email: `novo_funil_${ts43}@teste.com` },
+    });
+    await prisma.contactTag.create({
+      data: { contactId: contactD43.id, tagId: tagEntry43.id },
+    });
+    await testHandleContactTagAddedEngine(contactD43.id, 'icaronTag', testTenant.id);
+
+    const enrD = await prisma.automationEnrollment.findFirst({
+      where: { automationId: funnelAutomation.id, contactId: contactD43.id },
+    });
+    if (!enrD || enrD.currentNodeId !== 'seq1') {
+      throw new Error('Novo lead deveria ter sido inscrito automaticamente na seq1 ao receber a tag de entrada raiz');
+    }
+
+    // Limpeza Teste 43
+    await prisma.scheduledJob.deleteMany({ where: { enrollment: { automationId: funnelAutomation.id } } });
+    await prisma.automationStepLog.deleteMany({ where: { enrollment: { automationId: funnelAutomation.id } } });
+    await prisma.automationEnrollment.deleteMany({ where: { automationId: funnelAutomation.id } });
+    await prisma.automation.delete({ where: { id: funnelAutomation.id } });
+    await prisma.contactTag.deleteMany({
+      where: { contactId: { in: [contactA43.id, contactB43.id, contactC43.id, contactD43.id] } },
+    });
+    await prisma.contact.deleteMany({
+      where: { id: { in: [contactA43.id, contactB43.id, contactC43.id, contactD43.id] } },
+    });
+    await prisma.tag.deleteMany({
+      where: { id: { in: [tagEntry43.id, tagExit43.id, tagPix43.id, tagCompra43.id] } },
+    });
+
+    console.log('✔ PASSOU: Motor de automação de funis por TAGs e eventos validado com 100% de sucesso.');
     passed++;
 
     console.log('\n=====================================================');

@@ -7,60 +7,21 @@ async function migrateSaas() {
 
   try {
     // 1. Colunas na tabela User
-    const userColumns = await prisma.$queryRawUnsafe('PRAGMA table_info("User");');
-    const userColNames = Array.isArray(userColumns) ? userColumns.map((c) => c.name) : [];
-
-    if (!userColNames.includes('phone')) {
-      console.log('[MIGRATION SAAS] Adicionando coluna "phone" na tabela User...');
-      await prisma.$executeRawUnsafe('ALTER TABLE "User" ADD COLUMN "phone" TEXT;');
-    }
-    if (!userColNames.includes('status')) {
-      console.log('[MIGRATION SAAS] Adicionando coluna "status" na tabela User...');
-      await prisma.$executeRawUnsafe('ALTER TABLE "User" ADD COLUMN "status" TEXT NOT NULL DEFAULT \'ACTIVE\';');
-    }
-    if (!userColNames.includes('clientId')) {
-      console.log('[MIGRATION SAAS] Adicionando coluna "clientId" na tabela User...');
-      await prisma.$executeRawUnsafe('ALTER TABLE "User" ADD COLUMN "clientId" TEXT;');
-    }
+    try { await prisma.$executeRawUnsafe('ALTER TABLE "User" ADD COLUMN "phone" TEXT;'); } catch (e) {}
+    try { await prisma.$executeRawUnsafe('ALTER TABLE "User" ADD COLUMN "status" TEXT NOT NULL DEFAULT \'ACTIVE\';'); } catch (e) {}
+    try { await prisma.$executeRawUnsafe('ALTER TABLE "User" ADD COLUMN "clientId" TEXT;'); } catch (e) {}
 
     // 2. Coluna na tabela Tenant
-    const tenantColumns = await prisma.$queryRawUnsafe('PRAGMA table_info("Tenant");');
-    const tenantColNames = Array.isArray(tenantColumns) ? tenantColumns.map((c) => c.name) : [];
-
-    if (!tenantColNames.includes('clientId')) {
-      console.log('[MIGRATION SAAS] Adicionando coluna "clientId" na tabela Tenant...');
-      await prisma.$executeRawUnsafe('ALTER TABLE "Tenant" ADD COLUMN "clientId" TEXT;');
-    }
+    try { await prisma.$executeRawUnsafe('ALTER TABLE "Tenant" ADD COLUMN "clientId" TEXT;'); } catch (e) {}
 
     // 3. Coluna na tabela WhatsappInstance
-    const instanceColumns = await prisma.$queryRawUnsafe('PRAGMA table_info("WhatsappInstance");');
-    const instanceColNames = Array.isArray(instanceColumns) ? instanceColumns.map((c) => c.name) : [];
-
-    if (!instanceColNames.includes('userId')) {
-      console.log('[MIGRATION SAAS] Adicionando coluna "userId" na tabela WhatsappInstance...');
-      await prisma.$executeRawUnsafe('ALTER TABLE "WhatsappInstance" ADD COLUMN "userId" TEXT;');
-    }
+    try { await prisma.$executeRawUnsafe('ALTER TABLE "WhatsappInstance" ADD COLUMN "userId" TEXT;'); } catch (e) {}
 
     // 3.1. Colunas na tabela whatsapp_groups para Comunidades
-    const groupColumns = await prisma.$queryRawUnsafe('PRAGMA table_info("whatsapp_groups");').catch(() => []);
-    const groupColNames = Array.isArray(groupColumns) ? groupColumns.map((c) => c.name) : [];
-
-    if (!groupColNames.includes('is_community')) {
-      console.log('[MIGRATION SAAS] Adicionando coluna "is_community" na tabela whatsapp_groups...');
-      await prisma.$executeRawUnsafe('ALTER TABLE "whatsapp_groups" ADD COLUMN "is_community" BOOLEAN NOT NULL DEFAULT 0;');
-    }
-    if (!groupColNames.includes('is_community_announce')) {
-      console.log('[MIGRATION SAAS] Adicionando coluna "is_community_announce" na tabela whatsapp_groups...');
-      await prisma.$executeRawUnsafe('ALTER TABLE "whatsapp_groups" ADD COLUMN "is_community_announce" BOOLEAN NOT NULL DEFAULT 0;');
-    }
-    if (!groupColNames.includes('parent_community_jid')) {
-      console.log('[MIGRATION SAAS] Adicionando coluna "parent_community_jid" na tabela whatsapp_groups...');
-      await prisma.$executeRawUnsafe('ALTER TABLE "whatsapp_groups" ADD COLUMN "parent_community_jid" TEXT;');
-    }
-    if (!groupColNames.includes('description')) {
-      console.log('[MIGRATION SAAS] Adicionando coluna "description" na tabela whatsapp_groups...');
-      await prisma.$executeRawUnsafe('ALTER TABLE "whatsapp_groups" ADD COLUMN "description" TEXT;');
-    }
+    try { await prisma.$executeRawUnsafe('ALTER TABLE "whatsapp_groups" ADD COLUMN "is_community" BOOLEAN NOT NULL DEFAULT 0;'); } catch (e) {}
+    try { await prisma.$executeRawUnsafe('ALTER TABLE "whatsapp_groups" ADD COLUMN "is_community_announce" BOOLEAN NOT NULL DEFAULT 0;'); } catch (e) {}
+    try { await prisma.$executeRawUnsafe('ALTER TABLE "whatsapp_groups" ADD COLUMN "parent_community_jid" TEXT;'); } catch (e) {}
+    try { await prisma.$executeRawUnsafe('ALTER TABLE "whatsapp_groups" ADD COLUMN "description" TEXT;'); } catch (e) {}
 
     // 4. Criação da tabela saas_clients se não existir
     await prisma.$executeRawUnsafe(`

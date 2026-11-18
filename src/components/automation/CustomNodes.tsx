@@ -21,6 +21,7 @@ import {
   Globe,
   Trash2,
   Copy,
+  Users,
 } from 'lucide-react';
 
 // ============================================================
@@ -30,16 +31,18 @@ export const NodeActionToolbar = ({
   selected,
   onDuplicate,
   onDelete,
+  onViewLeads,
   canDelete = true,
   canDuplicate = true,
 }: {
   selected?: boolean;
   onDuplicate?: () => void;
   onDelete?: () => void;
+  onViewLeads?: () => void;
   canDelete?: boolean;
   canDuplicate?: boolean;
 }) => {
-  if (!canDelete && !canDuplicate) return null;
+  if (!canDelete && !canDuplicate && !onViewLeads) return null;
 
   return (
     <div
@@ -52,6 +55,25 @@ export const NodeActionToolbar = ({
       {/* Ponte e hitbox ampliada conectando diretamente a barra ao topo do nó para evitar perda de hover */}
       <div className="absolute -bottom-3.5 -inset-x-3 h-5 bg-transparent pointer-events-auto" />
       <div className="absolute -inset-1.5 bg-transparent pointer-events-auto -z-10" />
+
+      {onViewLeads && (
+        <button
+          type="button"
+          onClick={(e) => {
+            e.stopPropagation();
+            onViewLeads();
+          }}
+          title="Ver leads desta sequência"
+          aria-label="Ver leads desta sequência"
+          className="relative z-10 w-5 h-5 rounded flex items-center justify-center text-sky-400 hover:text-sky-200 hover:bg-sky-500/25 transition-all active:scale-90 cursor-pointer"
+        >
+          <Users className="w-3 h-3" />
+        </button>
+      )}
+
+      {onViewLeads && (canDuplicate || canDelete) && (
+        <div className="relative z-10 w-[1px] h-3 bg-slate-700/80 my-auto" />
+      )}
 
       {canDuplicate && (
         <button
@@ -117,11 +139,12 @@ export const TagNode = memo(({ data, selected }: any) => {
             : 'bg-[#555861] hover:bg-[#60636d] shadow-md'
         }`}
       >
-        {/* Ações rápidas (Duplicar e Lixeira) */}
+        {/* Ações rápidas (Duplicar, Leads e Lixeira) */}
         <NodeActionToolbar
           selected={selected}
           onDuplicate={data?.onDuplicateNode}
           onDelete={data?.onDeleteNode}
+          onViewLeads={data?.onViewLeads}
         />
 
         {/* Hitbox estendida para manter o hover contínuo ao mover o mouse até a barra superior */}
@@ -220,11 +243,12 @@ export const SequenceLeadNode = memo(({ data, selected }: any) => {
             : 'bg-[#b83b3b] hover:bg-[#c24141] shadow-lg'
         }`}
       >
-        {/* Ações rápidas (Duplicar e Lixeira) */}
+        {/* Ações rápidas (Duplicar, Leads e Lixeira) */}
         <NodeActionToolbar
           selected={selected}
           onDuplicate={data?.onDuplicateNode}
           onDelete={data?.onDeleteNode}
+          onViewLeads={data?.onViewLeads}
         />
 
         {/* Hitbox estendida para manter o hover contínuo ao mover o mouse até a barra superior */}
@@ -267,14 +291,23 @@ export const SequenceLeadNode = memo(({ data, selected }: any) => {
         </span>
 
         {/* Pílulas coloridas de status (Amarelo, Verde, Vermelho) */}
-        <div className="flex items-center justify-center gap-1 mt-1">
-          <span className="px-2 py-0.2 rounded-md bg-[#848c26] text-black font-bold text-[10px] min-w-[20px] text-center">
+        <div
+          className="flex items-center justify-center gap-1 mt-1 hover:scale-105 transition-transform"
+          onClick={(e) => {
+            if (data?.onViewLeads) {
+              e.stopPropagation();
+              data.onViewLeads();
+            }
+          }}
+          title="Ver detalhes dos leads vinculados a esta sequência"
+        >
+          <span className="px-2 py-0.2 rounded-md bg-[#848c26] text-black font-bold text-[10px] min-w-[20px] text-center" title="Aguardando (Delay ou TAG de saída)">
             {waiting}
           </span>
-          <span className="px-2 py-0.2 rounded-md bg-[#1db954] text-black font-bold text-[10px] min-w-[20px] text-center">
+          <span className="px-2 py-0.2 rounded-md bg-[#1db954] text-black font-bold text-[10px] min-w-[20px] text-center" title="Concluídos / Transferidos">
             {success}
           </span>
-          <span className="px-2 py-0.2 rounded-md bg-[#b83b3b] text-white font-bold text-[10px] min-w-[20px] text-center">
+          <span className="px-2 py-0.2 rounded-md bg-[#b83b3b] text-white font-bold text-[10px] min-w-[20px] text-center" title="Falhas">
             {failed}
           </span>
         </div>
@@ -337,11 +370,12 @@ export const TimerNode = memo(({ data, selected }: any) => {
             : 'bg-[#181a20] border border-slate-700/60 hover:border-slate-500 shadow-lg'
         }`}
       >
-        {/* Ações rápidas (Duplicar e Lixeira) */}
+        {/* Ações rápidas (Duplicar, Leads e Lixeira) */}
         <NodeActionToolbar
           selected={selected}
           onDuplicate={data?.onDuplicateNode}
           onDelete={data?.onDeleteNode}
+          onViewLeads={data?.onViewLeads}
         />
 
         {/* Hitbox estendida para manter o hover contínuo ao mover o mouse até a barra superior */}
@@ -457,11 +491,12 @@ export const WhatsAppNode = memo(({ data, selected }: any) => {
             : 'bg-[#1e7c3b] hover:bg-[#238b43] shadow-lg'
         }`}
       >
-        {/* Ações rápidas (Duplicar e Lixeira) */}
+        {/* Ações rápidas (Duplicar, Leads e Lixeira) */}
         <NodeActionToolbar
           selected={selected}
           onDuplicate={data?.onDuplicateNode}
           onDelete={data?.onDeleteNode}
+          onViewLeads={data?.onViewLeads}
         />
 
         {/* Hitbox estendida para manter o hover contínuo ao mover o mouse até a barra superior */}
@@ -548,11 +583,12 @@ export const EmailNode = memo(({ data, selected }: any) => {
             : 'bg-[#8d4f2f] hover:bg-[#9a5b3a] shadow-lg'
         }`}
       >
-        {/* Ações rápidas (Duplicar e Lixeira) */}
+        {/* Ações rápidas (Duplicar, Leads e Lixeira) */}
         <NodeActionToolbar
           selected={selected}
           onDuplicate={data?.onDuplicateNode}
           onDelete={data?.onDeleteNode}
+          onViewLeads={data?.onViewLeads}
         />
 
         {/* Hitbox estendida para manter o hover contínuo ao mover o mouse até a barra superior */}
@@ -630,11 +666,12 @@ export const WarmupNode = memo(({ data, selected }: any) => {
             : 'bg-[#d94d5c] hover:bg-[#e05260] shadow-lg'
         }`}
       >
-        {/* Ações rápidas (Duplicar e Lixeira) */}
+        {/* Ações rápidas (Duplicar, Leads e Lixeira) */}
         <NodeActionToolbar
           selected={selected}
           onDuplicate={data?.onDuplicateNode}
           onDelete={data?.onDeleteNode}
+          onViewLeads={data?.onViewLeads}
         />
 
         {/* Hitbox estendida para manter o hover contínuo ao mover o mouse até a barra superior */}
@@ -741,11 +778,12 @@ export const EditarGrupoNode = memo(({ data, selected }: any) => {
             : 'bg-[#2b2d3d] hover:bg-[#34374a] border border-purple-500/40 shadow-lg'
         }`}
       >
-        {/* Ações rápidas (Duplicar e Lixeira) */}
+        {/* Ações rápidas (Duplicar, Leads e Lixeira) */}
         <NodeActionToolbar
           selected={selected}
           onDuplicate={data?.onDuplicateNode}
           onDelete={data?.onDeleteNode}
+          onViewLeads={data?.onViewLeads}
         />
 
         {/* Hitbox estendida para manter o hover contínuo ao mover o mouse até a barra superior */}
