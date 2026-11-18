@@ -1,37 +1,40 @@
 import { NextResponse } from 'next/server';
-import { getActiveTenantId } from '@/lib/tenancy';
+import { getActiveTenantId, ensureTenantAccess } from '@/lib/tenancy';
+import { getCurrentSession } from '@/lib/auth';
 import { messageManager } from '@/services/messaging';
-import { prisma } from '@/lib/prisma';
 
 export const dynamic = 'force-dynamic';
 export const revalidate = 0;
 
 /**
  * POST /api/whatsapp/sync
- * Sincroniza em tempo real todas as instâncias conectadas na Evolution API
- * com o banco de dados do Tenant ativo e retorna a listagem atualizada.
+ * Sincroniza em tempo real o status das instâncias cadastradas deste Tenant ativo com a Evolution API.
+ * A Evolution API NÃO controla visibilidade: somente as instâncias do tenant no SQLite são atualizadas.
  */
 export async function POST(request: Request) {
   try {
-    let tenantId = await getActiveTenantId();
-    if (!tenantId) {
-      let defaultTenant = await prisma.tenant.findFirst({ orderBy: { createdAt: 'asc' } });
-      if (!defaultTenant) {
-        defaultTenant = await prisma.tenant.create({
-          data: {
-            name: 'Meu Expert Principal',
-            slug: 'expert-principal',
-            status: 'ACTIVE',
-          },
-        });
-      }
-      tenantId = defaultTenant.id;
+    const session = await getCurrentSession();
+    if (!session) {
+      return NextResponse.json({ error: 'Não autenticado' }, { status: 401 });
     }
 
-    // 1. Força a sincronização na Evolution API
+    const tenantId = await getActiveTenantId();
+    if (!tenantId) {
+      return NextResponse.json({
+        success: true,
+        instances: [],
+        hasInstance: false,
+        connected: false,
+        status: 'DISCONNECTED',
+      });
+    }
+
+    await ensureTenantAccess(tenantId, session.userId, session.globalRole);
+
+    // 1. Sincroniza SOMENTE as instâncias cadastradas deste tenant
     const syncResult = await messageManager.evolutionApi.syncAllFromEvolutionApi(tenantId);
 
-    // 2. Obtém a lista atualizada de instâncias
+    // 2. Obtém a lista atualizada de instâncias deste tenant
     const status = await messageManager.evolutionApi.getStatus(tenantId);
 
     const response = NextResponse.json({

@@ -77,10 +77,10 @@ async function syncWhatsappInstances() {
       });
 
       if (existing) {
+        // Atualiza apenas status e perfil da instância existente. NUNCA altera o tenantId!
         await prisma.whatsappInstance.update({
           where: { id: existing.id },
           data: {
-            tenantId: tenant.id,
             status: isConnected ? 'CONNECTED' : (evoState === 'connecting' ? 'CONNECTING' : 'DISCONNECTED'),
             phone: phone || existing.phone,
             profileName: profileName || existing.profileName,
@@ -89,26 +89,10 @@ async function syncWhatsappInstances() {
           },
         });
         syncedCount++;
-        console.log(`[SYNC] Instância atualizada: ${evoName} (${isConnected ? 'CONECTADO' : evoState})`);
-      } else if (isConnected || evoState === 'connecting') {
-        const totalCount = await prisma.whatsappInstance.count({ where: { tenantId: tenant.id } });
-        await prisma.whatsappInstance.create({
-          data: {
-            tenantId: tenant.id,
-            name: profileName + (phone ? ` (${phone})` : ''),
-            instanceName: evoName,
-            instanceToken: evo.token || 'tok_' + Math.random().toString(36).substring(2),
-            status: isConnected ? 'CONNECTED' : 'CONNECTING',
-            phone,
-            profileName,
-            isDefault: totalCount === 0,
-            lastConnectedAt: isConnected ? new Date() : null,
-            qrcode: null,
-          },
-        });
-        syncedCount++;
-        console.log(`[SYNC] Nova instância cadastrada no tenant ${tenant.id}: ${evoName} (${phone || 'sem fone'})`);
+        console.log(`[SYNC] Instância atualizada (tenant ${existing.tenantId}): ${evoName} (${isConnected ? 'CONECTADO' : evoState})`);
       }
+      // NUNCA adotar ou criar instâncias órfãs da Evolution API no primeiro tenant!
+      // Cada instância pertence exclusivamente ao tenant que a criou através da plataforma.
     }
 
     console.log(`[SYNC] Sincronização concluída com sucesso: ${syncedCount} instâncias sincronizadas.`);

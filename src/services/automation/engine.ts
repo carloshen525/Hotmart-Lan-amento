@@ -1130,11 +1130,11 @@ export class AutomationEngine {
             } catch {}
           }
 
-          // Fallback resiliente: se ainda não houver instância definida, busca a primeira conectada
+          // Fallback resiliente: se ainda não houver instância definida, busca a primeira conectada do tenant
           if (!wppInstanceId) {
             try {
               const defaultInst = await prisma.whatsappInstance.findFirst({
-                where: { status: 'CONNECTED' },
+                where: { tenantId, status: 'CONNECTED' },
                 orderBy: [{ isDefault: 'desc' }, { createdAt: 'desc' }],
               });
               if (defaultInst) {

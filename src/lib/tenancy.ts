@@ -6,19 +6,49 @@ const TENANT_COOKIE_NAME = 'launch_active_tenant_id';
 
 export async function getActiveTenantId(): Promise<string> {
   const session = await getCurrentSession();
+
+  // 1. Se houver tenantId gravado na sessão JWT
   if (session?.tenantId) {
-    const exists = await prisma.tenant.findUnique({ where: { id: session.tenantId } });
-    if (exists) return exists.id;
+    if (session.globalRole === 'SUPER_ADMIN' || session.globalRole === 'ADMIN') {
+      const exists = await prisma.tenant.findUnique({ where: { id: session.tenantId } });
+      if (exists) return exists.id;
+    } else if (session.userId) {
+      const member = await prisma.tenantMembership.findUnique({
+        where: { tenantId_userId: { tenantId: session.tenantId, userId: session.userId } },
+      });
+      if (member) return member.tenantId;
+    }
   }
 
+  // 2. Se houver cookie de tenant selecionado na interface
   const cookieStore = cookies();
   const activeCookie = cookieStore.get(TENANT_COOKIE_NAME)?.value;
   if (activeCookie) {
-    const exists = await prisma.tenant.findUnique({ where: { id: activeCookie } });
-    if (exists) return exists.id;
+    if (!session || session.globalRole === 'SUPER_ADMIN' || session.globalRole === 'ADMIN') {
+      const exists = await prisma.tenant.findUnique({ where: { id: activeCookie } });
+      if (exists) return exists.id;
+    } else if (session.userId) {
+      const member = await prisma.tenantMembership.findUnique({
+        where: { tenantId_userId: { tenantId: activeCookie, userId: session.userId } },
+      });
+      if (member) return member.tenantId;
+    }
   }
 
-  // Fallback para o primeiro tenant cadastrado se existir, ou provisiona o padrão
+  // 3. Se for usuário autenticado (não Super Admin), busca o primeiro tenant do qual ele é membro
+  if (session?.userId && session.globalRole !== 'SUPER_ADMIN' && session.globalRole !== 'ADMIN') {
+    const userMembership = await prisma.tenantMembership.findFirst({
+      where: { userId: session.userId },
+      orderBy: { createdAt: 'asc' },
+    });
+    if (userMembership) {
+      return userMembership.tenantId;
+    }
+    // Usuário sem nenhum tenant: NUNCA vazar dados de outro cliente!
+    return '';
+  }
+
+  // 4. Fallback para o primeiro tenant cadastrado se existir (somente Super Admin ou inicialização sem sessão)
   let firstTenant = await prisma.tenant.findFirst({
     orderBy: { createdAt: 'asc' },
   });

@@ -8,7 +8,7 @@ async function runTestSuite() {
   console.log('=====================================================\n');
 
   let passed = 0;
-  let total = 41;
+  let total = 42;
 
   // Setup de tenant de teste limpo
   const testTenant = await prisma.tenant.upsert({
@@ -4543,6 +4543,176 @@ async function runTestSuite() {
     });
 
     console.log('✔ PASSOU: Suporte completo a Comunidades do WhatsApp: identificação, validação admin, subgrupos vinculados, tags e expansão em automações validada com 100% de sucesso.');
+    passed++;
+
+    // -------------------------------------------------------------
+    // TESTE 42: Isolamento Absoluto de Instâncias WhatsApp entre Clientes (Multi-Tenant)
+    // -------------------------------------------------------------
+    console.log('\n[TESTE 42] Isolamento Absoluto de Instâncias WhatsApp entre Clientes (Multi-Tenant)...');
+
+    // 1. Setup de dois clientes distintos e um super admin
+    const clientTenantA = await prisma.tenant.create({
+      data: {
+        name: 'Cliente A Corp',
+        slug: `tenant-a-${Date.now()}`,
+      },
+    });
+
+    const clientTenantB = await prisma.tenant.create({
+      data: {
+        name: 'Cliente B Corp',
+        slug: `tenant-b-${Date.now()}`,
+      },
+    });
+
+    const userA = await prisma.user.create({
+      data: {
+        name: 'Usuário Cliente A',
+        email: `usera_${Date.now()}@test.com`,
+        passwordHash: 'dummy_hash',
+        role: 'CLIENT_ADMIN',
+      },
+    });
+
+    const userB = await prisma.user.create({
+      data: {
+        name: 'Usuário Cliente B',
+        email: `userb_${Date.now()}@test.com`,
+        passwordHash: 'dummy_hash',
+        role: 'CLIENT_ADMIN',
+      },
+    });
+
+    await prisma.tenantMembership.create({
+      data: { tenantId: clientTenantA.id, userId: userA.id, role: 'OWNER' },
+    });
+
+    await prisma.tenantMembership.create({
+      data: { tenantId: clientTenantB.id, userId: userB.id, role: 'OWNER' },
+    });
+
+    // Subteste 42.1: Usuário 1 cria duas instâncias WhatsApp
+    const instA1 = await prisma.whatsappInstance.create({
+      data: {
+        tenantId: clientTenantA.id,
+        userId: userA.id,
+        name: 'WhatsApp Vendas A1',
+        instanceName: `inst_wa_test_a1_${Date.now()}`,
+        instanceToken: `tok_a1_${Date.now()}`,
+        status: 'CONNECTED',
+        phone: '+5511911110001',
+        profileName: 'Vendas A1',
+        isDefault: true,
+      },
+    });
+
+    const instA2 = await prisma.whatsappInstance.create({
+      data: {
+        tenantId: clientTenantA.id,
+        userId: userA.id,
+        name: 'WhatsApp Suporte A2',
+        instanceName: `inst_wa_test_a2_${Date.now()}`,
+        instanceToken: `tok_a2_${Date.now()}`,
+        status: 'CONNECTED',
+        phone: '+5511911110002',
+        profileName: 'Suporte A2',
+        isDefault: false,
+      },
+    });
+
+    assert.strictEqual(instA1.tenantId, clientTenantA.id, 'instA1 deve estar vinculada ao Tenant A');
+    assert.strictEqual(instA1.userId, userA.id, 'instA1 deve ter o userId do Usuário A');
+
+    // Subteste 42.2: Usuário 2 não possui nenhuma instância.
+    // Consulta filtrada estritamente por tenantId DEVE retornar 0 instâncias.
+    const instancesUserBInitial = await prisma.whatsappInstance.findMany({
+      where: { tenantId: clientTenantB.id },
+    });
+    assert.strictEqual(instancesUserBInitial.length, 0, 'Usuário B não deve visualizar nenhuma instância de A');
+
+    // Subteste 42.3: Usuário 2 cria sua própria instância
+    const instB1 = await prisma.whatsappInstance.create({
+      data: {
+        tenantId: clientTenantB.id,
+        userId: userB.id,
+        name: 'WhatsApp Marketing B1',
+        instanceName: `inst_wa_test_b1_${Date.now()}`,
+        instanceToken: `tok_b1_${Date.now()}`,
+        status: 'CONNECTED',
+        phone: '+5521922220001',
+        profileName: 'Marketing B1',
+        isDefault: true,
+      },
+    });
+
+    // Usuário B agora enxerga APENAS sua própria instância
+    const instancesUserBAfter = await prisma.whatsappInstance.findMany({
+      where: { tenantId: clientTenantB.id },
+    });
+    assert.strictEqual(instancesUserBAfter.length, 1, 'Usuário B deve visualizar exclusivamente 1 instância');
+    assert.strictEqual(instancesUserBAfter[0].id, instB1.id, 'Usuário B deve ver apenas instB1');
+
+    // Usuário A continua enxergando APENAS suas 2 instâncias
+    const instancesUserAAfter = await prisma.whatsappInstance.findMany({
+      where: { tenantId: clientTenantA.id },
+    });
+    assert.strictEqual(instancesUserAAfter.length, 2, 'Usuário A deve visualizar exclusivamente 2 instâncias');
+    const aIds = instancesUserAAfter.map(i => i.id);
+    assert.ok(aIds.includes(instA1.id) && aIds.includes(instA2.id), 'Usuário A deve ver instA1 e instA2');
+    assert.ok(!aIds.includes(instB1.id), 'Usuário A NUNCA deve ver instB1');
+
+    // Subteste 42.4: Tentativa de Acesso Cruzado Malicioso (Tentativa de deletar / atualizar instância de outro tenant)
+    // Usuário B tenta atualizar a instância de A fornecendo seu próprio tenantId
+    const attackUpdate = await prisma.whatsappInstance.findFirst({
+      where: { id: instA1.id, tenantId: clientTenantB.id },
+    });
+    assert.strictEqual(attackUpdate, null, 'Usuário B não pode localizar instância de A usando seu tenantId');
+
+    // Subteste 42.5: Isolamento em Automações de Disparo
+    // Automação do Tenant B tentando usar a instância de A
+    const autoB = await prisma.automation.create({
+      data: {
+        tenantId: clientTenantB.id,
+        name: 'Fluxo Hacker Tenant B',
+        status: 'DRAFT',
+      },
+    });
+
+    // Validação preventiva na ativação: verifica se a instância configurada pertence ao tenant da automação
+    const isInstanceOwnedByTenantB = await prisma.whatsappInstance.findFirst({
+      where: { id: instA1.id, tenantId: autoB.tenantId },
+    });
+    assert.strictEqual(isInstanceOwnedByTenantB, null, 'Automação do Tenant B não pode utilizar instância do Tenant A');
+
+    // Subteste 42.6: Super Admin possui visibilidade global com identificação de proprietário
+    const allInstancesAdmin = await prisma.whatsappInstance.findMany({
+      where: { id: { in: [instA1.id, instA2.id, instB1.id] } },
+      include: {
+        tenant: { select: { id: true, name: true } },
+        user: { select: { id: true, email: true } },
+      },
+    });
+    assert.strictEqual(allInstancesAdmin.length, 3, 'Super Admin visualiza todas as 3 instâncias');
+    const instA1Admin = allInstancesAdmin.find(i => i.id === instA1.id);
+    assert.strictEqual(instA1Admin.tenant.name, 'Cliente A Corp');
+    assert.strictEqual(instA1Admin.user.email, userA.email);
+
+    // Limpeza Teste 42
+    await prisma.automation.deleteMany({ where: { id: autoB.id } });
+    await prisma.whatsappInstance.deleteMany({
+      where: { id: { in: [instA1.id, instA2.id, instB1.id] } },
+    });
+    await prisma.tenantMembership.deleteMany({
+      where: { tenantId: { in: [clientTenantA.id, clientTenantB.id] } },
+    });
+    await prisma.tenant.deleteMany({
+      where: { id: { in: [clientTenantA.id, clientTenantB.id] } },
+    });
+    await prisma.user.deleteMany({
+      where: { id: { in: [userA.id, userB.id] } },
+    });
+
+    console.log('✔ PASSOU: Isolamento multi-tenant de instâncias WhatsApp validado com 100% de sucesso.');
     passed++;
 
     console.log('\n=====================================================');

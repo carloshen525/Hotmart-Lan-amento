@@ -661,14 +661,14 @@ export async function PUT(request: Request, { params }: { params: { id: string }
             );
           }
 
-          const inst = await prisma.whatsappInstance.findUnique({
-            where: { id: instId },
+          const inst = await prisma.whatsappInstance.findFirst({
+            where: { id: instId, tenantId: existing.tenantId },
           });
 
           if (!inst) {
             return NextResponse.json(
               {
-                error: 'O número de WhatsApp configurado para este fluxo não foi encontrado. Selecione um número válido antes de ativar.',
+                error: 'O número de WhatsApp configurado para este fluxo não foi encontrado para este Expert. Selecione um número válido antes de ativar.',
                 missingWhatsapp: true,
               },
               { status: 400 }

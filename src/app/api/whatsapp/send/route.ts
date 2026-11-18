@@ -1,11 +1,23 @@
 import { NextResponse } from 'next/server';
-import { getActiveTenantId } from '@/lib/tenancy';
+import { getActiveTenantId, ensureTenantAccess } from '@/lib/tenancy';
+import { getCurrentSession } from '@/lib/auth';
 import { messageManager } from '@/services/messaging';
 import { prisma } from '@/lib/prisma';
 
 export async function POST(request: Request) {
   try {
+    const session = await getCurrentSession();
+    if (!session) {
+      return NextResponse.json({ error: 'Não autenticado' }, { status: 401 });
+    }
+
     const tenantId = await getActiveTenantId();
+    if (!tenantId) {
+      return NextResponse.json({ error: 'Tenant não autenticado' }, { status: 401 });
+    }
+
+    await ensureTenantAccess(tenantId, session.userId, session.globalRole);
+
     const {
       phone,
       text,
@@ -21,6 +33,16 @@ export async function POST(request: Request) {
 
     if (!phone || (!text && !mediaUrl && !mediaBase64)) {
       return NextResponse.json({ error: 'Telefone e mensagem ou mídia são obrigatórios' }, { status: 400 });
+    }
+
+    // Se informou whatsappInstanceId, valida que pertence a este tenant
+    if (whatsappInstanceId) {
+      const inst = await prisma.whatsappInstance.findFirst({
+        where: { id: whatsappInstanceId, tenantId },
+      });
+      if (!inst) {
+        return NextResponse.json({ error: 'Instância do WhatsApp não encontrada para este cliente' }, { status: 403 });
+      }
     }
 
     // Se não informou contactId, busca ou cria contato para rastreio
