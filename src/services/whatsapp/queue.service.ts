@@ -65,8 +65,19 @@ export interface WhatsappQueueStats {
 }
 
 export class WhatsappQueueService {
-  // Lock de concorrência em memória por instância: apenas 1 worker por instância WhatsApp
-  private static processingInstances = new Set<string>();
+  // Lock de concorrência com timestamp por instância: previne workers duplicados e limpa locks estagnados
+  private static processingInstances = new Map<string, number>();
+
+  private static isInstanceLocked(key: string): boolean {
+    const lastActive = this.processingInstances.get(key);
+    if (!lastActive) return false;
+    // Se o worker estiver inativo há mais de 45 segundos, considera estagnado e libera
+    if (Date.now() - lastActive > 45000) {
+      this.processingInstances.delete(key);
+      return false;
+    }
+    return true;
+  }
 
   /**
    * Garante a criação da tabela whatsapp_queue e das colunas de cadência na tabela de instâncias
@@ -438,7 +449,7 @@ export class WhatsappQueueService {
    */
   static wakeWorker(whatsappInstanceId?: string | null): void {
     const key = whatsappInstanceId || '__DEFAULT__';
-    if (this.processingInstances.has(key)) {
+    if (this.isInstanceLocked(key)) {
       return; // Já tem worker ativo processando ordenadamente
     }
 
@@ -452,14 +463,15 @@ export class WhatsappQueueService {
    */
   static async processQueueLoop(whatsappInstanceId: string | null): Promise<void> {
     const key = whatsappInstanceId || '__DEFAULT__';
-    if (this.processingInstances.has(key)) {
+    if (this.isInstanceLocked(key)) {
       return;
     }
 
-    this.processingInstances.add(key);
+    this.processingInstances.set(key, Date.now());
 
     try {
       while (true) {
+        this.processingInstances.set(key, Date.now());
         const now = new Date();
 
         // 1. Busca a próxima mensagem da fila desta instância
@@ -893,11 +905,21 @@ export class WhatsappQueueService {
     let sent = 0;
     let failed = 0;
 
+    const seenKeys = new Set<string>();
     for (const item of dueItems) {
-      // Dispara worker para a instância do item
+      // Dispara worker para a instância do item de forma garantida
       const instanceId = item.whatsappInstanceId || item.whatsapp_instance_id || null;
-      this.wakeWorker(instanceId);
+      const key = instanceId || '__DEFAULT__';
+      if (!seenKeys.has(key)) {
+        seenKeys.add(key);
+        this.wakeWorker(instanceId);
+      }
       sent++;
+    }
+
+    // Se houver qualquer item vencido mas nenhum worker ativo para a chave default, acorda preventivamente
+    if (dueItems.length > 0 && !seenKeys.has('__DEFAULT__')) {
+      this.wakeWorker(null);
     }
 
     return { processed: dueItems.length, sent, failed };

@@ -24,6 +24,23 @@ import {
   Users,
 } from 'lucide-react';
 
+export const checkIsGroupNode = (data: any): boolean => {
+  if (!data) return false;
+  return Boolean(
+    data.config?.targetType === 'GROUP' ||
+    data.isGroup ||
+    data.targetType === 'GROUP' ||
+    data.config?.isGroup ||
+    (Array.isArray(data.config?.groupTagIds) && data.config.groupTagIds.length > 0) ||
+    (Array.isArray(data.config?.entryTags) && data.config.entryTags.some((t: string) => typeof t === 'string' && t.toLowerCase().includes('grupo'))) ||
+    (Array.isArray(data.config?.tagNames) && data.config.tagNames.some((t: string) => typeof t === 'string' && t.toLowerCase().includes('grupo'))) ||
+    (typeof data.config?.tagName === 'string' && data.config.tagName.toLowerCase().includes('grupo')) ||
+    (typeof data.tagName === 'string' && data.tagName.toLowerCase().includes('grupo')) ||
+    (typeof data.label === 'string' && data.label.toLowerCase().includes('grupo')) ||
+    Boolean(data.config?.groupJid || data.groupJid)
+  );
+};
+
 // ============================================================
 // BARRA DE AÇÕES RÁPIDAS ACIMA DOS NÓS (DUPLICAR E LIXEIRA)
 // ============================================================
@@ -119,7 +136,7 @@ export const NodeActionToolbar = ({
 // 1. Nó de Tag (Gatilho de Entrada / Saída) - Suporta Tags de Entrada e Exclusão
 export const TagNode = memo(({ data, selected }: any) => {
   const count = data.config?.leadsCount ?? data.leadsCount ?? 0;
-  const isGroup = data.config?.targetType === 'GROUP' || data.isGroup || data.targetType === 'GROUP';
+  const isGroup = checkIsGroupNode(data);
   const unitLabel = isGroup ? (count === 1 ? 'grupo' : 'grupos') : (count === 1 ? 'lead' : 'leads');
   const entryTags: string[] =
     data.config?.entryTags ||
@@ -229,7 +246,7 @@ export const SequenceLeadNode = memo(({ data, selected }: any) => {
   const waiting = data.config?.waitingCount ?? 0;
   const success = data.config?.successCount ?? 0;
   const failed = data.config?.failedCount ?? 0;
-  const isGroup = data.config?.targetType === 'GROUP' || data.isGroup || data.targetType === 'GROUP';
+  const isGroup = checkIsGroupNode(data);
   const unitLabel = isGroup ? (count === 1 ? 'grupo' : 'grupos') : (count === 1 ? 'lead' : 'leads');
   const label = data.label || (isGroup ? 'Sequência de Grupos' : 'Sequência Lead');
 
@@ -469,7 +486,7 @@ StartNode.displayName = 'StartNode';
 // 5. Nó de Disparo de WhatsApp - Verde com Ícone do WhatsApp
 export const WhatsAppNode = memo(({ data, selected }: any) => {
   const count = data.config?.leadsCount ?? data.leadsCount ?? 0;
-  const isGroup = data.config?.targetType === 'GROUP' || data.isGroup || data.targetType === 'GROUP';
+  const isGroup = checkIsGroupNode(data);
   const unitLabel = isGroup ? (count === 1 ? 'grupo' : 'grupos') : (count === 1 ? 'lead' : 'leads');
   const waiting = data.config?.waitingCount ?? 0;
   const success = data.config?.successCount ?? 0;

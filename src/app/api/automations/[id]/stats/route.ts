@@ -37,7 +37,7 @@ export async function GET(request: Request, { params }: { params: { id: string }
     let pendingJobs: any[] = [];
 
     if (isGroupMode) {
-      const [allGroupEnrollments, allGroupStepLogs] = await Promise.all([
+      const [allGroupEnrollments, allGroupStepLogs, groupQueue] = await Promise.all([
         prisma.automationGroupEnrollment.findMany({
           where: { automationId: params.id },
           select: {
@@ -57,6 +57,17 @@ export async function GET(request: Request, { params }: { params: { id: string }
             groupId: true,
           },
         }),
+        prisma.whatsappQueue.findMany({
+          where: { automationId: params.id },
+          select: {
+            nodeId: true,
+            status: true,
+            contactId: true,
+            phone: true,
+            groupEnrollmentId: true,
+            groupJid: true,
+          },
+        }).catch(() => []),
       ]);
 
       allEnrollments = allGroupEnrollments.map((g) => ({
@@ -73,6 +84,13 @@ export async function GET(request: Request, { params }: { params: { id: string }
         nodeId: l.nodeId,
         status: l.status,
         contactId: l.groupId,
+      }));
+
+      allQueueItems = (groupQueue || []).map((q: any) => ({
+        nodeId: q.nodeId,
+        status: q.status,
+        contactId: q.groupEnrollmentId || q.groupJid || q.phone,
+        phone: q.groupJid || q.phone,
       }));
     } else {
       const results = await Promise.all([

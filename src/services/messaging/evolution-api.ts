@@ -996,10 +996,33 @@ export class EvolutionApiService {
     if (params.whatsappInstanceId) {
       instance = await prisma.whatsappInstance.findFirst({
         where: {
-          id: params.whatsappInstanceId,
-          ...(params.tenantId ? { tenantId: params.tenantId } : {}),
+          AND: [
+            {
+              OR: [
+                { id: params.whatsappInstanceId },
+                { instanceName: params.whatsappInstanceId },
+                { name: params.whatsappInstanceId },
+              ],
+            },
+            ...(params.tenantId ? [{ tenantId: params.tenantId }] : []),
+          ],
         },
       });
+    }
+
+    // 1.1. Se for envio para grupo e a instância informada não estiver conectada, usa a instância nativa do grupo
+    const isTargetGroup = (params.phone || '').includes('@g.us');
+    if (isTargetGroup && (!instance || instance.status !== 'CONNECTED')) {
+      const groupRecord = await prisma.whatsappGroup.findFirst({
+        where: {
+          OR: [{ jid: params.phone }, { id: params.phone }],
+          ...(params.tenantId ? { tenantId: params.tenantId } : {}),
+        },
+        include: { whatsappInstance: true },
+      });
+      if (groupRecord?.whatsappInstance && groupRecord.whatsappInstance.status === 'CONNECTED') {
+        instance = groupRecord.whatsappInstance;
+      }
     }
 
     // 2. Busca por número do remetente caso informado (estritamente dentro do tenant)
@@ -1102,6 +1125,7 @@ export class EvolutionApiService {
           const audioUrl = `${this.apiUrl}/message/sendWhatsAppAudio/${encodeURIComponent(instance.instanceName)}`;
           response = await fetch(audioUrl, {
             method: 'POST',
+            signal: AbortSignal.timeout(15000),
             headers: {
               'Content-Type': 'application/json',
               apikey: this.apiKey,
@@ -1123,6 +1147,7 @@ export class EvolutionApiService {
             const fallbackUrl = `${this.apiUrl}/message/sendMedia/${encodeURIComponent(instance.instanceName)}`;
             response = await fetch(fallbackUrl, {
               method: 'POST',
+              signal: AbortSignal.timeout(15000),
               headers: {
                 'Content-Type': 'application/json',
                 apikey: this.apiKey,
@@ -1158,6 +1183,7 @@ export class EvolutionApiService {
           const mediaUrl = `${this.apiUrl}/message/sendMedia/${encodeURIComponent(instance.instanceName)}`;
           response = await fetch(mediaUrl, {
             method: 'POST',
+            signal: AbortSignal.timeout(15000),
             headers: {
               'Content-Type': 'application/json',
               apikey: this.apiKey,
@@ -1270,6 +1296,7 @@ export class EvolutionApiService {
 
       const response = await fetch(url, {
         method: 'POST',
+        signal: AbortSignal.timeout(15000),
         headers: {
           'Content-Type': 'application/json',
           apikey: this.apiKey,

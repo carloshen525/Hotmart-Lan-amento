@@ -405,9 +405,13 @@ export default function AutomationCanvasPage() {
                 ...subNode,
                 data: {
                   ...subNode.data,
+                  isGroup: targetType === 'GROUP',
+                  targetType: targetType === 'GROUP' ? 'GROUP' : 'LEAD',
                   leadsCount: subS.leadsCount,
                   config: {
                     ...((subNode.data?.config as any) || {}),
+                    isGroup: targetType === 'GROUP',
+                    targetType: targetType === 'GROUP' ? 'GROUP' : 'LEAD',
                     leadsCount: subS.leadsCount,
                     waitingCount: subS.waitingCount,
                     successCount: subS.successCount,
@@ -423,10 +427,14 @@ export default function AutomationCanvasPage() {
           ...node,
           data: {
             ...node.data,
+            isGroup: targetType === 'GROUP',
+            targetType: targetType === 'GROUP' ? 'GROUP' : 'LEAD',
             leadsCount: s.leadsCount,
             subflow: updatedSubflow,
             config: {
               ...((node.data?.config as any) || {}),
+              isGroup: targetType === 'GROUP',
+              targetType: targetType === 'GROUP' ? 'GROUP' : 'LEAD',
               leadsCount: s.leadsCount,
               waitingCount: s.waitingCount,
               successCount: s.successCount,
@@ -436,7 +444,7 @@ export default function AutomationCanvasPage() {
         };
       });
     },
-    []
+    [targetType]
   );
 
   const fetchRealtimeStats = useCallback(async () => {

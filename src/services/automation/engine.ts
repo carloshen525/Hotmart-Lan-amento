@@ -2640,13 +2640,17 @@ export class AutomationEngine {
         }
       } catch {}
 
-      const targetInstanceId =
+      // Seleção inteligente da instância: prioriza a instância do grupo se estiver conectada
+      let targetInstanceId =
         config.whatsappInstanceId ||
         (automation as any).flowWhatsappInstanceId ||
-        (automation as any).whatsappInstanceId ||
-        group.whatsappInstanceId;
+        (automation as any).whatsappInstanceId;
 
-      // Validação obrigatória de administrador antes de enfileirar
+      if (!targetInstanceId || (group.whatsappInstanceId && group.whatsappInstance?.status === 'CONNECTED')) {
+        targetInstanceId = group.whatsappInstanceId || targetInstanceId;
+      }
+
+      // Validação de elegibilidade (com fallback automático para a instância conectada do grupo)
       const check = await whatsappGroupService.verifyGroupEligibility(
         tenantId,
         group.jid,
@@ -2674,6 +2678,11 @@ export class AutomationEngine {
         return;
       }
 
+      // Se a validação descobriu uma instância conectada e elegível diferente, adota-a
+      if (check.instance?.id) {
+        targetInstanceId = check.instance.id;
+      }
+
       // Cria log em status QUEUED
       await prisma.automationGroupStepLog.create({
         data: {
@@ -2690,6 +2699,28 @@ export class AutomationEngine {
           }),
         },
       });
+
+      // Disparo Direto: Se o nó for precedido diretamente por Tag/Trigger (sem timers intermediários),
+      // o primeiro grupo é disparado IMEDIATAMENTE (forceImmediate) sem espera desnecessária
+      const incomingToNode = edges.filter((e) => e.target === nodeId);
+      const isDirectConnection = incomingToNode.some((e) => {
+        const src = nodes.find((n) => n.id === e.source);
+        return src && (src.type === 'tag' || src.type === 'trigger');
+      });
+
+      let existingPendingCount = 0;
+      try {
+        if ((prisma as any).whatsappQueue) {
+          existingPendingCount = await (prisma as any).whatsappQueue.count({
+            where: {
+              nodeId,
+              status: { in: ['PENDING', 'PROCESSING'] },
+            },
+          });
+        }
+      } catch {}
+
+      const forceImmediate = isDirectConnection && existingPendingCount === 0;
 
       // Enfileira mensagem para o grupo na fila persistente com delay entre grupos
       await WhatsappQueueService.enqueue({
@@ -2708,6 +2739,7 @@ export class AutomationEngine {
         mediaFileName: config.mediaFileName,
         caption: config.caption,
         blocks: config.blocks,
+        forceImmediate,
         fixedDelaySeconds: (automation as any).delayBetweenGroups ?? 30,
         useRandomDelay: (automation as any).useRandomDelay ?? true,
         minDelaySeconds: (automation as any).minDelaySeconds ?? 20,

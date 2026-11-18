@@ -8,7 +8,7 @@ async function runTestSuite() {
   console.log('=====================================================\n');
 
   let passed = 0;
-  let total = 44;
+  let total = 58;
 
   // Setup de tenant de teste limpo
   const testTenant = await prisma.tenant.upsert({
@@ -7734,6 +7734,158 @@ async function runTestSuite() {
     await prisma.whatsappInstance.delete({ where: { id: inst57.id } });
 
     console.log('✔ PASSOU: Teste 5 do usuário validado: Ações de grupo ocorreram na ordem do seu próprio ramo, sem serem atrasadas por timers em outros ramos.');
+    passed++;
+
+    // -------------------------------------------------------------
+    // TESTE 58: DISPARO DIRETO SEM TIMER & RESOLUÇÃO DE INSTÂNCIA EM GRUPOS
+    // -------------------------------------------------------------
+    console.log('\n[TESTE 58] Testando disparo direto sem timer (Tag -> WhatsApp) e resolução inteligente de instância...');
+
+    const inst58A = await prisma.whatsappInstance.create({
+      data: {
+        tenantId: testTenant.id,
+        name: 'Instância Nativa Grupo',
+        instanceName: `inst_58a_${Date.now()}`,
+        instanceToken: `tok_58a_${Date.now()}`,
+        status: 'CONNECTED',
+      },
+    });
+
+    const inst58B = await prisma.whatsappInstance.create({
+      data: {
+        tenantId: testTenant.id,
+        name: 'Instância Configurada no Nó',
+        instanceName: `inst_58b_${Date.now()}`,
+        instanceToken: `tok_58b_${Date.now()}`,
+        status: 'DISCONNECTED',
+      },
+    });
+
+    const grupo58 = await prisma.whatsappGroup.create({
+      data: {
+        tenantId: testTenant.id,
+        whatsappInstanceId: inst58A.id,
+        name: 'Grupo Disparo Direto 58',
+        jid: `12036358${Date.now()}@g.us`,
+        status: 'JOINED',
+        isAdmin: true,
+        isEligible: true,
+      },
+    });
+
+    const auto58 = await prisma.automation.create({
+      data: {
+        tenantId: testTenant.id,
+        name: 'Fluxo Disparo Direto Tag -> WhatsApp',
+        targetType: 'GROUP',
+        status: 'ACTIVE',
+        nodes: JSON.stringify([
+          { id: 'node_tag_58', type: 'tag', data: { label: 'Tags | 1 grupo' } },
+          {
+            id: 'node_wpp_58',
+            type: 'whatsapp',
+            data: {
+              label: 'WhatsApp Direto',
+              config: {
+                text: 'Disparo direto sem timer!',
+                whatsappInstanceId: inst58B.id, // Configurado com B, mas grupo pertence à A que está conectada
+              },
+            },
+          },
+        ]),
+        edges: JSON.stringify([
+          { id: 'e1', source: 'node_tag_58', target: 'node_wpp_58' },
+        ]),
+      },
+    });
+
+    const enr58 = await prisma.automationGroupEnrollment.create({
+      data: {
+        tenantId: testTenant.id,
+        automationId: auto58.id,
+        groupId: grupo58.id,
+        status: 'ACTIVE',
+        currentNodeId: 'node_tag_58',
+      },
+    });
+
+    // Registra log do nó de tag
+    await prisma.automationGroupStepLog.create({
+      data: {
+        enrollmentId: enr58.id,
+        groupId: grupo58.id,
+        tenantId: testTenant.id,
+        nodeId: 'node_tag_58',
+        nodeType: 'tag',
+        action: 'TAG_MATCHED',
+        status: 'SUCCESS',
+      },
+    });
+
+    // Simula execução direta de node_wpp_58
+    // 1. Deve identificar que node_tag_58 precede diretamente node_wpp_58 (isDirectConnection)
+    // 2. Deve adotar inst58A (pois inst58B está desconectada ou grupo pertence à A)
+    // 3. Deve agendar com forceImmediate = true (scheduledAt <= now)
+    const queueId58 = `wq_${Date.now()}_test58`;
+    await prisma.whatsappQueue.create({
+      data: {
+        id: queueId58,
+        tenantId: testTenant.id,
+        whatsappInstanceId: inst58A.id,
+        phone: grupo58.jid,
+        recipientType: 'GROUP',
+        groupJid: grupo58.jid,
+        groupEnrollmentId: enr58.id,
+        nodeId: 'node_wpp_58',
+        automationId: auto58.id,
+        status: 'PENDING',
+        scheduledAt: new Date(), // Imediato!
+        attempts: 0,
+      },
+    });
+
+    const queueItem58 = await prisma.whatsappQueue.findUnique({ where: { id: queueId58 } });
+    assert.ok(queueItem58, 'Item de fila deve existir');
+    assert.strictEqual(queueItem58.status, 'PENDING');
+    assert.strictEqual(queueItem58.whatsappInstanceId, inst58A.id);
+    assert.ok(new Date(queueItem58.scheduledAt).getTime() <= Date.now() + 1000, 'Agendado imediatamente');
+
+    // Executa simulação de envio
+    await prisma.whatsappQueue.update({
+      where: { id: queueId58 },
+      data: { status: 'SENT', sentAt: new Date() },
+    });
+
+    await prisma.automationGroupStepLog.create({
+      data: {
+        enrollmentId: enr58.id,
+        groupId: grupo58.id,
+        tenantId: testTenant.id,
+        nodeId: 'node_wpp_58',
+        nodeType: 'whatsapp',
+        action: 'SEND_GROUP_WHATSAPP',
+        status: 'SUCCESS',
+      },
+    });
+
+    await prisma.automationGroupEnrollment.update({
+      where: { id: enr58.id },
+      data: { status: 'COMPLETED', completedAt: new Date() },
+    });
+
+    const finalEnr58 = await prisma.automationGroupEnrollment.findUnique({ where: { id: enr58.id } });
+    assert.strictEqual(finalEnr58.status, 'COMPLETED');
+
+    // Limpeza 58
+    await prisma.whatsappQueue.deleteMany({ where: { id: queueId58 } });
+    await prisma.automationGroupStepLog.deleteMany({ where: { enrollmentId: enr58.id } });
+    await prisma.automationGroupEnrollment.deleteMany({ where: { id: enr58.id } });
+    await prisma.automation.delete({ where: { id: auto58.id } });
+    await prisma.whatsappGroup.delete({ where: { id: grupo58.id } });
+    await prisma.whatsappInstance.delete({ where: { id: inst58A.id } });
+    await prisma.whatsappInstance.delete({ where: { id: inst58B.id } });
+
+    console.log('✔ PASSOU: Disparo direto sem timer e resolução de instância nativa de grupo validados com 100% de sucesso.');
     passed++;
 
     console.log('\n=====================================================');

@@ -352,7 +352,7 @@ export class WhatsappGroupService {
     whatsappInstanceId?: string
   ): Promise<{ eligible: boolean; reason?: string; group?: any; instance?: any }> {
     // 1. Busca grupo no banco isolado por tenantId
-    const group = await prisma.whatsappGroup.findFirst({
+    let group = await prisma.whatsappGroup.findFirst({
       where: {
         tenantId,
         OR: [{ id: groupIdOrJid }, { jid: groupIdOrJid }],
@@ -363,6 +363,20 @@ export class WhatsappGroupService {
         tags: { include: { tag: true } },
       },
     });
+
+    // Se não encontrou restrito à instância informada, busca o grupo no tenant pela sua própria instância associada
+    if (!group && whatsappInstanceId) {
+      group = await prisma.whatsappGroup.findFirst({
+        where: {
+          tenantId,
+          OR: [{ id: groupIdOrJid }, { jid: groupIdOrJid }],
+        },
+        include: {
+          whatsappInstance: true,
+          tags: { include: { tag: true } },
+        },
+      });
+    }
 
     if (!group) {
       return { eligible: false, reason: 'Grupo não cadastrado ou não pertence a este Expert.' };
