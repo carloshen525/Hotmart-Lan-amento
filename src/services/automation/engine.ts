@@ -1907,7 +1907,7 @@ export class AutomationEngine {
               continue;
             }
 
-            // Para sequências internas: NUNCA reiniciar, NUNCA reenfileirar, NUNCA reenviar mensagens
+            // Para sequências: NUNCA reiniciar nós já enviados, mas permitir entrada e avanço em novas etapas
             const seqNode = targetNode;
             const subflow = (seqNode.data as any).subflow || {};
             const subNodes: WorkflowNode[] = subflow.nodes || [];
@@ -1926,22 +1926,38 @@ export class AutomationEngine {
             });
             const executedNodeIds = new Set(successLogs.map((l) => l.nodeId));
 
-            // 2. Verifica se o lead possui job agendado PENDING (ex: temporizador/timer em contagem regressiva)
-            const pendingJob = await prisma.scheduledJob.findFirst({
+            // Identifica todos os nós pertencentes a ESTA sequência específica
+            const thisSeqNodeIds = new Set([seqNode.id, ...subNodes.map((n) => n.id)]);
+            const hasRunThisSeq = Array.from(executedNodeIds).some((id) => thisSeqNodeIds.has(id));
+
+            const pendingJobInThisSeq = await prisma.scheduledJob.findFirst({
               where: {
                 enrollmentId: existingEnrollment.id,
                 status: 'PENDING',
+                targetNodeId: { in: Array.from(thisSeqNodeIds) },
               },
             });
 
-            // 3. Identifica nós seguintes que AINDA NÃO foram executados a partir de etapas já concluídas
+            // Se o lead NUNCA executou nenhuma etapa desta sequência e não possui job pendente nela:
+            // Ele acaba de ser conectado a esta sequência (ramificação nova ou nova etapa adicionada ao fluxo)!
+            if (!hasRunThisSeq && !pendingJobInThisSeq) {
+              await this.enrollInSequence(automationId, seqNode.id, contact.id, tenantId, {
+                source: 'SYNC_NEW_SEQUENCE_BRANCH',
+                tags: tagList.join(','),
+              });
+              totalEnrolled++;
+              continue;
+            }
+
+            // 2. Se o lead já entrou nesta sequência, verifica se novos nós internos foram adicionados
+            const pendingJob = pendingJobInThisSeq;
             const nodesToExecute = new Set<string>();
 
             for (const executedId of Array.from(executedNodeIds)) {
+              if (!thisSeqNodeIds.has(executedId)) continue;
               const outgoing = subEdges.filter((e) => e.source === executedId);
               for (const edge of outgoing) {
                 if (!executedNodeIds.has(edge.target)) {
-                  // Se não há agendamento pendente para este nó alvo, ele é candidato à execução imediata
                   if (!pendingJob || pendingJob.targetNodeId !== edge.target) {
                     nodesToExecute.add(edge.target);
                   }
@@ -1949,27 +1965,8 @@ export class AutomationEngine {
               }
             }
 
-            // 4. Caso o lead nunca tenha executado nenhuma etapa interna (ex: acabou de entrar ou sequência acabou de ser conectada)
-            if (executedNodeIds.size === 0 && !pendingJob) {
-              const startNode = subNodes.find((n) => n.type === 'start');
-              if (startNode) {
-                const outgoingFromStart = subEdges.filter((e) => e.source === startNode.id);
-                for (const edge of outgoingFromStart) {
-                  nodesToExecute.add(edge.target);
-                }
-              } else {
-                const targetIds = new Set(subEdges.map((e) => e.target));
-                const entryNodes = subNodes.filter((n) => !targetIds.has(n.id));
-                const nodesToRun = entryNodes.length > 0 ? entryNodes : (subNodes.length > 0 ? [subNodes[0]] : []);
-                for (const en of nodesToRun) {
-                  nodesToExecute.add(en.id);
-                }
-              }
-            }
-
-            // 5. Se houver novos nós a serem percorridos internamente, avança o lead
+            // 3. Se houver novos nós a serem percorridos internamente nesta sequência, avança o lead
             if (nodesToExecute.size > 0) {
-              // Reativa a inscrição para ACTIVE caso estivesse COMPLETED
               await prisma.automationEnrollment.update({
                 where: { id: existingEnrollment.id },
                 data: {
@@ -1989,30 +1986,62 @@ export class AutomationEngine {
                   automationId
                 );
               }
-            } else if (executedNodeIds.size > 0 && !pendingJob) {
-              // Sequência interna está 100% concluída. Verifica se há nós macro seguintes conectados (ex: Tag de Saída / Próxima Sequência)
-              const macroOutgoing = edges.filter((e) => e.source === seqNode.id);
-              for (const me of macroOutgoing) {
-                const targetMacroNode = nodes.find((n) => n.id === me.target);
-                if (!targetMacroNode) continue;
+            }
+          }
+        }
+      }
+    }
 
-                // Verifica se este nó macro alvo já foi executado com sucesso para este lead
-                const macroStepLog = await prisma.automationStepLog.findFirst({
-                  where: {
-                    enrollmentId: existingEnrollment.id,
-                    nodeId: targetMacroNode.id,
-                    status: 'SUCCESS',
-                  },
+    // 2. AVANÇO AUTOMÁTICO EM NOVAS ETAPAS DO MACRO FLUXO (para leads já cadastrados)
+    // Se o usuário adicionou novas etapas (Sequências, Tags, Disparos, etc.) conectadas a nós já concluídos,
+    // os leads devem avançar automaticamente para essas novas etapas sem reiniciar o fluxo!
+    const allEnrollments = await prisma.automationEnrollment.findMany({
+      where: { automationId },
+      include: { contact: true },
+    });
+
+    for (const enr of allEnrollments) {
+      if (!enr.contact || enr.contact.status === 'UNSUBSCRIBED') continue;
+
+      const successLogs = await prisma.automationStepLog.findMany({
+        where: {
+          enrollmentId: enr.id,
+          status: 'SUCCESS',
+        },
+        select: { nodeId: true },
+      });
+      const executedNodeIds = new Set(successLogs.map((l) => l.nodeId));
+
+      const pendingJob = await prisma.scheduledJob.findFirst({
+        where: { enrollmentId: enr.id, status: 'PENDING' },
+      });
+
+      for (const edge of edges) {
+        if (executedNodeIds.has(edge.source) && !executedNodeIds.has(edge.target)) {
+          if (!pendingJob || pendingJob.targetNodeId !== edge.target) {
+            const targetNode = nodes.find((n) => n.id === edge.target);
+            if (!targetNode) continue;
+
+            if (targetNode.type === 'sequence_lead') {
+              const subflow = (targetNode.data as any)?.subflow || {};
+              const subNodes: WorkflowNode[] = subflow.nodes || [];
+              const targetSeqIds = new Set([targetNode.id, ...subNodes.map((n) => n.id)]);
+              const hasRunTarget = Array.from(executedNodeIds).some((id) => targetSeqIds.has(id));
+              const hasPendingInTarget = pendingJob && targetSeqIds.has(pendingJob.targetNodeId);
+
+              if (!hasRunTarget && !hasPendingInTarget) {
+                await this.enrollInSequence(automationId, targetNode.id, enr.contactId, tenantId, {
+                  source: 'SYNC_NEW_MACRO_STEP',
                 });
-
-                if (!macroStepLog) {
-                  await prisma.automationEnrollment.update({
-                    where: { id: existingEnrollment.id },
-                    data: { status: 'ACTIVE', completedAt: null },
-                  });
-                  await this.executeNode(existingEnrollment.id, targetMacroNode.id, tenantId);
-                }
+                totalEnrolled++;
               }
+            } else {
+              await prisma.automationEnrollment.update({
+                where: { id: enr.id },
+                data: { status: 'ACTIVE', completedAt: null },
+              });
+              await this.executeNode(enr.id, targetNode.id, tenantId);
+              totalEnrolled++;
             }
           }
         }
@@ -2219,8 +2248,8 @@ export class AutomationEngine {
     });
 
     if (existingEnrollment) {
-      // O grupo já possui inscrição ativa nesta automação e evolui de forma autônoma pela máquina de estados.
-      // NUNCA percorre todos os nós para não atropelar a sequência!
+      // Se novas etapas foram adicionadas ao fluxo de grupos, retoma a execução apenas para os novos nós
+      await this.checkAndAdvanceNewGroupNodes(existingEnrollment.id, automation);
       return { enrollmentId: existingEnrollment.id, alreadyEnrolled: true };
     }
 

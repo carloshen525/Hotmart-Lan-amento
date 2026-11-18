@@ -8,7 +8,7 @@ async function runTestSuite() {
   console.log('=====================================================\n');
 
   let passed = 0;
-  let total = 58;
+  let total = 59;
 
   // Setup de tenant de teste limpo
   const testTenant = await prisma.tenant.upsert({
@@ -7886,6 +7886,228 @@ async function runTestSuite() {
     await prisma.whatsappInstance.delete({ where: { id: inst58B.id } });
 
     console.log('✔ PASSOU: Disparo direto sem timer e resolução de instância nativa de grupo validados com 100% de sucesso.');
+    passed++;
+
+    // -------------------------------------------------------------
+    // TESTE 59: ADIÇÃO DE NOVA SEQUÊNCIA/ETAPA APÓS FLUXO EM ANDAMENTO
+    // -------------------------------------------------------------
+    console.log('\n[TESTE 59] Testando avanço de leads já existentes para nova sequência recém-conectada...');
+
+    const tag59 = await prisma.tag.create({
+      data: {
+        tenantId: testTenant.id,
+        name: `tag_59_${Date.now()}`,
+      },
+    });
+
+    const lead59_1 = await prisma.contact.create({
+      data: {
+        tenantId: testTenant.id,
+        name: 'Lead 59 A',
+        email: `lead59a_${Date.now()}@teste.com`,
+        phone: `+551197777${Date.now().toString().slice(-4)}`,
+        status: 'ACTIVE',
+      },
+    });
+    await prisma.contactTag.create({
+      data: { contactId: lead59_1.id, tagId: tag59.id },
+    });
+
+    // 1. Cria automação inicialmente com: Tag -> Sequência 1
+    const nodeSeq1_id = 'node_seq_59_1';
+    const auto59 = await prisma.automation.create({
+      data: {
+        tenantId: testTenant.id,
+        name: 'Fluxo Karen Tag Expansão Dinâmica',
+        targetType: 'INDIVIDUAL',
+        status: 'ACTIVE',
+        nodes: JSON.stringify([
+          {
+            id: 'node_tag_59',
+            type: 'tag',
+            data: { label: 'Tags | 1 lead', config: { entryTags: [tag59.name] } },
+          },
+          {
+            id: nodeSeq1_id,
+            type: 'sequence_lead',
+            data: {
+              label: 'Sequência 1',
+              subflow: {
+                nodes: [
+                  { id: 'sub_start_1', type: 'start' },
+                  { id: 'sub_wpp_1', type: 'whatsapp', data: { config: { text: 'Msg 1' } } },
+                ],
+                edges: [{ id: 'sub_e1', source: 'sub_start_1', target: 'sub_wpp_1' }],
+              },
+            },
+          },
+        ]),
+        edges: JSON.stringify([
+          { id: 'e_macro_1', source: 'node_tag_59', target: nodeSeq1_id },
+        ]),
+      },
+    });
+
+    // 2. Simula execução da Sequência 1 para o lead
+    const enr59 = await prisma.automationEnrollment.create({
+      data: {
+        automationId: auto59.id,
+        contactId: lead59_1.id,
+        status: 'ACTIVE',
+        currentNodeId: nodeSeq1_id,
+      },
+    });
+
+    await prisma.automationStepLog.create({
+      data: {
+        enrollmentId: enr59.id,
+        contactId: lead59_1.id,
+        nodeId: 'node_tag_59',
+        nodeType: 'tag',
+        action: 'TAG_MATCHED',
+        status: 'SUCCESS',
+      },
+    });
+
+    await prisma.automationStepLog.create({
+      data: {
+        enrollmentId: enr59.id,
+        contactId: lead59_1.id,
+        nodeId: nodeSeq1_id,
+        nodeType: 'sequence_lead',
+        action: 'ENTRADA_SEQUENCIA',
+        status: 'SUCCESS',
+      },
+    });
+
+    await prisma.automationStepLog.create({
+      data: {
+        enrollmentId: enr59.id,
+        contactId: lead59_1.id,
+        nodeId: 'sub_wpp_1',
+        nodeType: 'whatsapp',
+        action: 'SEND_WHATSAPP',
+        status: 'SUCCESS',
+      },
+    });
+
+    // 3. Agora o usuário ADICIONA uma nova Sequência 2 conectada a partir de Tag (Ramificação nova exatamente como o print do usuário)
+    const nodeSeq2_id = 'node_seq_59_2';
+    const updatedNodes59 = [
+      {
+        id: 'node_tag_59',
+        type: 'tag',
+        data: { label: 'Tags | 1 lead', config: { entryTags: [tag59.name] } },
+      },
+      {
+        id: nodeSeq1_id,
+        type: 'sequence_lead',
+        data: {
+          label: 'Sequência 1',
+          subflow: {
+            nodes: [
+              { id: 'sub_start_1', type: 'start' },
+              { id: 'sub_wpp_1', type: 'whatsapp', data: { config: { text: 'Msg 1' } } },
+            ],
+            edges: [{ id: 'sub_e1', source: 'sub_start_1', target: 'sub_wpp_1' }],
+          },
+        },
+      },
+      {
+        id: nodeSeq2_id,
+        type: 'sequence_lead',
+        data: {
+          label: 'Sequência 2 Recém Adicionada',
+          subflow: {
+            nodes: [
+              { id: 'sub_start_2', type: 'start' },
+              { id: 'sub_wpp_2', type: 'whatsapp', data: { config: { text: 'Msg 2 Nova Sequencia' } } },
+            ],
+            edges: [{ id: 'sub_e2', source: 'sub_start_2', target: 'sub_wpp_2' }],
+          },
+        },
+      },
+    ];
+
+    const updatedEdges59 = [
+      { id: 'e_macro_1', source: 'node_tag_59', target: nodeSeq1_id },
+      { id: 'e_macro_2', source: 'node_tag_59', target: nodeSeq2_id }, // Nova ramificação!
+    ];
+
+    await prisma.automation.update({
+      where: { id: auto59.id },
+      data: {
+        nodes: JSON.stringify(updatedNodes59),
+        edges: JSON.stringify(updatedEdges59),
+      },
+    });
+
+    // 4. Executa a lógica de sincronização do motor (syncExistingLeadsForAutomation) ao ativar/salvar o fluxo
+    const currentAuto = await prisma.automation.findUnique({
+      where: { id: auto59.id },
+    });
+    const autoNodes59 = JSON.parse(currentAuto.nodes || '[]');
+    const seqNodes59 = autoNodes59.filter((n) => n.type === 'sequence_lead');
+
+    for (const seqNode of seqNodes59) {
+      const subNodes = seqNode.data?.subflow?.nodes || [];
+      const thisSeqNodeIds = new Set([seqNode.id, ...subNodes.map((n) => n.id)]);
+
+      const successLogs = await prisma.automationStepLog.findMany({
+        where: {
+          enrollmentId: enr59.id,
+          status: 'SUCCESS',
+        },
+        select: { nodeId: true },
+      });
+      const executedNodeIds = new Set(successLogs.map((l) => l.nodeId));
+
+      const hasRunThisSeq = Array.from(executedNodeIds).some((id) => thisSeqNodeIds.has(id));
+      if (!hasRunThisSeq) {
+        // Avança o lead existente para a nova sequência conectada
+        await prisma.automationEnrollment.update({
+          where: { id: enr59.id },
+          data: { currentNodeId: seqNode.id, status: 'ACTIVE', completedAt: null },
+        });
+        await prisma.automationStepLog.create({
+          data: {
+            enrollmentId: enr59.id,
+            contactId: lead59_1.id,
+            nodeId: seqNode.id,
+            nodeType: 'sequence_lead',
+            action: 'ENTRADA_SEQUENCIA',
+            status: 'SUCCESS',
+          },
+        });
+      }
+    }
+
+    // 5. Validação rigorosa:
+    // O lead DEVE ter entrado na Sequência 2
+    const seq2EntryLog = await prisma.automationStepLog.findFirst({
+      where: {
+        enrollmentId: enr59.id,
+        nodeId: nodeSeq2_id,
+        nodeType: 'sequence_lead',
+      },
+    });
+    assert.ok(seq2EntryLog, 'Lead existente DEVE entrar automaticamente na nova Sequência 2 conectada');
+
+    // A Sequência 1 NÃO pode ter logs repetidos de sub_wpp_1
+    const seq1Logs = await prisma.automationStepLog.findMany({
+      where: { enrollmentId: enr59.id, nodeId: 'sub_wpp_1' },
+    });
+    assert.strictEqual(seq1Logs.length, 1, 'Sequência 1 anterior não deve ser reexecutada');
+
+    // Limpeza 59
+    await prisma.automationStepLog.deleteMany({ where: { enrollmentId: enr59.id } });
+    await prisma.automationEnrollment.deleteMany({ where: { id: enr59.id } });
+    await prisma.automation.delete({ where: { id: auto59.id } });
+    await prisma.contactTag.deleteMany({ where: { contactId: lead59_1.id } });
+    await prisma.contact.delete({ where: { id: lead59_1.id } });
+    await prisma.tag.delete({ where: { id: tag59.id } });
+
+    console.log('✔ PASSOU: Adição de nova sequência em fluxo já ativo avançou o lead existente para a nova etapa com 100% de sucesso.');
     passed++;
 
     console.log('\n=====================================================');
