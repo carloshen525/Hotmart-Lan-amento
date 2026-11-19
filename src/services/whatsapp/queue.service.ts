@@ -29,6 +29,7 @@ export interface EnqueueWhatsappOptions {
   minDelaySeconds?: number;
   maxDelaySeconds?: number;
   forceImmediate?: boolean;
+  metadata?: Record<string, any> | string | null;
 }
 
 export interface WhatsappQueueStats {
@@ -67,6 +68,39 @@ export interface WhatsappQueueStats {
 export class WhatsappQueueService {
   // Lock de concorrência com timestamp por instância: previne workers duplicados e limpa locks estagnados
   private static processingInstances = new Map<string, number>();
+
+  // Guarda em memória o último delay sorteado por instância para NUNCA repetir o mesmo tempo consecutivamente
+  private static lastDelayByInstance = new Map<string, number>();
+
+  /**
+   * Sorteia um delay pseudo-aleatório dentro da janela [minDelay, maxDelay] configurada pelo usuário.
+   * REGRA DE OURO DO USUÁRIO:
+   * O próximo disparo NUNCA pode utilizar o mesmo tempo de intervalo do disparo anterior.
+   * Não pode seguir nenhum padrão fixo e a sequência deve ser verdadeiramente aleatória.
+   */
+  static generateCadenceDelay(minDelay: number, maxDelay: number, lastDelay?: number | null): number {
+    const min = Math.max(1, Math.floor(minDelay));
+    const max = Math.max(min, Math.floor(maxDelay));
+    if (min >= max) {
+      return min;
+    }
+
+    const totalOptions = max - min + 1;
+
+    // Se temos 2 ou mais opções inteiras no intervalo e o delay anterior é conhecido e pertence ao intervalo:
+    if (lastDelay != null && lastDelay >= min && lastDelay <= max && totalOptions > 1) {
+      // Sorteia aleatoriamente entre as (totalOptions - 1) opções restantes (excluindo lastDelay)
+      const offset = Math.floor(Math.random() * (totalOptions - 1));
+      let candidate = min + offset;
+      if (candidate >= lastDelay) {
+        candidate += 1; // Pula exatamente o valor que acabou de ser utilizado no disparo anterior
+      }
+      return candidate;
+    }
+
+    // Primeiro disparo ou lastDelay fora do intervalo: sorteio aleatório uniforme em [min, max]
+    return Math.floor(Math.random() * totalOptions) + min;
+  }
 
   private static isInstanceLocked(key: string): boolean {
     const lastActive = this.processingInstances.get(key);
@@ -192,6 +226,7 @@ export class WhatsappQueueService {
       automationId,
       maxAttempts = 3,
       forceImmediate = false,
+      metadata = null,
     } = options;
 
     const recipientType = rawRecipientType || (rawGroupJid || phone.includes('@g.us') ? 'GROUP' : 'INDIVIDUAL');
@@ -294,13 +329,15 @@ export class WhatsappQueueService {
 
     // 2. Calcula data/hora de agendamento (scheduledAt)
     let scheduledAt = new Date();
+    let delaySeconds = fixedDelay;
+    const instanceKey = whatsappInstanceId || tenantId || '__DEFAULT__';
 
     if (!forceImmediate) {
-      // Busca a última mensagem agendada ou em processamento para esta instância do WhatsApp
-      let lastItem: any = null;
+      // 1. Busca a última mensagem PENDING ou PROCESSING para esta instância
+      let lastPendingItem: any = null;
       try {
         if ((prisma as any).whatsappQueue) {
-          lastItem = await (prisma as any).whatsappQueue.findFirst({
+          lastPendingItem = await (prisma as any).whatsappQueue.findFirst({
             where: {
               tenantId,
               whatsappInstanceId: whatsappInstanceId || null,
@@ -310,20 +347,60 @@ export class WhatsappQueueService {
           });
         }
       } catch {
-        // Fallback SQL
         const rows: any = await prisma.$queryRawUnsafe(`
           SELECT * FROM whatsapp_queue 
-          WHERE tenant_id = ? AND (whatsapp_instance_id = ? OR whatsapp_instance_id IS NULL)
+          WHERE tenant_id = ? AND (whatsapp_instance_id = ? OR (whatsapp_instance_id IS NULL AND ? IS NULL))
           AND status IN ('PENDING', 'PROCESSING')
           ORDER BY scheduled_at DESC LIMIT 1
-        `, tenantId, whatsappInstanceId || null);
-        if (Array.isArray(rows) && rows.length > 0) lastItem = rows[0];
+        `, tenantId, whatsappInstanceId || null, whatsappInstanceId || null);
+        if (Array.isArray(rows) && rows.length > 0) lastPendingItem = rows[0];
       }
 
+      // 2. Se a fila de pendentes estiver vazia, busca a mensagem mais recente já enviada (SENT)
+      let lastSentItem: any = null;
+      if (!lastPendingItem) {
+        try {
+          if ((prisma as any).whatsappQueue) {
+            lastSentItem = await (prisma as any).whatsappQueue.findFirst({
+              where: {
+                tenantId,
+                whatsappInstanceId: whatsappInstanceId || null,
+                status: 'SENT',
+              },
+              orderBy: [
+                { sentAt: 'desc' },
+                { updatedAt: 'desc' },
+              ],
+            });
+          }
+        } catch {
+          const rows: any = await prisma.$queryRawUnsafe(`
+            SELECT * FROM whatsapp_queue 
+            WHERE tenant_id = ? AND (whatsapp_instance_id = ? OR (whatsapp_instance_id IS NULL AND ? IS NULL))
+            AND status = 'SENT'
+            ORDER BY COALESCE(sent_at, updated_at) DESC LIMIT 1
+          `, tenantId, whatsappInstanceId || null, whatsappInstanceId || null);
+          if (Array.isArray(rows) && rows.length > 0) lastSentItem = rows[0];
+        }
+      }
+
+      const lastItem = lastPendingItem || lastSentItem;
       const nowTime = Date.now();
+
       if (lastItem) {
-        const lastScheduledTime = new Date(lastItem.scheduledAt || lastItem.scheduled_at).getTime();
-        const baseTime = Math.max(nowTime, lastScheduledTime);
+        // Recupera o último delay utilizado para garantir que o próximo seja DIFERENTE
+        let lastDelay: number | null = null;
+        if (lastItem.metadata) {
+          try {
+            const meta = typeof lastItem.metadata === 'string' ? JSON.parse(lastItem.metadata) : lastItem.metadata;
+            if (meta && typeof meta.delaySeconds === 'number') {
+              lastDelay = meta.delaySeconds;
+            }
+          } catch {}
+        }
+        if (lastDelay == null) {
+          lastDelay = this.lastDelayByInstance.get(instanceKey) ?? null;
+        }
 
         // Regra de Ouro: Delay é entre destinatários diferentes (contatos ou grupos diferentes)
         const isGroupItem = recipientType === 'GROUP' || (phone && phone.includes('@g.us'));
@@ -342,26 +419,62 @@ export class WhatsappQueueService {
         }
 
         if (isSameDestination) {
-          // Mesmo destino: delay mínimo de segurança (1s)
-          scheduledAt = new Date(baseTime + 1000);
+          // Mesmo destino: delay mínimo de segurança (1s) para que blocos em sequência cheguem juntos
+          const baseTime = lastPendingItem
+            ? new Date(lastPendingItem.scheduledAt || lastPendingItem.scheduled_at).getTime()
+            : nowTime;
+          scheduledAt = new Date(Math.max(nowTime, baseTime) + 1000);
         } else {
           // Destinatário diferente: aplica cadência anti-bloqueio configurada!
-          let delaySeconds = fixedDelay;
           if (useRandom) {
-            delaySeconds = Math.floor(Math.random() * (maxDelay - minDelay + 1)) + minDelay;
+            delaySeconds = this.generateCadenceDelay(minDelay, maxDelay, lastDelay);
+            this.lastDelayByInstance.set(instanceKey, delaySeconds);
+          } else {
+            delaySeconds = fixedDelay;
           }
-          scheduledAt = new Date(baseTime + delaySeconds * 1000);
+
+          if (lastPendingItem) {
+            // Há itens na fila: agenda após o término do último item pendente + delaySeconds
+            const lastScheduledTime = new Date(lastPendingItem.scheduledAt || lastPendingItem.scheduled_at).getTime();
+            const baseTime = Math.max(nowTime, lastScheduledTime);
+            scheduledAt = new Date(baseTime + delaySeconds * 1000);
+          } else {
+            // Fila de pendentes vazia, mas houve envio recente:
+            const lastSentTime = new Date(lastSentItem.sentAt || lastSentItem.sent_at || lastSentItem.updatedAt || lastSentItem.updated_at).getTime();
+            const targetTime = lastSentTime + delaySeconds * 1000;
+            if (targetTime > nowTime) {
+              // Ainda não atingiu o intervalo anti-bloqueio desde o último disparo: aguarda o tempo restante
+              scheduledAt = new Date(targetTime);
+            } else {
+              // Já passou tempo suficiente desde o último envio: primeiro disparo pode ser imediato
+              scheduledAt = new Date(nowTime);
+            }
+          }
         }
       } else {
-        // Fila estava vazia: primeiro disparo imediato
+        // Primeiro disparo absoluto da instância (sem pendentes e sem enviados):
+        if (useRandom) {
+          delaySeconds = this.generateCadenceDelay(minDelay, maxDelay, null);
+          this.lastDelayByInstance.set(instanceKey, delaySeconds);
+        } else {
+          delaySeconds = fixedDelay;
+        }
         scheduledAt = new Date(nowTime);
       }
     }
 
-    // 3. Salva no banco de dados
+    // 3. Salva no banco de dados persistindo delaySeconds no campo metadata
     const id = `wq_${Date.now()}_${Math.random().toString(36).substring(2, 7)}`;
     const blocksJson = blocks ? JSON.stringify(blocks) : null;
     const varsJson = variables ? JSON.stringify(variables) : null;
+    const metaObj: any = {};
+    if (metadata) {
+      try {
+        Object.assign(metaObj, typeof metadata === 'string' ? JSON.parse(metadata) : metadata);
+      } catch {}
+    }
+    metaObj.delaySeconds = delaySeconds;
+    const metadataJson = JSON.stringify(metaObj);
 
     try {
       if ((prisma as any).whatsappQueue) {
@@ -388,6 +501,7 @@ export class WhatsappQueueService {
             enrollmentId: enrollmentId || null,
             nodeId: nodeId || null,
             automationId: automationId || null,
+            metadata: metadataJson,
             status: 'PENDING',
             scheduledAt,
             attempts: 0,
@@ -412,8 +526,9 @@ export class WhatsappQueueService {
         recipient_type, group_jid, group_enrollment_id,
         message_type, text, media_url, media_base64, media_mime_type, media_file_name,
         caption, blocks, variables, enrollment_id, node_id, automation_id,
+        metadata,
         status, scheduled_at, attempts, max_attempts, created_at, updated_at
-      ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'PENDING', ?, 0, ?, CURRENT_TIMESTAMP, CURRENT_TIMESTAMP)
+      ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'PENDING', ?, 0, ?, CURRENT_TIMESTAMP, CURRENT_TIMESTAMP)
       `,
       id,
       tenantId,
@@ -436,6 +551,7 @@ export class WhatsappQueueService {
       enrollmentId || null,
       nodeId || null,
       automationId || null,
+      metadataJson,
       scheduledAt.toISOString(),
       maxAttempts
     );
@@ -510,12 +626,13 @@ export class WhatsappQueueService {
 
         // Se a mensagem ainda não atingiu o horário agendado de envio
         if (waitMs > 0) {
-          // Se o atraso for menor ou igual a 60 segundos, o worker aguarda o tempo exato
-          if (waitMs <= 60000) {
+          // Se o atraso for menor ou igual a 10 minutos (600s), o worker aguarda o tempo exato respeitando a cadência anti-bloqueio
+          if (waitMs <= 600000) {
+            console.log(`[WhatsappQueueService] ⏳ Respeitando cadência anti-bloqueio entre contatos: aguardando ${(waitMs / 1000).toFixed(1)}s para o próximo disparo...`);
             await new Promise((r) => setTimeout(r, waitMs));
           } else {
-            // Atraso longo (> 1 minuto): libera o worker para não segurar processo desnecessariamente.
-            // O próximo agendador/cron (/api/jobs/process) acordará o worker quando o momento chegar.
+            // Atraso muito longo (> 10 minutos): libera o worker para não segurar processo.
+            // O BackgroundSchedulerRunner acordará o worker pontualmente quando o horário chegar.
             break;
           }
         }
