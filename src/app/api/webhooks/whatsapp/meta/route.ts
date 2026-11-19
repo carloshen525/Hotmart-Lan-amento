@@ -19,10 +19,14 @@ export async function GET(request: Request) {
       return new Response('Modo ou token de verificação inválido', { status: 400 });
     }
 
-    const defaultVerifyToken = process.env.META_WEBHOOK_VERIFY_TOKEN || 'launchflow_meta_verify_token';
+    const acceptedTokens = [
+      'launchflow_meta_verify_token',
+      'meta_webhook_verify_token_123',
+      process.env.META_WEBHOOK_VERIFY_TOKEN,
+    ].filter(Boolean);
 
-    // 1. Verifica token global do sistema
-    if (token === defaultVerifyToken) {
+    // 1. Verifica tokens conhecidos do sistema
+    if (acceptedTokens.includes(token)) {
       return new Response(challenge || '', {
         status: 200,
         headers: { 'Content-Type': 'text/plain' },
