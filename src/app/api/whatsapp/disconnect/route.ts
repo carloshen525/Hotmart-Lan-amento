@@ -26,7 +26,21 @@ export async function POST(request: Request) {
     const body = await request.json().catch(() => ({}));
     const targetId = body.instanceId || tenantId;
 
-    await messageManager.evolutionApi.disconnect(targetId, tenantId);
+    const inst = await prisma.whatsappInstance.findFirst({
+      where: {
+        OR: [{ id: targetId }, { instanceName: targetId }],
+        tenantId,
+      },
+    });
+
+    if (inst?.provider === 'META_CLOUD') {
+      await prisma.whatsappInstance.update({
+        where: { id: inst.id },
+        data: { status: 'DISCONNECTED' },
+      });
+    } else {
+      await messageManager.evolutionApi.disconnect(targetId, tenantId);
+    }
 
     // REGRA DE OURO: Caso o número configurado seja desconectado, o fluxo deve ser pausado imediatamente!
     try {

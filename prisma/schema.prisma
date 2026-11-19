@@ -358,6 +358,16 @@ model WhatsappInstance {
   qrcode          String?   // Base64 para exibição única no frontend
   isDefault       Boolean   @default(false)
   lastConnectedAt DateTime?
+  provider        String    @default("EVOLUTION") // EVOLUTION, META_CLOUD
+  wabaId          String?   // WhatsApp Business Account ID (Meta)
+  phoneNumberId   String?   // Meta Phone Number ID
+  accessToken     String?   // Meta Access Token (seguro no backend)
+  businessAccountId String? // Meta Business Account ID
+  webhookVerifyToken String? // Token de verificação do Webhook Meta
+  appId           String?   // Meta App ID (Embedded Signup)
+  appSecret       String?   // Meta App Secret
+  qualityRating   String?   // GREEN, YELLOW, RED
+  verifiedName    String?   // Nome verificado pela Meta
   fixedDelaySeconds Int      @default(30) @map("fixed_delay_seconds")
   useRandomDelay    Boolean  @default(true) @map("use_random_delay")
   minDelaySeconds   Int      @default(20) @map("min_delay_seconds")

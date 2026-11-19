@@ -22,6 +22,10 @@ import {
   ExternalLink,
   Sliders,
   Play,
+  FileText,
+  Copy,
+  Lock,
+  Globe,
 } from 'lucide-react';
 
 interface WhatsAppInstanceItem {
@@ -33,6 +37,12 @@ interface WhatsAppInstanceItem {
   status: 'CONNECTED' | 'DISCONNECTED' | 'CONNECTING';
   connected: boolean;
   isDefault?: boolean;
+  provider?: 'EVOLUTION' | 'META_CLOUD';
+  phoneNumberId?: string | null;
+  wabaId?: string | null;
+  verifiedName?: string | null;
+  qualityRating?: string | null;
+  webhookVerifyToken?: string | null;
   fixedDelaySeconds?: number;
   useRandomDelay?: boolean;
   minDelaySeconds?: number;
@@ -117,6 +127,24 @@ export default function WhatsAppPage() {
   // Monitor da Fila do WhatsApp em Tempo Real
   const [queueStats, setQueueStats] = useState<QueueStatsData | null>(null);
   const [processingQueue, setProcessingQueue] = useState(false);
+
+  // Modal de Conectar WhatsApp Business Cloud API Oficial (Meta)
+  const [isMetaModalOpen, setIsMetaModalOpen] = useState(false);
+  const [metaChannelName, setMetaChannelName] = useState('');
+  const [metaPhoneNumberId, setMetaPhoneNumberId] = useState('');
+  const [metaWabaId, setMetaWabaId] = useState('');
+  const [metaAccessToken, setMetaAccessToken] = useState('');
+  const [metaBusinessAccountId, setMetaBusinessAccountId] = useState('');
+  const [metaWebhookVerifyToken, setMetaWebhookVerifyToken] = useState('launchflow_meta_verify_token');
+  const [metaConnecting, setMetaConnecting] = useState(false);
+  const [metaError, setMetaError] = useState<string | null>(null);
+  const [metaCopiedField, setMetaCopiedField] = useState<string | null>(null);
+
+  // Modal de Visualização de Templates da Meta
+  const [isTemplatesModalOpen, setIsTemplatesModalOpen] = useState(false);
+  const [activeTemplatesChannel, setActiveTemplatesChannel] = useState<WhatsAppInstanceItem | null>(null);
+  const [channelTemplates, setChannelTemplates] = useState<any[]>([]);
+  const [loadingTemplates, setLoadingTemplates] = useState(false);
 
   const fetchQueueStats = async () => {
     try {
@@ -514,6 +542,76 @@ export default function WhatsAppPage() {
     }
   };
 
+  // Abertura do modal Meta Cloud API
+  const handleOpenMetaModal = () => {
+    setMetaChannelName('');
+    setMetaPhoneNumberId('');
+    setMetaWabaId('');
+    setMetaAccessToken('');
+    setMetaBusinessAccountId('');
+    setMetaError(null);
+    setIsMetaModalOpen(true);
+  };
+
+  // Salvar conexão Meta Cloud API
+  const handleConnectMetaCloud = async (e: React.FormEvent) => {
+    e.preventDefault();
+    if (!metaPhoneNumberId.trim() || !metaAccessToken.trim()) {
+      setMetaError('O Phone Number ID e o Access Token permanente da Meta são obrigatórios.');
+      return;
+    }
+
+    setMetaConnecting(true);
+    setMetaError(null);
+
+    try {
+      const res = await fetch('/api/whatsapp/meta/connect', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          name: metaChannelName.trim() || undefined,
+          phoneNumberId: metaPhoneNumberId.trim(),
+          wabaId: metaWabaId.trim() || undefined,
+          accessToken: metaAccessToken.trim(),
+          businessAccountId: metaBusinessAccountId.trim() || undefined,
+          webhookVerifyToken: metaWebhookVerifyToken.trim() || undefined,
+        }),
+      });
+
+      const data = await res.json();
+      if (!res.ok || !data.success) {
+        throw new Error(data.error || 'Falha ao conectar canal Meta Cloud API');
+      }
+
+      setIsMetaModalOpen(false);
+      setActionMessage('Canal WhatsApp Business Cloud API Oficial conectado com sucesso!');
+      fetchInstances();
+    } catch (err: any) {
+      setMetaError(err.message || 'Erro de conexão com a Meta');
+    } finally {
+      setMetaConnecting(false);
+    }
+  };
+
+  // Visualizar templates oficiais da Meta
+  const handleOpenTemplates = async (inst: WhatsAppInstanceItem) => {
+    setActiveTemplatesChannel(inst);
+    setIsTemplatesModalOpen(true);
+    setLoadingTemplates(true);
+    setChannelTemplates([]);
+
+    try {
+      const res = await fetch(`/api/whatsapp/meta/templates?instanceId=${encodeURIComponent(inst.id)}`);
+      const data = await res.json();
+      if (data.templates) {
+        setChannelTemplates(data.templates);
+      }
+    } catch {
+    } finally {
+      setLoadingTemplates(false);
+    }
+  };
+
   // Definir como padrão
   const handleSetDefault = async (instanceId: string) => {
     try {
@@ -589,24 +687,35 @@ export default function WhatsAppPage() {
           </p>
         </div>
 
-        <div className="flex items-center gap-2 self-start sm:self-auto shrink-0">
+        <div className="flex items-center gap-2 self-start sm:self-auto shrink-0 flex-wrap">
           <button
             onClick={handleManualSync}
             disabled={loading}
             className="px-3.5 py-2.5 bg-white hover:bg-slate-50 text-slate-700 font-semibold text-xs rounded-xl border border-slate-200 shadow-sm flex items-center gap-1.5 transition-all cursor-pointer"
-            title="Sincronizar conexões ativas com a Evolution API"
+            title="Sincronizar conexões ativas com a Evolution API e Meta"
           >
             <RefreshCw className={`w-3.5 h-3.5 text-slate-500 ${loading ? 'animate-spin' : ''}`} />
             <span>Sincronizar</span>
           </button>
 
           <button
+            onClick={handleOpenMetaModal}
+            disabled={actionLoading}
+            className="px-4 py-2.5 bg-blue-600 hover:bg-blue-700 text-white font-semibold text-xs rounded-xl shadow-lg shadow-blue-600/20 flex items-center gap-2 transition-all cursor-pointer"
+            title="Conectar canal oficial da Meta WhatsApp Business Cloud API"
+          >
+            <ShieldCheck className="w-4 h-4 text-blue-200" />
+            <span>Conectar Meta Cloud API (Oficial)</span>
+          </button>
+
+          <button
             onClick={handleOpenConnectModal}
             disabled={actionLoading}
             className="px-4 py-2.5 bg-emerald-600 hover:bg-emerald-700 text-white font-semibold text-xs rounded-xl shadow-lg shadow-emerald-600/20 flex items-center gap-2 transition-all cursor-pointer"
+            title="Conectar linha WhatsApp via Evolution API (QR Code)"
           >
-            <PlusCircle className="w-4 h-4" />
-            <span>Adicionar Novo Número</span>
+            <QrCode className="w-4 h-4" />
+            <span>Adicionar Linha (QR Code)</span>
           </button>
         </div>
       </div>
@@ -645,22 +754,29 @@ export default function WhatsAppPage() {
             </div>
             <h2 className="text-base font-bold text-slate-900 mb-1">Nenhum WhatsApp Conectado</h2>
             <p className="text-xs text-slate-500 max-w-md mx-auto mb-6">
-              Adicione o seu primeiro número para começar a disparar automações de lançamento, avisos e recuperação de vendas, ou sincronize caso já tenha conectado linhas na Evolution API.
+              Conecte sua conta oficial da WhatsApp Business Cloud API (Meta) ou escaneie o QR Code via Evolution API para começar a disparar automações de lançamento, avisos e recuperação de vendas.
             </p>
             <div className="flex flex-wrap items-center justify-center gap-3">
+              <button
+                onClick={handleOpenMetaModal}
+                className="px-5 py-2.5 bg-blue-600 hover:bg-blue-700 text-white font-semibold text-xs rounded-xl shadow-lg shadow-blue-600/20 inline-flex items-center gap-2 cursor-pointer"
+              >
+                <ShieldCheck className="w-4 h-4 text-blue-200" />
+                <span>Conectar Meta Cloud API (Oficial)</span>
+              </button>
               <button
                 onClick={handleOpenConnectModal}
                 className="px-5 py-2.5 bg-emerald-600 hover:bg-emerald-700 text-white font-semibold text-xs rounded-xl shadow-lg shadow-emerald-600/20 inline-flex items-center gap-2 cursor-pointer"
               >
-                <PlusCircle className="w-4 h-4" />
-                <span>Conectar Primeiro WhatsApp</span>
+                <QrCode className="w-4 h-4" />
+                <span>Conectar via QR Code (Evolution)</span>
               </button>
               <button
                 onClick={handleManualSync}
                 className="px-4 py-2.5 bg-white hover:bg-slate-50 text-slate-700 font-semibold text-xs rounded-xl border border-slate-200 shadow-sm inline-flex items-center gap-2 cursor-pointer"
               >
                 <RefreshCw className="w-3.5 h-3.5 text-slate-500" />
-                <span>Sincronizar Linhas Existentes</span>
+                <span>Sincronizar Linhas</span>
               </button>
             </div>
           </div>
@@ -733,6 +849,17 @@ export default function WhatsAppPage() {
                           </>
                         )}
 
+                        {inst.provider === 'META_CLOUD' ? (
+                          <span className="px-2 py-0.5 rounded-full bg-blue-50 text-blue-700 border border-blue-200 text-[10px] font-bold flex items-center gap-1">
+                            <ShieldCheck className="w-3 h-3 text-blue-600" />
+                            Meta Cloud API Oficial
+                          </span>
+                        ) : (
+                          <span className="px-2 py-0.5 rounded-full bg-indigo-50 text-indigo-700 border border-indigo-200 text-[10px] font-bold flex items-center gap-1">
+                            Evolution API
+                          </span>
+                        )}
+
                         {inst.isDefault && (
                           <span className="px-2 py-0.5 rounded-full bg-amber-50 text-amber-700 border border-amber-200 text-[10px] font-bold flex items-center gap-1">
                             <Star className="w-3 h-3 fill-amber-500 text-amber-500" />
@@ -741,7 +868,7 @@ export default function WhatsAppPage() {
                         )}
                       </div>
 
-                      <div className="flex items-center gap-2 mt-0.5">
+                      <div className="flex items-center gap-2 mt-0.5 flex-wrap">
                         <span
                           className={`inline-flex items-center gap-1 text-[11px] font-semibold ${
                             inst.connected ? 'text-emerald-700' : 'text-slate-500'
@@ -764,8 +891,26 @@ export default function WhatsAppPage() {
                         </span>
                         <span className="text-slate-300">•</span>
                         <span className="text-[11px] text-slate-400 font-mono">
-                          ID: {inst.instanceName}
+                          {inst.provider === 'META_CLOUD' && inst.phoneNumberId
+                            ? `Phone ID: ${inst.phoneNumberId}`
+                            : `ID: ${inst.instanceName}`}
                         </span>
+                        {inst.provider === 'META_CLOUD' && inst.wabaId && (
+                          <>
+                            <span className="text-slate-300">•</span>
+                            <span className="text-[11px] text-slate-400 font-mono">
+                              WABA: {inst.wabaId}
+                            </span>
+                          </>
+                        )}
+                        {inst.verifiedName && (
+                          <>
+                            <span className="text-slate-300">•</span>
+                            <span className="text-[11px] text-emerald-600 font-semibold">
+                              ✓ {inst.verifiedName}
+                            </span>
+                          </>
+                        )}
                       </div>
                     </div>
                   </div>
@@ -783,15 +928,37 @@ export default function WhatsAppPage() {
                       </button>
                     )}
 
-                    <button
-                      onClick={() => handleReconnectInstance(inst.id)}
-                      disabled={actionLoading}
-                      className="px-3 py-1.5 rounded-lg border border-slate-200 text-slate-700 hover:bg-slate-50 font-semibold text-xs flex items-center gap-1.5 transition-colors cursor-pointer"
-                      title="Reconectar ou gerar novo QR Code desta linha"
-                    >
-                      <RefreshCw className="w-3.5 h-3.5" />
-                      <span>{inst.connected ? 'Reconectar' : 'Conectar via QR Code'}</span>
-                    </button>
+                    {inst.provider === 'META_CLOUD' ? (
+                      <>
+                        <button
+                          onClick={() => handleOpenTemplates(inst)}
+                          className="px-3 py-1.5 rounded-lg border border-blue-200 bg-blue-50 text-blue-700 hover:bg-blue-100 font-semibold text-xs flex items-center gap-1.5 transition-colors cursor-pointer"
+                          title="Visualizar templates oficiais aprovados na Meta"
+                        >
+                          <FileText className="w-3.5 h-3.5 text-blue-600" />
+                          <span>Templates Oficiais</span>
+                        </button>
+                        <button
+                          onClick={handleManualSync}
+                          disabled={actionLoading}
+                          className="px-3 py-1.5 rounded-lg border border-slate-200 text-slate-700 hover:bg-slate-50 font-semibold text-xs flex items-center gap-1.5 transition-colors cursor-pointer"
+                          title="Verificar status da conexão na Meta Graph API"
+                        >
+                          <RefreshCw className="w-3.5 h-3.5" />
+                          <span>Verificar Status</span>
+                        </button>
+                      </>
+                    ) : (
+                      <button
+                        onClick={() => handleReconnectInstance(inst.id)}
+                        disabled={actionLoading}
+                        className="px-3 py-1.5 rounded-lg border border-slate-200 text-slate-700 hover:bg-slate-50 font-semibold text-xs flex items-center gap-1.5 transition-colors cursor-pointer"
+                        title="Reconectar ou gerar novo QR Code desta linha"
+                      >
+                        <RefreshCw className="w-3.5 h-3.5" />
+                        <span>{inst.connected ? 'Reconectar' : 'Conectar via QR Code'}</span>
+                      </button>
+                    )}
 
                     {inst.connected && (
                       <button
@@ -1305,6 +1472,305 @@ export default function WhatsAppPage() {
                   </button>
                 </div>
               )}
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* MODAL PARA CONECTAR META WHATSAPP BUSINESS CLOUD API OFICIAL */}
+      {isMetaModalOpen && (
+        <div className="fixed inset-0 bg-black/60 backdrop-blur-sm z-50 flex items-center justify-center p-4">
+          <div className="bg-white rounded-2xl shadow-2xl border border-slate-200 max-w-lg w-full p-6 text-xs text-slate-800 relative max-h-[90vh] overflow-y-auto">
+            <div className="flex items-center justify-between pb-3 border-b border-slate-100">
+              <div className="flex items-center gap-2">
+                <div className="w-8 h-8 rounded-lg bg-blue-100 text-blue-700 flex items-center justify-center font-bold">
+                  <ShieldCheck className="w-5 h-5" />
+                </div>
+                <div>
+                  <h3 className="font-bold text-slate-900 text-sm">Conectar WhatsApp Cloud API Oficial</h3>
+                  <p className="text-[11px] text-slate-400">Meta for Developers (API Oficial do WhatsApp)</p>
+                </div>
+              </div>
+              <button
+                onClick={() => setIsMetaModalOpen(false)}
+                className="text-slate-400 hover:text-slate-600 p-1 rounded-lg cursor-pointer"
+              >
+                <X className="w-4 h-4" />
+              </button>
+            </div>
+
+            <form onSubmit={handleConnectMetaCloud} className="mt-4 space-y-4">
+              {metaError && (
+                <div className="p-3 rounded-xl bg-red-50 text-red-700 border border-red-200 text-xs flex items-center gap-2">
+                  <AlertCircle className="w-4 h-4 shrink-0" />
+                  <span>{metaError}</span>
+                </div>
+              )}
+
+              <div className="space-y-1.5">
+                <label className="block text-slate-700 font-bold text-xs">
+                  Nome / Apelido da Linha
+                </label>
+                <input
+                  type="text"
+                  placeholder="Ex: WhatsApp Oficial Vendas, Suporte Lançamento..."
+                  value={metaChannelName}
+                  onChange={(e) => setMetaChannelName(e.target.value)}
+                  className="w-full px-3.5 py-2.5 bg-slate-50 border border-slate-200 rounded-xl text-xs text-slate-900 focus:outline-none focus:border-blue-500 focus:bg-white"
+                />
+              </div>
+
+              <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
+                <div className="space-y-1.5">
+                  <label className="block text-slate-700 font-bold text-xs">
+                    Phone Number ID <span className="text-red-500">*</span>
+                  </label>
+                  <input
+                    type="text"
+                    required
+                    placeholder="Ex: 104928374659201"
+                    value={metaPhoneNumberId}
+                    onChange={(e) => setMetaPhoneNumberId(e.target.value)}
+                    className="w-full px-3.5 py-2.5 bg-slate-50 border border-slate-200 rounded-xl text-xs font-mono text-slate-900 focus:outline-none focus:border-blue-500 focus:bg-white"
+                  />
+                  <span className="text-[10px] text-slate-400 block">ID do número gerado na Meta</span>
+                </div>
+
+                <div className="space-y-1.5">
+                  <label className="block text-slate-700 font-bold text-xs">
+                    WABA ID (WhatsApp Account ID)
+                  </label>
+                  <input
+                    type="text"
+                    placeholder="Ex: 102938475619283"
+                    value={metaWabaId}
+                    onChange={(e) => setMetaWabaId(e.target.value)}
+                    className="w-full px-3.5 py-2.5 bg-slate-50 border border-slate-200 rounded-xl text-xs font-mono text-slate-900 focus:outline-none focus:border-blue-500 focus:bg-white"
+                  />
+                  <span className="text-[10px] text-slate-400 block">Necessário para listar templates</span>
+                </div>
+              </div>
+
+              <div className="space-y-1.5">
+                <label className="block text-slate-700 font-bold text-xs">
+                  Access Token Permanente da Meta <span className="text-red-500">*</span>
+                </label>
+                <div className="relative">
+                  <input
+                    type="password"
+                    required
+                    placeholder="EAABwz..."
+                    value={metaAccessToken}
+                    onChange={(e) => setMetaAccessToken(e.target.value)}
+                    className="w-full px-3.5 py-2.5 bg-slate-50 border border-slate-200 rounded-xl text-xs font-mono text-slate-900 focus:outline-none focus:border-blue-500 focus:bg-white pr-9"
+                  />
+                  <Lock className="w-4 h-4 text-slate-400 absolute right-3 top-1/2 -translate-y-1/2 pointer-events-none" />
+                </div>
+                <span className="text-[10px] text-slate-400 block">
+                  Token do Usuário do Sistema (System User) com permissões <code className="text-blue-600 font-mono">whatsapp_business_messaging</code> e <code className="text-blue-600 font-mono">whatsapp_business_management</code>
+                </span>
+              </div>
+
+              <div className="space-y-1.5">
+                <label className="block text-slate-700 font-bold text-xs">
+                  Business Account ID (Opcional)
+                </label>
+                <input
+                  type="text"
+                  placeholder="Ex: 987654321098765"
+                  value={metaBusinessAccountId}
+                  onChange={(e) => setMetaBusinessAccountId(e.target.value)}
+                  className="w-full px-3.5 py-2.5 bg-slate-50 border border-slate-200 rounded-xl text-xs font-mono text-slate-900 focus:outline-none focus:border-blue-500 focus:bg-white"
+                />
+              </div>
+
+              {/* Informações para configuração de Webhook na Meta */}
+              <div className="p-3.5 rounded-xl bg-blue-50/70 border border-blue-200/80 space-y-2 text-xs">
+                <div className="font-bold text-blue-900 flex items-center gap-1.5 text-xs">
+                  <Globe className="w-3.5 h-3.5 text-blue-600" />
+                  <span>Configuração do Webhook no Meta for Developers</span>
+                </div>
+                <p className="text-slate-600 text-[11px]">
+                  Cole os dados abaixo no painel da Meta (WhatsApp &gt; Configuração &gt; Webhook) para receber mensagens e confirmações de entrega:
+                </p>
+
+                <div className="space-y-1.5 pt-1">
+                  <div>
+                    <span className="text-[10px] font-bold text-slate-500 uppercase">URL de Retorno de Chamada (Callback URL)</span>
+                    <div className="flex items-center gap-1.5 mt-0.5">
+                      <input
+                        type="text"
+                        readOnly
+                        value={typeof window !== 'undefined' ? `${window.location.origin}/api/webhooks/whatsapp/meta` : '/api/webhooks/whatsapp/meta'}
+                        className="flex-1 px-2.5 py-1.5 bg-white border border-blue-200 rounded-lg text-[11px] font-mono text-slate-800 select-all"
+                      />
+                      <button
+                        type="button"
+                        onClick={() => {
+                          const url = typeof window !== 'undefined' ? `${window.location.origin}/api/webhooks/whatsapp/meta` : '';
+                          navigator.clipboard.writeText(url);
+                          setMetaCopiedField('url');
+                          setTimeout(() => setMetaCopiedField(null), 2000);
+                        }}
+                        className="px-2.5 py-1.5 rounded-lg bg-blue-600 text-white font-semibold text-[11px] hover:bg-blue-700 transition-colors"
+                      >
+                        {metaCopiedField === 'url' ? 'Copiado!' : 'Copiar'}
+                      </button>
+                    </div>
+                  </div>
+
+                  <div>
+                    <span className="text-[10px] font-bold text-slate-500 uppercase">Token de Verificação (Verify Token)</span>
+                    <div className="flex items-center gap-1.5 mt-0.5">
+                      <input
+                        type="text"
+                        readOnly
+                        value={metaWebhookVerifyToken}
+                        className="flex-1 px-2.5 py-1.5 bg-white border border-blue-200 rounded-lg text-[11px] font-mono text-slate-800 select-all"
+                      />
+                      <button
+                        type="button"
+                        onClick={() => {
+                          navigator.clipboard.writeText(metaWebhookVerifyToken);
+                          setMetaCopiedField('token');
+                          setTimeout(() => setMetaCopiedField(null), 2000);
+                        }}
+                        className="px-2.5 py-1.5 rounded-lg bg-blue-600 text-white font-semibold text-[11px] hover:bg-blue-700 transition-colors"
+                      >
+                        {metaCopiedField === 'token' ? 'Copiado!' : 'Copiar'}
+                      </button>
+                    </div>
+                  </div>
+
+                  <div className="text-[10px] text-blue-800 font-semibold pt-0.5">
+                    Campo a assinar no webhook da Meta: <code className="bg-blue-100 px-1 py-0.5 rounded text-blue-900">messages</code>
+                  </div>
+                </div>
+              </div>
+
+              <div className="flex items-center justify-end gap-2 pt-2 border-t border-slate-100">
+                <button
+                  type="button"
+                  onClick={() => setIsMetaModalOpen(false)}
+                  className="px-4 py-2 rounded-xl border border-slate-200 hover:bg-slate-50 font-semibold text-xs text-slate-700 cursor-pointer transition-colors"
+                >
+                  Cancelar
+                </button>
+                <button
+                  type="submit"
+                  disabled={metaConnecting}
+                  className="px-5 py-2 rounded-xl bg-blue-600 hover:bg-blue-700 text-white font-semibold text-xs shadow-lg shadow-blue-600/20 flex items-center gap-2 cursor-pointer transition-all disabled:opacity-50"
+                >
+                  {metaConnecting ? (
+                    <>
+                      <RefreshCw className="w-3.5 h-3.5 animate-spin" />
+                      <span>Validando com a Meta...</span>
+                    </>
+                  ) : (
+                    <>
+                      <Check className="w-4 h-4" />
+                      <span>Testar e Conectar Canal Oficial</span>
+                    </>
+                  )}
+                </button>
+              </div>
+            </form>
+          </div>
+        </div>
+      )}
+
+      {/* MODAL DE TEMPLATES OFICIAIS DA META */}
+      {isTemplatesModalOpen && (
+        <div className="fixed inset-0 bg-black/60 backdrop-blur-sm z-50 flex items-center justify-center p-4">
+          <div className="bg-white rounded-2xl shadow-2xl border border-slate-200 max-w-2xl w-full p-6 text-xs text-slate-800 relative max-h-[85vh] flex flex-col">
+            <div className="flex items-center justify-between pb-3 border-b border-slate-100 shrink-0">
+              <div className="flex items-center gap-2">
+                <div className="w-8 h-8 rounded-lg bg-blue-100 text-blue-700 flex items-center justify-center font-bold">
+                  <FileText className="w-4 h-4" />
+                </div>
+                <div>
+                  <h3 className="font-bold text-slate-900 text-sm">
+                    Templates Oficiais: {activeTemplatesChannel?.name || 'Meta'}
+                  </h3>
+                  <p className="text-[11px] text-slate-400">
+                    Modelos de mensagens aprovados pela Meta para disparo de lançamentos e avisos
+                  </p>
+                </div>
+              </div>
+              <button
+                onClick={() => setIsTemplatesModalOpen(false)}
+                className="text-slate-400 hover:text-slate-600 p-1 rounded-lg cursor-pointer"
+              >
+                <X className="w-4 h-4" />
+              </button>
+            </div>
+
+            <div className="my-4 overflow-y-auto flex-1 space-y-3 pr-1">
+              {loadingTemplates ? (
+                <div className="py-12 text-center text-slate-400 space-y-2">
+                  <RefreshCw className="w-6 h-6 animate-spin mx-auto text-blue-600" />
+                  <p>Consultando templates aprovados na Meta Graph API...</p>
+                </div>
+              ) : channelTemplates.length === 0 ? (
+                <div className="py-12 text-center text-slate-400 bg-slate-50 rounded-xl border border-slate-100">
+                  <FileText className="w-8 h-8 mx-auto mb-2 text-slate-300" />
+                  <p className="font-semibold text-slate-700">Nenhum template encontrado nesta conta.</p>
+                  <p className="text-[11px] mt-1 max-w-sm mx-auto">
+                    Certifique-se de preencher o <strong>WABA ID</strong> nas configurações do canal e de criar templates no WhatsApp Business Manager da Meta.
+                  </p>
+                </div>
+              ) : (
+                channelTemplates.map((tpl) => {
+                  const bodyComponent = tpl.components?.find((c: any) => c.type === 'BODY');
+                  const isApproved = tpl.status === 'APPROVED';
+
+                  return (
+                    <div
+                      key={tpl.id || tpl.name}
+                      className="p-4 rounded-xl border border-slate-200 hover:border-blue-300 transition-all bg-white shadow-xs space-y-2"
+                    >
+                      <div className="flex items-center justify-between gap-2 flex-wrap">
+                        <div className="flex items-center gap-2">
+                          <span className="font-bold text-slate-900 text-xs">{tpl.name}</span>
+                          <span className="text-[10px] text-slate-400 uppercase font-mono">
+                            ({tpl.language || 'pt_BR'})
+                          </span>
+                        </div>
+                        <div className="flex items-center gap-1.5">
+                          <span className="px-2 py-0.5 rounded text-[10px] font-semibold bg-slate-100 text-slate-600">
+                            {tpl.category}
+                          </span>
+                          <span
+                            className={`px-2 py-0.5 rounded text-[10px] font-bold ${
+                              isApproved
+                                ? 'bg-emerald-50 text-emerald-700 border border-emerald-200'
+                                : 'bg-amber-50 text-amber-700 border border-amber-200'
+                            }`}
+                          >
+                            {tpl.status}
+                          </span>
+                        </div>
+                      </div>
+
+                      {bodyComponent?.text && (
+                        <div className="text-[11px] text-slate-600 bg-slate-50 p-2.5 rounded-lg border border-slate-100 whitespace-pre-wrap font-sans">
+                          {bodyComponent.text}
+                        </div>
+                      )}
+                    </div>
+                  );
+                })
+              )}
+            </div>
+
+            <div className="pt-3 border-t border-slate-100 flex items-center justify-end shrink-0">
+              <button
+                type="button"
+                onClick={() => setIsTemplatesModalOpen(false)}
+                className="px-4 py-2 bg-slate-100 hover:bg-slate-200 text-slate-700 font-semibold rounded-xl text-xs transition-colors cursor-pointer"
+              >
+                Fechar
+              </button>
             </div>
           </div>
         </div>

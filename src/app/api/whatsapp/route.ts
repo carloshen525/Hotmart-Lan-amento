@@ -2,15 +2,15 @@ import { NextResponse } from 'next/server';
 import { getActiveTenantId, ensureTenantAccess } from '@/lib/tenancy';
 import { getCurrentSession } from '@/lib/auth';
 import { messageManager } from '@/services/messaging';
+import { WhatsAppProviderFactory } from '@/services/whatsapp/providers';
 
 export const dynamic = 'force-dynamic';
 export const revalidate = 0;
 
 /**
  * GET /api/whatsapp
- * Retorna o status de todas as instâncias do WhatsApp pertencentes ao Tenant autenticado.
- * A Evolution API NÃO é autoridade de visibilidade: apenas as instâncias vinculadas a este tenant
- * no banco de dados são consultadas e retornadas.
+ * Retorna o status de todos os canais de WhatsApp pertencentes ao Tenant autenticado
+ * (incluindo canais Evolution API e WhatsApp Business Cloud API Oficial da Meta).
  */
 export async function GET(request: Request) {
   try {
@@ -34,8 +34,49 @@ export async function GET(request: Request) {
     const { searchParams } = new URL(request.url);
     const instanceId = searchParams.get('instanceId') || undefined;
 
-    const status = await messageManager.evolutionApi.getStatus(tenantId, instanceId);
-    const response = NextResponse.json(status);
+    // 1. Obtém todos os canais cadastrados no banco para este tenant (higienizados)
+    const allChannels = await WhatsAppProviderFactory.listChannels(tenantId);
+
+    // 2. Para instâncias da Evolution API, consulta o status em tempo real
+    let evolutionStatus: any = null;
+    try {
+      evolutionStatus = await messageManager.evolutionApi.getStatus(tenantId, instanceId);
+    } catch {}
+
+    // 3. Mescla o status da Evolution API com os canais do banco
+    const mergedChannels = allChannels.map((ch) => {
+      if (ch.provider === 'EVOLUTION') {
+        const evoItem = evolutionStatus?.instances?.find((i: any) => i.id === ch.id);
+        if (evoItem) {
+          return {
+            ...ch,
+            status: evoItem.status,
+            connected: evoItem.connected,
+            phone: evoItem.phone || ch.phone,
+            profileName: evoItem.profileName || ch.profileName,
+            profilePicUrl: evoItem.profilePicUrl || ch.profilePicUrl,
+            qrcode: evoItem.qrcode || ch.qrcode,
+          };
+        }
+      }
+      return ch;
+    });
+
+    const filtered = instanceId
+      ? mergedChannels.filter((c) => c.id === instanceId)
+      : mergedChannels;
+
+    const hasAnyConnected = filtered.some((c) => c.connected);
+    const primaryStatus = hasAnyConnected ? 'CONNECTED' : (filtered[0]?.status || 'DISCONNECTED');
+
+    const response = NextResponse.json({
+      hasInstance: filtered.length > 0,
+      connected: hasAnyConnected,
+      status: primaryStatus,
+      instances: filtered,
+      instance: filtered[0] || null,
+    });
+
     response.headers.set('Cache-Control', 'no-store, no-cache, must-revalidate, proxy-revalidate');
     response.headers.set('Pragma', 'no-cache');
     response.headers.set('Expires', '0');

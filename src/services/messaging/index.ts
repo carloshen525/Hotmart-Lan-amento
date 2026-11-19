@@ -4,6 +4,7 @@ import { EvolutionApiService } from './evolution-api';
 import { EmailProviderService } from './email-provider';
 import { EmailService } from '../email';
 import { SendEmailParams, SendWhatsAppParams, SendResult } from './types';
+import { WhatsAppProviderFactory } from '@/services/whatsapp/providers';
 
 export class MessageManager {
   private simulated = new SimulatedMessageService();
@@ -38,28 +39,85 @@ export class MessageManager {
       }
     }
 
-    const mode = process.env.WHATSAPP_PROVIDER_MODE;
+    // 1. Prioriza resolução via Camada Desacoplada de Provedores (Evolution ou Meta Cloud API)
+    try {
+      const provider = await WhatsAppProviderFactory.getProvider(
+        params.whatsappInstanceId,
+        params.tenantId
+      );
 
-    // 1. Prioriza Evolution API se o modo for EVOLUTION_API
-    if (mode === 'EVOLUTION_API') {
-      if (this.evolutionApi.isConfigured()) {
-        return this.evolutionApi.send(params);
+      if (provider) {
+        if (params.templateName && provider.sendTemplate) {
+          const res = await provider.sendTemplate({
+            tenantId: params.tenantId,
+            contactId: params.contactId,
+            phone: params.phone,
+            templateName: params.templateName,
+            variables: params.variables,
+          });
+          return {
+            success: res.success,
+            messageId: res.messageId,
+            provider: res.provider,
+            status: res.status as any,
+            error: res.error,
+          };
+        }
+
+        if (params.messageType && params.messageType !== 'text') {
+          const res = await provider.sendMedia({
+            tenantId: params.tenantId,
+            contactId: params.contactId,
+            phone: params.phone,
+            mediaType: params.messageType,
+            mediaUrl: params.mediaUrl,
+            mediaBase64: params.mediaBase64,
+            mediaMimeType: params.mediaMimeType,
+            mediaFileName: params.mediaFileName,
+            caption: params.caption || params.text,
+            variables: params.variables,
+          });
+          return {
+            success: res.success,
+            messageId: res.messageId,
+            provider: res.provider,
+            status: res.status as any,
+            error: res.error,
+          };
+        }
+
+        const res = await provider.sendText({
+          tenantId: params.tenantId,
+          contactId: params.contactId,
+          phone: params.phone,
+          text: params.text || '',
+          variables: params.variables,
+        });
+        return {
+          success: res.success,
+          messageId: res.messageId,
+          provider: res.provider,
+          status: res.status as any,
+          error: res.error,
+        };
       }
-      return {
-        success: false,
-        messageId: '',
-        provider: 'EVOLUTION_API',
-        status: 'FAILED',
-        error: 'Modo EVOLUTION_API selecionado, mas variáveis não configuradas no .env (EVOLUTION_API_URL, EVOLUTION_API_KEY, EVOLUTION_INSTANCE_NAME)',
-      };
+    } catch (err: any) {
+      console.error('[MessageManager] Erro no provedor de WhatsApp:', err);
     }
 
-    // 2. Meta Cloud API oficial
+    const mode = process.env.WHATSAPP_PROVIDER_MODE;
+
+    // 2. Fallback legado: Evolution API global
+    if (mode === 'EVOLUTION_API' || this.evolutionApi.isConfigured()) {
+      return this.evolutionApi.send(params);
+    }
+
+    // 3. Fallback legado: Meta Cloud API global por variáveis de ambiente
     if (mode === 'META_CLOUD_API' && this.metaWhatsApp.isConfigured()) {
       return this.metaWhatsApp.send(params);
     }
 
-    // 3. Fallback seguro: Provedor Simulado
+    // 4. Fallback seguro: Provedor Simulado
     return this.simulated.sendWhatsApp(params);
   }
 

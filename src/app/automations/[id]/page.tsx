@@ -112,15 +112,16 @@ const getLocalDatetimeString = (date: Date = new Date()) => {
 
 import { parseTargetDate } from '@/lib/date-utils';
 
-// Helper para evitar duplicação do telefone no rótulo da linha WhatsApp
+// Helper para evitar duplicação do telefone no rótulo da linha WhatsApp e identificar o provedor (Evolution vs Meta Cloud API)
 function formatWppInstanceLabel(inst: any): string {
   if (!inst) return 'WhatsApp';
-  const name = (inst.name || 'WhatsApp').trim();
+  const name = (inst.name || (inst.provider === 'META_CLOUD' ? 'WhatsApp Oficial Meta' : 'WhatsApp')).trim();
   const phone = (inst.phone || '').trim();
+  const providerTag = inst.provider === 'META_CLOUD' ? ' [Oficial Meta]' : '';
   if (phone && !name.includes(phone)) {
-    return `${name} (${phone})`;
+    return `${name} (${phone})${providerTag}`;
   }
-  return name;
+  return `${name}${providerTag}`;
 }
 
 export default function AutomationCanvasPage() {
