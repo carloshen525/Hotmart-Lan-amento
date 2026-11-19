@@ -26,7 +26,15 @@ html.dark body {
 }
 
 /* Superfícies principais (Cards, Modais, Dropdowns) */
-html.dark .bg-white {
+html.dark .bg-white,
+html.dark .bg-white\/95,
+html.dark .bg-white\/90,
+html.dark .bg-white\/85,
+html.dark .bg-white\/80,
+html.dark .bg-white\/75,
+html.dark .bg-white\/70,
+html.dark .bg-white\/60,
+html.dark .bg-white\/50 {
   background-color: #0f172a !important;
 }
 
@@ -136,7 +144,8 @@ html.dark .bg-amber-50\/80 {
 html.dark .bg-blue-50,
 html.dark .bg-blue-50\/50,
 html.dark .bg-blue-50\/70,
-html.dark .bg-blue-50\/80 {
+html.dark .bg-blue-50\/80,
+html.dark .bg-blue-50\/90 {
   background-color: rgba(59, 130, 246, 0.16) !important;
   color: #93c5fd !important;
 }
@@ -313,6 +322,24 @@ html.dark .from-indigo-50\/60 {
   --tw-gradient-from: rgba(49, 46, 129, 0.35) var(--tw-gradient-from-position) !important;
   --tw-gradient-to: rgba(49, 46, 129, 0) var(--tw-gradient-to-position) !important;
   --tw-gradient-stops: var(--tw-gradient-from), var(--tw-gradient-to) !important;
+}
+
+html.dark .from-blue-50,
+html.dark .from-blue-50\/90 {
+  --tw-gradient-from: rgba(30, 58, 138, 0.35) var(--tw-gradient-from-position) !important;
+  --tw-gradient-to: rgba(30, 58, 138, 0) var(--tw-gradient-to-position) !important;
+  --tw-gradient-stops: var(--tw-gradient-from), var(--tw-gradient-to) !important;
+}
+
+html.dark .via-indigo-50\/60,
+html.dark .via-indigo-50 {
+  --tw-gradient-to: rgba(49, 46, 129, 0) var(--tw-gradient-to-position) !important;
+  --tw-gradient-stops: var(--tw-gradient-from), rgba(49, 46, 129, 0.25) var(--tw-gradient-via-position), var(--tw-gradient-to) !important;
+}
+
+html.dark .to-blue-50,
+html.dark .to-blue-50\/90 {
+  --tw-gradient-to: rgba(30, 58, 138, 0.25) var(--tw-gradient-to-position) !important;
 }
 
 html.dark .to-purple-50\/40,

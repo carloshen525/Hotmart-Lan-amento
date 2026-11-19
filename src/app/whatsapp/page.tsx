@@ -1484,47 +1484,47 @@ export default function WhatsAppPage() {
 
       {/* MODAL PARA CONECTAR META WHATSAPP BUSINESS CLOUD API OFICIAL */}
       {isMetaModalOpen && (
-        <div className="fixed inset-0 bg-black/60 backdrop-blur-sm z-50 flex items-center justify-center p-4">
-          <div className="bg-white rounded-2xl shadow-2xl border border-slate-200 max-w-2xl w-full p-6 text-xs text-slate-800 relative max-h-[92vh] overflow-y-auto">
-            <div className="flex items-center justify-between pb-3 border-b border-slate-100">
+        <div className="fixed inset-0 bg-black/70 backdrop-blur-sm z-50 flex items-center justify-center p-4">
+          <div className="bg-white dark:bg-[#0c1322] rounded-2xl shadow-2xl border border-slate-200 dark:border-slate-800 max-w-2xl w-full p-6 text-xs text-slate-800 dark:text-slate-200 relative max-h-[92vh] overflow-y-auto">
+            <div className="flex items-center justify-between pb-3 border-b border-slate-100 dark:border-slate-800">
               <div className="flex items-center gap-2">
-                <div className="w-8 h-8 rounded-lg bg-blue-100 text-blue-700 flex items-center justify-center font-bold">
+                <div className="w-8 h-8 rounded-lg bg-blue-100 dark:bg-blue-950/80 text-blue-700 dark:text-blue-400 flex items-center justify-center font-bold">
                   <ShieldCheck className="w-5 h-5" />
                 </div>
                 <div>
-                  <h3 className="font-bold text-slate-900 text-sm">Conectar WhatsApp Cloud API Oficial (Meta)</h3>
-                  <p className="text-[11px] text-slate-400">Integração oficial sem risco de banimento de número</p>
+                  <h3 className="font-bold text-slate-900 dark:text-white text-sm">Conectar WhatsApp Cloud API Oficial (Meta)</h3>
+                  <p className="text-[11px] text-slate-500 dark:text-slate-400">Integração oficial sem risco de banimento de número</p>
                 </div>
               </div>
               <button
                 onClick={() => setIsMetaModalOpen(false)}
-                className="text-slate-400 hover:text-slate-600 p-1 rounded-lg cursor-pointer"
+                className="text-slate-400 hover:text-slate-600 dark:text-slate-400 dark:hover:text-slate-200 p-1 rounded-lg cursor-pointer transition-colors"
               >
                 <X className="w-4 h-4" />
               </button>
             </div>
 
             {/* Painel de Atalhos Rápidos e Tutorial para Leigos */}
-            <div className="mt-4 bg-gradient-to-r from-blue-50/90 via-indigo-50/60 to-blue-50/90 border border-blue-200/90 rounded-xl p-3.5 space-y-2.5">
+            <div className="mt-4 bg-gradient-to-r from-blue-50/90 via-indigo-50/60 to-blue-50/90 dark:from-[#11192e] dark:via-[#131f3a] dark:to-[#11192e] border border-blue-200/90 dark:border-blue-900/60 rounded-xl p-3.5 space-y-2.5">
               <div className="flex items-center justify-between">
-                <div className="flex items-center gap-1.5 text-blue-950 font-bold text-xs">
-                  <BookOpen className="w-4 h-4 text-blue-600" />
+                <div className="flex items-center gap-1.5 text-blue-950 dark:text-blue-200 font-bold text-xs">
+                  <BookOpen className="w-4 h-4 text-blue-600 dark:text-blue-400" />
                   <span>Onde pegar as credenciais na Meta? (Atalhos Oficiais)</span>
                 </div>
                 <button
                   type="button"
                   onClick={() => setShowMetaTutorial(!showMetaTutorial)}
-                  className="text-[11px] font-semibold text-blue-700 hover:text-blue-900 flex items-center gap-1 cursor-pointer bg-white/90 hover:bg-white px-2.5 py-1 rounded-lg border border-blue-200 shadow-xs transition-colors"
+                  className="text-[11px] font-semibold text-blue-700 hover:text-blue-900 dark:text-blue-300 dark:hover:text-blue-100 flex items-center gap-1 cursor-pointer bg-white/90 hover:bg-white dark:bg-[#162340] dark:hover:bg-[#1c2c52] px-2.5 py-1 rounded-lg border border-blue-200 dark:border-blue-800/80 shadow-xs transition-colors"
                 >
                   {showMetaTutorial ? (
                     <>
                       <span>Ocultar Instruções</span>
-                      <ChevronUp className="w-3.5 h-3.5 text-blue-600" />
+                      <ChevronUp className="w-3.5 h-3.5 text-blue-600 dark:text-blue-400" />
                     </>
                   ) : (
                     <>
                       <span>Guia Passo a Passo (Leigos)</span>
-                      <ChevronDown className="w-3.5 h-3.5 text-blue-600" />
+                      <ChevronDown className="w-3.5 h-3.5 text-blue-600 dark:text-blue-400" />
                     </>
                   )}
                 </button>
@@ -1536,81 +1536,81 @@ export default function WhatsAppPage() {
                   href="https://developers.facebook.com/apps/"
                   target="_blank"
                   rel="noopener noreferrer"
-                  className="p-2.5 bg-white hover:bg-blue-50 border border-blue-200 hover:border-blue-400 rounded-lg flex items-center justify-between gap-1 text-[11px] font-semibold text-blue-900 shadow-xs transition-all group"
+                  className="p-2.5 bg-white hover:bg-blue-50 dark:bg-[#152037] dark:hover:bg-[#1b2946] border border-blue-200 hover:border-blue-400 dark:border-slate-700/80 dark:hover:border-blue-500 rounded-lg flex items-center justify-between gap-1 text-[11px] font-semibold text-blue-900 dark:text-slate-100 shadow-xs transition-all group"
                   title="Abre o painel Meta Developers para pegar o Phone Number ID e configurar o Webhook"
                 >
                   <div className="flex flex-col min-w-0">
-                    <span className="truncate">1. Meta Developers</span>
-                    <span className="text-[10px] text-slate-400 font-normal truncate">Phone ID e Webhook</span>
+                    <span className="truncate text-blue-950 dark:text-slate-100 font-bold">1. Meta Developers</span>
+                    <span className="text-[10px] text-slate-500 dark:text-slate-400 font-normal truncate">Phone ID e Webhook</span>
                   </div>
-                  <ExternalLink className="w-3.5 h-3.5 text-blue-500 group-hover:translate-x-0.5 group-hover:-translate-y-0.5 transition-transform shrink-0" />
+                  <ExternalLink className="w-3.5 h-3.5 text-blue-500 dark:text-blue-400 group-hover:translate-x-0.5 group-hover:-translate-y-0.5 transition-transform shrink-0" />
                 </a>
 
                 <a
                   href="https://business.facebook.com/settings/system-users"
                   target="_blank"
                   rel="noopener noreferrer"
-                  className="p-2.5 bg-white hover:bg-blue-50 border border-blue-200 hover:border-blue-400 rounded-lg flex items-center justify-between gap-1 text-[11px] font-semibold text-blue-900 shadow-xs transition-all group"
+                  className="p-2.5 bg-white hover:bg-blue-50 dark:bg-[#152037] dark:hover:bg-[#1b2946] border border-blue-200 hover:border-blue-400 dark:border-slate-700/80 dark:hover:border-blue-500 rounded-lg flex items-center justify-between gap-1 text-[11px] font-semibold text-blue-900 dark:text-slate-100 shadow-xs transition-all group"
                   title="Abre direto Usuários do Sistema para gerar o Token Permanente que nunca expira"
                 >
                   <div className="flex flex-col min-w-0">
-                    <span className="truncate">2. Usuários do Sistema</span>
-                    <span className="text-[10px] text-slate-400 font-normal truncate">Token Permanente</span>
+                    <span className="truncate text-blue-950 dark:text-slate-100 font-bold">2. Usuários do Sistema</span>
+                    <span className="text-[10px] text-slate-500 dark:text-slate-400 font-normal truncate">Token Permanente</span>
                   </div>
-                  <ExternalLink className="w-3.5 h-3.5 text-blue-500 group-hover:translate-x-0.5 group-hover:-translate-y-0.5 transition-transform shrink-0" />
+                  <ExternalLink className="w-3.5 h-3.5 text-blue-500 dark:text-blue-400 group-hover:translate-x-0.5 group-hover:-translate-y-0.5 transition-transform shrink-0" />
                 </a>
 
                 <a
                   href="https://business.facebook.com/wa/manage/phone-numbers/"
                   target="_blank"
                   rel="noopener noreferrer"
-                  className="p-2.5 bg-white hover:bg-blue-50 border border-blue-200 hover:border-blue-400 rounded-lg flex items-center justify-between gap-1 text-[11px] font-semibold text-blue-900 shadow-xs transition-all group"
+                  className="p-2.5 bg-white hover:bg-blue-50 dark:bg-[#152037] dark:hover:bg-[#1b2946] border border-blue-200 hover:border-blue-400 dark:border-slate-700/80 dark:hover:border-blue-500 rounded-lg flex items-center justify-between gap-1 text-[11px] font-semibold text-blue-900 dark:text-slate-100 shadow-xs transition-all group"
                   title="Abre o WhatsApp Manager para conferir seus números ativos e o WABA ID"
                 >
                   <div className="flex flex-col min-w-0">
-                    <span className="truncate">3. WhatsApp Manager</span>
-                    <span className="text-[10px] text-slate-400 font-normal truncate">WABA ID e Números</span>
+                    <span className="truncate text-blue-950 dark:text-slate-100 font-bold">3. WhatsApp Manager</span>
+                    <span className="text-[10px] text-slate-500 dark:text-slate-400 font-normal truncate">WABA ID e Números</span>
                   </div>
-                  <ExternalLink className="w-3.5 h-3.5 text-blue-500 group-hover:translate-x-0.5 group-hover:-translate-y-0.5 transition-transform shrink-0" />
+                  <ExternalLink className="w-3.5 h-3.5 text-blue-500 dark:text-blue-400 group-hover:translate-x-0.5 group-hover:-translate-y-0.5 transition-transform shrink-0" />
                 </a>
               </div>
 
               {/* Guia Didático Detalhado */}
               {showMetaTutorial && (
-                <div className="mt-2 pt-2.5 border-t border-blue-200/70 space-y-2.5 text-[11px] text-slate-700 bg-white/70 p-3 rounded-lg animate-in fade-in duration-200">
+                <div className="mt-2 pt-2.5 border-t border-blue-200/70 dark:border-slate-800 space-y-3 text-[11px] text-slate-700 dark:text-slate-300 bg-white dark:bg-[#070c17] p-3.5 rounded-lg border border-slate-100 dark:border-slate-800/80 shadow-sm animate-in fade-in duration-200">
                   <div>
-                    <span className="font-bold text-blue-950 flex items-center gap-1">
+                    <span className="font-bold text-blue-950 dark:text-blue-300 flex items-center gap-1 text-xs">
                       <span>📌</span>
                       <span>Passo 1: Phone Number ID e WABA ID (Meta Developers)</span>
                     </span>
-                    <ol className="list-decimal list-inside space-y-0.5 text-slate-600 pl-1 mt-0.5">
-                      <li>Abra <a href="https://developers.facebook.com/apps/" target="_blank" rel="noopener noreferrer" className="text-blue-600 font-semibold underline">developers.facebook.com/apps</a> e clique no seu App.</li>
+                    <ol className="list-decimal list-inside space-y-1 text-slate-700 dark:text-slate-300 pl-1 mt-1">
+                      <li>Abra <a href="https://developers.facebook.com/apps/" target="_blank" rel="noopener noreferrer" className="text-blue-600 dark:text-blue-400 font-semibold underline">developers.facebook.com/apps</a> e clique no seu App.</li>
                       <li>No menu lateral esquerdo, clique em <strong>WhatsApp &gt; Configuração da API</strong> (ou <em>API Setup</em>).</li>
                       <li>Copie o <strong>Identificador do número de telefone (Phone Number ID)</strong> e a <strong>Identificação da conta (WABA ID)</strong>.</li>
                     </ol>
                   </div>
 
                   <div>
-                    <span className="font-bold text-blue-950 flex items-center gap-1">
+                    <span className="font-bold text-blue-950 dark:text-blue-300 flex items-center gap-1 text-xs">
                       <span>🔑</span>
                       <span>Passo 2: Gerar o Access Token Permanente (Que nunca expira)</span>
                     </span>
-                    <ol className="list-decimal list-inside space-y-0.5 text-slate-600 pl-1 mt-0.5">
-                      <li>Abra <a href="https://business.facebook.com/settings/system-users" target="_blank" rel="noopener noreferrer" className="text-blue-600 font-semibold underline">business.facebook.com/settings/system-users</a>.</li>
+                    <ol className="list-decimal list-inside space-y-1 text-slate-700 dark:text-slate-300 pl-1 mt-1">
+                      <li>Abra <a href="https://business.facebook.com/settings/system-users" target="_blank" rel="noopener noreferrer" className="text-blue-600 dark:text-blue-400 font-semibold underline">business.facebook.com/settings/system-users</a>.</li>
                       <li>Crie ou selecione um <strong>Usuário do Sistema</strong> com função <strong>Administrador</strong>.</li>
                       <li>Clique em <strong>Atribuir ativos</strong>, selecione seu aplicativo do WhatsApp e marque <em>Controle Total</em>.</li>
-                      <li>Clique em <strong>Gerar novo token</strong>, selecione seu App, coloque a expiração em <strong>Nunca</strong> e marque as duas permissões: <code className="bg-blue-100 text-blue-800 px-1 py-0.2 rounded font-mono">whatsapp_business_messaging</code> e <code className="bg-blue-100 text-blue-800 px-1 py-0.2 rounded font-mono">whatsapp_business_management</code>.</li>
-                      <li>Clique em <strong>Gerar Token</strong>, copie o código longo que começa com <code className="font-mono">EAAB...</code> e cole no campo de Access Token abaixo.</li>
+                      <li>Clique em <strong>Gerar novo token</strong>, selecione seu App, coloque a expiração em <strong>Nunca</strong> e marque as duas permissões: <code className="bg-blue-100 dark:bg-blue-950/80 text-blue-800 dark:text-blue-300 border border-blue-200/60 dark:border-blue-800/60 px-1 py-0.5 rounded font-mono">whatsapp_business_messaging</code> e <code className="bg-blue-100 dark:bg-blue-950/80 text-blue-800 dark:text-blue-300 border border-blue-200/60 dark:border-blue-800/60 px-1 py-0.5 rounded font-mono">whatsapp_business_management</code>.</li>
+                      <li>Clique em <strong>Gerar Token</strong>, copie o código longo que começa com <code className="font-mono bg-slate-100 dark:bg-slate-800 px-1 py-0.5 rounded text-slate-800 dark:text-slate-200">EAAB...</code> e cole no campo de Access Token abaixo.</li>
                     </ol>
                   </div>
 
                   <div>
-                    <span className="font-bold text-blue-950 flex items-center gap-1">
+                    <span className="font-bold text-blue-950 dark:text-blue-300 flex items-center gap-1 text-xs">
                       <span>🌐</span>
                       <span>Passo 3: Configurar o Webhook da Meta</span>
                     </span>
-                    <p className="text-slate-600 pl-1 mt-0.5">
-                      No painel da Meta (<a href="https://developers.facebook.com/apps/" target="_blank" rel="noopener noreferrer" className="text-blue-600 font-semibold underline">developers.facebook.com/apps</a>), acesse <strong>WhatsApp &gt; Configuração</strong>. Na caixinha <strong>Webhook</strong>, clique em <strong>Editar</strong>, cole a URL de Retorno e o Token de Verificação fornecidos no bloco azul desta janela e salve. Depois clique em <strong>Gerenciar campos</strong> e ative o campo <strong>messages</strong>.
+                    <p className="text-slate-700 dark:text-slate-300 pl-1 mt-1 leading-relaxed">
+                      No painel da Meta (<a href="https://developers.facebook.com/apps/" target="_blank" rel="noopener noreferrer" className="text-blue-600 dark:text-blue-400 font-semibold underline">developers.facebook.com/apps</a>), acesse <strong>WhatsApp &gt; Configuração</strong>. Na caixinha <strong>Webhook</strong>, clique em <strong>Editar</strong>, cole a URL de Retorno e o Token de Verificação fornecidos no bloco azul desta janela e salve. Depois clique em <strong>Gerenciar campos</strong> e ative o campo <strong>messages</strong>.
                     </p>
                   </div>
                 </div>
@@ -1619,14 +1619,14 @@ export default function WhatsAppPage() {
 
             <form onSubmit={handleConnectMetaCloud} className="mt-4 space-y-4">
               {metaError && (
-                <div className="p-3 rounded-xl bg-red-50 text-red-700 border border-red-200 text-xs flex items-center gap-2">
+                <div className="p-3 rounded-xl bg-red-50 dark:bg-red-950/60 text-red-700 dark:text-red-300 border border-red-200 dark:border-red-900/60 text-xs flex items-center gap-2">
                   <AlertCircle className="w-4 h-4 shrink-0" />
                   <span>{metaError}</span>
                 </div>
               )}
 
               <div className="space-y-1.5">
-                <label className="block text-slate-700 font-bold text-xs">
+                <label className="block text-slate-700 dark:text-slate-200 font-bold text-xs">
                   Nome / Apelido da Linha
                 </label>
                 <input
@@ -1634,21 +1634,21 @@ export default function WhatsAppPage() {
                   placeholder="Ex: WhatsApp Oficial Vendas, Suporte Lançamento..."
                   value={metaChannelName}
                   onChange={(e) => setMetaChannelName(e.target.value)}
-                  className="w-full px-3.5 py-2.5 bg-slate-50 border border-slate-200 rounded-xl text-xs text-slate-900 focus:outline-none focus:border-blue-500 focus:bg-white"
+                  className="w-full px-3.5 py-2.5 bg-slate-50 dark:bg-[#111927] border border-slate-200 dark:border-slate-700 rounded-xl text-xs text-slate-900 dark:text-slate-100 focus:outline-none focus:border-blue-500 focus:bg-white dark:focus:bg-[#141f33]"
                 />
               </div>
 
               <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
                 <div className="space-y-1.5">
                   <div className="flex items-center justify-between">
-                    <label className="text-slate-700 font-bold text-xs">
+                    <label className="text-slate-700 dark:text-slate-200 font-bold text-xs">
                       Phone Number ID <span className="text-red-500">*</span>
                     </label>
                     <a
                       href="https://developers.facebook.com/apps/"
                       target="_blank"
                       rel="noopener noreferrer"
-                      className="text-[10px] text-blue-600 hover:text-blue-800 hover:underline inline-flex items-center gap-0.5"
+                      className="text-[10px] text-blue-600 hover:text-blue-800 dark:text-blue-400 dark:hover:text-blue-300 hover:underline inline-flex items-center gap-0.5"
                       title="Abre o painel da Meta para localizar seu Phone Number ID"
                     >
                       <span>Onde pegar?</span>
@@ -1661,21 +1661,21 @@ export default function WhatsAppPage() {
                     placeholder="Ex: 104928374659201"
                     value={metaPhoneNumberId}
                     onChange={(e) => setMetaPhoneNumberId(e.target.value)}
-                    className="w-full px-3.5 py-2.5 bg-slate-50 border border-slate-200 rounded-xl text-xs font-mono text-slate-900 focus:outline-none focus:border-blue-500 focus:bg-white"
+                    className="w-full px-3.5 py-2.5 bg-slate-50 dark:bg-[#111927] border border-slate-200 dark:border-slate-700 rounded-xl text-xs font-mono text-slate-900 dark:text-slate-100 focus:outline-none focus:border-blue-500 focus:bg-white dark:focus:bg-[#141f33]"
                   />
-                  <span className="text-[10px] text-slate-400 block">ID do número gerado na Meta (Configuração da API)</span>
+                  <span className="text-[10px] text-slate-400 dark:text-slate-400 block">ID do número gerado na Meta (Configuração da API)</span>
                 </div>
 
                 <div className="space-y-1.5">
                   <div className="flex items-center justify-between">
-                    <label className="text-slate-700 font-bold text-xs">
+                    <label className="text-slate-700 dark:text-slate-200 font-bold text-xs">
                       WABA ID (WhatsApp Account ID)
                     </label>
                     <a
                       href="https://business.facebook.com/wa/manage/phone-numbers/"
                       target="_blank"
                       rel="noopener noreferrer"
-                      className="text-[10px] text-blue-600 hover:text-blue-800 hover:underline inline-flex items-center gap-0.5"
+                      className="text-[10px] text-blue-600 hover:text-blue-800 dark:text-blue-400 dark:hover:text-blue-300 hover:underline inline-flex items-center gap-0.5"
                       title="Abre o WhatsApp Manager para conferir seu WABA ID"
                     >
                       <span>Ver no Gerenciador</span>
@@ -1687,22 +1687,22 @@ export default function WhatsAppPage() {
                     placeholder="Ex: 102938475619283"
                     value={metaWabaId}
                     onChange={(e) => setMetaWabaId(e.target.value)}
-                    className="w-full px-3.5 py-2.5 bg-slate-50 border border-slate-200 rounded-xl text-xs font-mono text-slate-900 focus:outline-none focus:border-blue-500 focus:bg-white"
+                    className="w-full px-3.5 py-2.5 bg-slate-50 dark:bg-[#111927] border border-slate-200 dark:border-slate-700 rounded-xl text-xs font-mono text-slate-900 dark:text-slate-100 focus:outline-none focus:border-blue-500 focus:bg-white dark:focus:bg-[#141f33]"
                   />
-                  <span className="text-[10px] text-slate-400 block">Necessário para listar templates aprovados</span>
+                  <span className="text-[10px] text-slate-400 dark:text-slate-400 block">Necessário para listar templates aprovados</span>
                 </div>
               </div>
 
               <div className="space-y-1.5">
                 <div className="flex items-center justify-between">
-                  <label className="text-slate-700 font-bold text-xs">
+                  <label className="text-slate-700 dark:text-slate-200 font-bold text-xs">
                     Access Token Permanente da Meta <span className="text-red-500">*</span>
                   </label>
                   <a
                     href="https://business.facebook.com/settings/system-users"
                     target="_blank"
                     rel="noopener noreferrer"
-                    className="text-[10px] text-blue-600 hover:text-blue-800 hover:underline inline-flex items-center gap-0.5 font-semibold"
+                    className="text-[10px] text-blue-600 hover:text-blue-800 dark:text-blue-400 dark:hover:text-blue-300 hover:underline inline-flex items-center gap-0.5 font-semibold"
                     title="Abre direto a tela de Usuários do Sistema no Gerenciador de Negócios"
                   >
                     <span>Gerar no Gerenciador de Negócios</span>
@@ -1716,25 +1716,25 @@ export default function WhatsAppPage() {
                     placeholder="EAABwz..."
                     value={metaAccessToken}
                     onChange={(e) => setMetaAccessToken(e.target.value)}
-                    className="w-full px-3.5 py-2.5 bg-slate-50 border border-slate-200 rounded-xl text-xs font-mono text-slate-900 focus:outline-none focus:border-blue-500 focus:bg-white pr-9"
+                    className="w-full px-3.5 py-2.5 bg-slate-50 dark:bg-[#111927] border border-slate-200 dark:border-slate-700 rounded-xl text-xs font-mono text-slate-900 dark:text-slate-100 focus:outline-none focus:border-blue-500 focus:bg-white dark:focus:bg-[#141f33] pr-9"
                   />
                   <Lock className="w-4 h-4 text-slate-400 absolute right-3 top-1/2 -translate-y-1/2 pointer-events-none" />
                 </div>
-                <span className="text-[10px] text-slate-400 block">
-                  Token do Usuário do Sistema (System User) com permissões <code className="text-blue-600 font-mono">whatsapp_business_messaging</code> e <code className="text-blue-600 font-mono">whatsapp_business_management</code>
+                <span className="text-[10px] text-slate-400 dark:text-slate-400 block">
+                  Token do Usuário do Sistema (System User) com permissões <code className="text-blue-600 dark:text-blue-400 font-mono">whatsapp_business_messaging</code> e <code className="text-blue-600 dark:text-blue-400 font-mono">whatsapp_business_management</code>
                 </span>
               </div>
 
               <div className="space-y-1.5">
                 <div className="flex items-center justify-between">
-                  <label className="text-slate-700 font-bold text-xs">
+                  <label className="text-slate-700 dark:text-slate-200 font-bold text-xs">
                     Business Account ID (Opcional)
                   </label>
                   <a
                     href="https://business.facebook.com/settings/"
                     target="_blank"
                     rel="noopener noreferrer"
-                    className="text-[10px] text-slate-500 hover:text-slate-700 hover:underline inline-flex items-center gap-0.5"
+                    className="text-[10px] text-slate-500 hover:text-slate-700 dark:text-slate-400 dark:hover:text-slate-200 hover:underline inline-flex items-center gap-0.5"
                     title="Abre as Configurações do Negócio na Meta"
                   >
                     <span>Ver no Gerenciador</span>
@@ -1746,29 +1746,29 @@ export default function WhatsAppPage() {
                   placeholder="Ex: 987654321098765"
                   value={metaBusinessAccountId}
                   onChange={(e) => setMetaBusinessAccountId(e.target.value)}
-                  className="w-full px-3.5 py-2.5 bg-slate-50 border border-slate-200 rounded-xl text-xs font-mono text-slate-900 focus:outline-none focus:border-blue-500 focus:bg-white"
+                  className="w-full px-3.5 py-2.5 bg-slate-50 dark:bg-[#111927] border border-slate-200 dark:border-slate-700 rounded-xl text-xs font-mono text-slate-900 dark:text-slate-100 focus:outline-none focus:border-blue-500 focus:bg-white dark:focus:bg-[#141f33]"
                 />
               </div>
 
               {/* Informações para configuração de Webhook na Meta */}
-              <div className="p-3.5 rounded-xl bg-blue-50/70 border border-blue-200/80 space-y-2 text-xs">
-                <div className="font-bold text-blue-900 flex items-center gap-1.5 text-xs">
-                  <Globe className="w-3.5 h-3.5 text-blue-600" />
+              <div className="p-3.5 rounded-xl bg-blue-50/70 dark:bg-[#11192e] border border-blue-200/80 dark:border-blue-900/60 space-y-2 text-xs">
+                <div className="font-bold text-blue-900 dark:text-blue-300 flex items-center gap-1.5 text-xs">
+                  <Globe className="w-3.5 h-3.5 text-blue-600 dark:text-blue-400" />
                   <span>Configuração do Webhook no Meta for Developers</span>
                 </div>
-                <p className="text-slate-600 text-[11px]">
+                <p className="text-slate-600 dark:text-slate-300 text-[11px]">
                   Cole os dados abaixo no painel da Meta (WhatsApp &gt; Configuração &gt; Webhook) para receber mensagens e confirmações de entrega:
                 </p>
 
                 <div className="space-y-1.5 pt-1">
                   <div>
-                    <span className="text-[10px] font-bold text-slate-500 uppercase">URL de Retorno de Chamada (Callback URL)</span>
+                    <span className="text-[10px] font-bold text-slate-500 dark:text-slate-400 uppercase">URL de Retorno de Chamada (Callback URL)</span>
                     <div className="flex items-center gap-1.5 mt-0.5">
                       <input
                         type="text"
                         readOnly
                         value={typeof window !== 'undefined' ? `${window.location.origin}/api/webhooks/whatsapp/meta` : '/api/webhooks/whatsapp/meta'}
-                        className="flex-1 px-2.5 py-1.5 bg-white border border-blue-200 rounded-lg text-[11px] font-mono text-slate-800 select-all"
+                        className="flex-1 px-2.5 py-1.5 bg-white dark:bg-[#070c17] border border-blue-200 dark:border-slate-700 rounded-lg text-[11px] font-mono text-slate-800 dark:text-slate-100 select-all"
                       />
                       <button
                         type="button"
@@ -1778,7 +1778,7 @@ export default function WhatsAppPage() {
                           setMetaCopiedField('url');
                           setTimeout(() => setMetaCopiedField(null), 2000);
                         }}
-                        className="px-2.5 py-1.5 rounded-lg bg-blue-600 text-white font-semibold text-[11px] hover:bg-blue-700 transition-colors"
+                        className="px-2.5 py-1.5 rounded-lg bg-blue-600 hover:bg-blue-700 text-white font-semibold text-[11px] transition-colors"
                       >
                         {metaCopiedField === 'url' ? 'Copiado!' : 'Copiar'}
                       </button>
@@ -1786,13 +1786,13 @@ export default function WhatsAppPage() {
                   </div>
 
                   <div>
-                    <span className="text-[10px] font-bold text-slate-500 uppercase">Token de Verificação (Verify Token)</span>
+                    <span className="text-[10px] font-bold text-slate-500 dark:text-slate-400 uppercase">Token de Verificação (Verify Token)</span>
                     <div className="flex items-center gap-1.5 mt-0.5">
                       <input
                         type="text"
                         readOnly
                         value={metaWebhookVerifyToken}
-                        className="flex-1 px-2.5 py-1.5 bg-white border border-blue-200 rounded-lg text-[11px] font-mono text-slate-800 select-all"
+                        className="flex-1 px-2.5 py-1.5 bg-white dark:bg-[#070c17] border border-blue-200 dark:border-slate-700 rounded-lg text-[11px] font-mono text-slate-800 dark:text-slate-100 select-all"
                       />
                       <button
                         type="button"
@@ -1801,24 +1801,24 @@ export default function WhatsAppPage() {
                           setMetaCopiedField('token');
                           setTimeout(() => setMetaCopiedField(null), 2000);
                         }}
-                        className="px-2.5 py-1.5 rounded-lg bg-blue-600 text-white font-semibold text-[11px] hover:bg-blue-700 transition-colors"
+                        className="px-2.5 py-1.5 rounded-lg bg-blue-600 hover:bg-blue-700 text-white font-semibold text-[11px] transition-colors"
                       >
                         {metaCopiedField === 'token' ? 'Copiado!' : 'Copiar'}
                       </button>
                     </div>
                   </div>
 
-                  <div className="text-[10px] text-blue-800 font-semibold pt-0.5">
-                    Campo a assinar no webhook da Meta: <code className="bg-blue-100 px-1 py-0.5 rounded text-blue-900">messages</code>
+                  <div className="text-[10px] text-blue-800 dark:text-blue-300 font-semibold pt-0.5">
+                    Campo a assinar no webhook da Meta: <code className="bg-blue-100 dark:bg-blue-950 text-blue-900 dark:text-blue-300 border border-blue-200/60 dark:border-blue-800/60 px-1 py-0.5 rounded font-mono">messages</code>
                   </div>
                 </div>
               </div>
 
-              <div className="flex items-center justify-end gap-2 pt-2 border-t border-slate-100">
+              <div className="flex items-center justify-end gap-2 pt-2 border-t border-slate-100 dark:border-slate-800">
                 <button
                   type="button"
                   onClick={() => setIsMetaModalOpen(false)}
-                  className="px-4 py-2 rounded-xl border border-slate-200 hover:bg-slate-50 font-semibold text-xs text-slate-700 cursor-pointer transition-colors"
+                  className="px-4 py-2 rounded-xl border border-slate-200 dark:border-slate-700 hover:bg-slate-50 dark:hover:bg-slate-800 font-semibold text-xs text-slate-700 dark:text-slate-300 cursor-pointer transition-colors"
                 >
                   Cancelar
                 </button>
