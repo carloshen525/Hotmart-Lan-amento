@@ -451,23 +451,18 @@ export function PlatformLogo({ platformId, size = 40, className = '' }: Platform
     );
   }
 
-  // 24. HOTMART & HOTMART V2 (Laranja Hotmart com a chama icônica oficial)
+  // 24. HOTMART & HOTMART V2 (Logo oficial Hotmart - Fundo laranja vibrante com a chama branca e centro laranja)
   if (p === 'HOTMART' || p === 'HOTMART_V2') {
     return (
       <div
         style={{ width: s, height: s }}
-        className={`rounded-full bg-[#181a20] border border-orange-500/30 flex items-center justify-center shrink-0 shadow-xs ${className}`}
+        className={`rounded-full overflow-hidden bg-[#FF4500] flex items-center justify-center shrink-0 shadow-xs ${className}`}
       >
-        <svg width={size * 0.65} height={size * 0.65} viewBox="0 0 24 24" fill="none">
-          <path
-            d="M12 2C9.5 5.5 7 8.5 7 12.5C7 16 9.5 19 12.5 19C16 19 18 16 18 12.5C18 8 14.5 4 12 2Z"
-            fill="#FF5722"
-          />
-          <path
-            d="M12 11C11 12.5 10 13.5 10 15C10 16.5 11 17.5 12.5 17.5C14 17.5 15 16.5 15 15C15 13 13.5 11.5 12 11Z"
-            fill="#FFA000"
-          />
-        </svg>
+        <img
+          src="/uploads/hotmart.png"
+          alt="Hotmart"
+          className="w-full h-full object-cover"
+        />
       </div>
     );
   }
@@ -703,14 +698,18 @@ export function PlatformLogo({ platformId, size = 40, className = '' }: Platform
     );
   }
 
-  // 39. ASAAS (Grafite com 'asaas' em branco)
+  // 39. ASAAS (Logo oficial Asaas - Fundo azul royal com o wordmark ASAAS em branco)
   if (p === 'ASAAS') {
     return (
       <div
         style={{ width: s, height: s }}
-        className={`rounded-full bg-[#1E2024] flex items-center justify-center shrink-0 shadow-xs ${className}`}
+        className={`rounded-full overflow-hidden bg-[#0047FF] flex items-center justify-center shrink-0 shadow-xs ${className}`}
       >
-        <span className="text-white font-black text-[10px] tracking-tighter">asaas</span>
+        <img
+          src="/uploads/asaas.webp"
+          alt="Asaas"
+          className="w-full h-full object-cover"
+        />
       </div>
     );
   }
