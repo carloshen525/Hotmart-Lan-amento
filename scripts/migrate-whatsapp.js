@@ -130,6 +130,55 @@ async function migrateWhatsappMultiTenant() {
       const cols = await prisma.$queryRawUnsafe('PRAGMA table_info("WhatsappInstance");');
       const colSet = new Set((cols || []).map((c) => c.name));
 
+      if (!colSet.has('provider')) {
+        await prisma.$executeRawUnsafe('ALTER TABLE "WhatsappInstance" ADD COLUMN "provider" TEXT NOT NULL DEFAULT \'EVOLUTION\';');
+        console.log('[MIGRATION] Coluna provider adicionada com sucesso.');
+      }
+      if (!colSet.has('wabaId')) {
+        await prisma.$executeRawUnsafe('ALTER TABLE "WhatsappInstance" ADD COLUMN "wabaId" TEXT;');
+        console.log('[MIGRATION] Coluna wabaId adicionada com sucesso.');
+      }
+      if (!colSet.has('phoneNumberId')) {
+        await prisma.$executeRawUnsafe('ALTER TABLE "WhatsappInstance" ADD COLUMN "phoneNumberId" TEXT;');
+        console.log('[MIGRATION] Coluna phoneNumberId adicionada com sucesso.');
+      }
+      if (!colSet.has('accessToken')) {
+        await prisma.$executeRawUnsafe('ALTER TABLE "WhatsappInstance" ADD COLUMN "accessToken" TEXT;');
+        console.log('[MIGRATION] Coluna accessToken adicionada com sucesso.');
+      }
+      if (!colSet.has('businessAccountId')) {
+        await prisma.$executeRawUnsafe('ALTER TABLE "WhatsappInstance" ADD COLUMN "businessAccountId" TEXT;');
+        console.log('[MIGRATION] Coluna businessAccountId adicionada com sucesso.');
+      }
+      if (!colSet.has('webhookVerifyToken')) {
+        await prisma.$executeRawUnsafe('ALTER TABLE "WhatsappInstance" ADD COLUMN "webhookVerifyToken" TEXT;');
+        console.log('[MIGRATION] Coluna webhookVerifyToken adicionada com sucesso.');
+      }
+      if (!colSet.has('appId')) {
+        await prisma.$executeRawUnsafe('ALTER TABLE "WhatsappInstance" ADD COLUMN "appId" TEXT;');
+        console.log('[MIGRATION] Coluna appId adicionada com sucesso.');
+      }
+      if (!colSet.has('appSecret')) {
+        await prisma.$executeRawUnsafe('ALTER TABLE "WhatsappInstance" ADD COLUMN "appSecret" TEXT;');
+        console.log('[MIGRATION] Coluna appSecret adicionada com sucesso.');
+      }
+      if (!colSet.has('qualityRating')) {
+        await prisma.$executeRawUnsafe('ALTER TABLE "WhatsappInstance" ADD COLUMN "qualityRating" TEXT;');
+        console.log('[MIGRATION] Coluna qualityRating adicionada com sucesso.');
+      }
+      if (!colSet.has('verifiedName')) {
+        await prisma.$executeRawUnsafe('ALTER TABLE "WhatsappInstance" ADD COLUMN "verifiedName" TEXT;');
+        console.log('[MIGRATION] Coluna verifiedName adicionada com sucesso.');
+      }
+      if (!colSet.has('name')) {
+        await prisma.$executeRawUnsafe('ALTER TABLE "WhatsappInstance" ADD COLUMN "name" TEXT;');
+        console.log('[MIGRATION] Coluna name adicionada com sucesso.');
+      }
+      if (!colSet.has('userId')) {
+        await prisma.$executeRawUnsafe('ALTER TABLE "WhatsappInstance" ADD COLUMN "userId" TEXT;');
+        console.log('[MIGRATION] Coluna userId adicionada com sucesso.');
+      }
+
       if (!colSet.has('fixed_delay_seconds')) {
         await prisma.$executeRawUnsafe('ALTER TABLE "WhatsappInstance" ADD COLUMN "fixed_delay_seconds" INTEGER NOT NULL DEFAULT 30;');
         console.log('[MIGRATION] Coluna fixed_delay_seconds adicionada com sucesso.');

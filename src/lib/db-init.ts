@@ -44,11 +44,118 @@ export function ensureDatabaseSchema(prisma: PrismaClient): Promise<void> {
       try { await prisma.$executeRawUnsafe('ALTER TABLE "Tenant" ADD COLUMN "clientId" TEXT;'); } catch {}
     }
 
-    // 3. Coluna na tabela WhatsappInstance
+    // 3. Colunas na tabela WhatsappInstance (Evolution API + Meta Cloud API Oficial)
     const instCols = await getExistingColumns(prisma, 'WhatsappInstance');
     if (!instCols.has('userId')) {
       try { await prisma.$executeRawUnsafe('ALTER TABLE "WhatsappInstance" ADD COLUMN "userId" TEXT;'); } catch {}
     }
+    if (!instCols.has('name')) {
+      try { await prisma.$executeRawUnsafe('ALTER TABLE "WhatsappInstance" ADD COLUMN "name" TEXT;'); } catch {}
+    }
+    if (!instCols.has('provider')) {
+      try { await prisma.$executeRawUnsafe('ALTER TABLE "WhatsappInstance" ADD COLUMN "provider" TEXT NOT NULL DEFAULT \'EVOLUTION\';'); } catch {}
+    }
+    if (!instCols.has('wabaId')) {
+      try { await prisma.$executeRawUnsafe('ALTER TABLE "WhatsappInstance" ADD COLUMN "wabaId" TEXT;'); } catch {}
+    }
+    if (!instCols.has('phoneNumberId')) {
+      try { await prisma.$executeRawUnsafe('ALTER TABLE "WhatsappInstance" ADD COLUMN "phoneNumberId" TEXT;'); } catch {}
+    }
+    if (!instCols.has('accessToken')) {
+      try { await prisma.$executeRawUnsafe('ALTER TABLE "WhatsappInstance" ADD COLUMN "accessToken" TEXT;'); } catch {}
+    }
+    if (!instCols.has('businessAccountId')) {
+      try { await prisma.$executeRawUnsafe('ALTER TABLE "WhatsappInstance" ADD COLUMN "businessAccountId" TEXT;'); } catch {}
+    }
+    if (!instCols.has('webhookVerifyToken')) {
+      try { await prisma.$executeRawUnsafe('ALTER TABLE "WhatsappInstance" ADD COLUMN "webhookVerifyToken" TEXT;'); } catch {}
+    }
+    if (!instCols.has('appId')) {
+      try { await prisma.$executeRawUnsafe('ALTER TABLE "WhatsappInstance" ADD COLUMN "appId" TEXT;'); } catch {}
+    }
+    if (!instCols.has('appSecret')) {
+      try { await prisma.$executeRawUnsafe('ALTER TABLE "WhatsappInstance" ADD COLUMN "appSecret" TEXT;'); } catch {}
+    }
+    if (!instCols.has('qualityRating')) {
+      try { await prisma.$executeRawUnsafe('ALTER TABLE "WhatsappInstance" ADD COLUMN "qualityRating" TEXT;'); } catch {}
+    }
+    if (!instCols.has('verifiedName')) {
+      try { await prisma.$executeRawUnsafe('ALTER TABLE "WhatsappInstance" ADD COLUMN "verifiedName" TEXT;'); } catch {}
+    }
+    if (!instCols.has('fixed_delay_seconds')) {
+      try { await prisma.$executeRawUnsafe('ALTER TABLE "WhatsappInstance" ADD COLUMN "fixed_delay_seconds" INTEGER NOT NULL DEFAULT 30;'); } catch {}
+    }
+    if (!instCols.has('use_random_delay')) {
+      try { await prisma.$executeRawUnsafe('ALTER TABLE "WhatsappInstance" ADD COLUMN "use_random_delay" BOOLEAN NOT NULL DEFAULT 1;'); } catch {}
+    }
+    if (!instCols.has('min_delay_seconds')) {
+      try { await prisma.$executeRawUnsafe('ALTER TABLE "WhatsappInstance" ADD COLUMN "min_delay_seconds" INTEGER NOT NULL DEFAULT 20;'); } catch {}
+    }
+    if (!instCols.has('max_delay_seconds')) {
+      try { await prisma.$executeRawUnsafe('ALTER TABLE "WhatsappInstance" ADD COLUMN "max_delay_seconds" INTEGER NOT NULL DEFAULT 45;'); } catch {}
+    }
+
+    // 3.1. Colunas na tabela Automation
+    const autoCols = await getExistingColumns(prisma, 'Automation');
+    if (!autoCols.has('whatsappInstanceId')) {
+      try { await prisma.$executeRawUnsafe('ALTER TABLE "Automation" ADD COLUMN "whatsappInstanceId" TEXT;'); } catch {}
+    }
+    if (!autoCols.has('delayBetweenGroups')) {
+      try { await prisma.$executeRawUnsafe('ALTER TABLE "Automation" ADD COLUMN "delayBetweenGroups" INTEGER NOT NULL DEFAULT 30;'); } catch {}
+    }
+    if (!autoCols.has('useRandomDelay')) {
+      try { await prisma.$executeRawUnsafe('ALTER TABLE "Automation" ADD COLUMN "useRandomDelay" BOOLEAN NOT NULL DEFAULT 1;'); } catch {}
+    }
+    if (!autoCols.has('minDelaySeconds')) {
+      try { await prisma.$executeRawUnsafe('ALTER TABLE "Automation" ADD COLUMN "minDelaySeconds" INTEGER NOT NULL DEFAULT 20;'); } catch {}
+    }
+    if (!autoCols.has('maxDelaySeconds')) {
+      try { await prisma.$executeRawUnsafe('ALTER TABLE "Automation" ADD COLUMN "maxDelaySeconds" INTEGER NOT NULL DEFAULT 45;'); } catch {}
+    }
+
+    // 3.2. Tabelas AutomationGroupEnrollment e MessageLog
+    try {
+      await prisma.$executeRawUnsafe(`
+        CREATE TABLE IF NOT EXISTS "AutomationGroupEnrollment" (
+          "id" TEXT NOT NULL PRIMARY KEY,
+          "tenantId" TEXT NOT NULL,
+          "automationId" TEXT NOT NULL,
+          "groupId" TEXT NOT NULL,
+          "status" TEXT NOT NULL DEFAULT 'ACTIVE',
+          "currentNodeId" TEXT,
+          "currentNodeType" TEXT,
+          "enteredAt" DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
+          "completedAt" DATETIME,
+          "lastStepAt" DATETIME,
+          "metadata" TEXT,
+          "createdAt" DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
+          "updatedAt" DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP
+        );
+      `);
+    } catch {}
+
+    try {
+      await prisma.$executeRawUnsafe(`
+        CREATE TABLE IF NOT EXISTS "MessageLog" (
+          "id" TEXT NOT NULL PRIMARY KEY,
+          "tenantId" TEXT NOT NULL,
+          "contactId" TEXT NOT NULL,
+          "channel" TEXT NOT NULL,
+          "provider" TEXT NOT NULL,
+          "recipient" TEXT NOT NULL,
+          "subject" TEXT,
+          "content" TEXT NOT NULL,
+          "templateName" TEXT,
+          "status" TEXT NOT NULL DEFAULT 'SENT',
+          "externalMessageId" TEXT,
+          "costEstimate" REAL DEFAULT 0.0,
+          "error" TEXT,
+          "sentAt" DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
+          "deliveredAt" DATETIME,
+          "readAt" DATETIME
+        );
+      `);
+    } catch {}
 
     // 4. Colunas na tabela whatsapp_groups
     const groupCols = await getExistingColumns(prisma, 'whatsapp_groups');
