@@ -599,6 +599,47 @@ export class WhatsappQueueService {
       }
     }
 
+    // REGRA DE OURO DO USUÁRIO: O único número permitido para disparar na automação deve ser o configurado nela.
+    // Se o número configurado estiver desconectado, o fluxo deve ser PAUSADO imediatamente e o envio cancelado!
+    const instanceId = item.whatsappInstanceId || item.whatsapp_instance_id;
+    const itemTenantId = item.tenantId || item.tenant_id;
+    if (instanceId) {
+      const inst = await prisma.whatsappInstance.findFirst({
+        where: { id: instanceId, ...(itemTenantId ? { tenantId: itemTenantId } : {}) },
+        select: { status: true, name: true, phone: true },
+      }).catch(() => null);
+
+      if (!inst || inst.status !== 'CONNECTED') {
+        const discMsg = `O número configurado ("${inst?.name || inst?.phone || instanceId}") está desconectado.`;
+        console.warn(`[WhatsappQueueService] 🛑 ${discMsg} Pausando o fluxo e cancelando envio.`);
+
+        if (autoId) {
+          const { automationEngine } = await import('@/services/automation/engine');
+          await automationEngine.pauseAutomationDueToDisconnectedWhatsapp(autoId, itemTenantId, discMsg);
+        }
+
+        try {
+          if ((prisma as any).whatsappQueue) {
+            await (prisma as any).whatsappQueue.update({
+              where: { id: item.id },
+              data: {
+                status: 'CANCELLED',
+                errorMessage: `Cancelado: ${discMsg}`,
+              },
+            });
+          }
+        } catch {}
+
+        await prisma.$executeRawUnsafe(`
+          UPDATE whatsapp_queue
+          SET status = 'CANCELLED', error_message = ?, updated_at = CURRENT_TIMESTAMP
+          WHERE id = ?
+        `, `Cancelado: ${discMsg}`, item.id).catch(() => {});
+
+        return; // NUNCA envia por outro número!
+      }
+    }
+
     const rawBlocks = item.blocks ? (typeof item.blocks === 'string' ? JSON.parse(item.blocks) : item.blocks) : null;
     const rawVars = item.variables ? (typeof item.variables === 'string' ? JSON.parse(item.variables) : item.variables) : {};
 

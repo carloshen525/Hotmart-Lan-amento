@@ -25,6 +25,9 @@ export class BackgroundSchedulerRunner {
       this.isRunning = true;
 
       try {
+        // 0. Monitor de saúde: se o WhatsApp de qualquer automação ativa desconectar, pausa ela imediatamente!
+        await automationEngine.checkActiveAutomationsWhatsappHealth();
+
         // 1. Processa timers e agendamentos de leads individuais
         await automationScheduler.processDueJobs();
 

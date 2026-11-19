@@ -292,6 +292,41 @@ export class AutomationEngine {
 
           case 'SEND_WHATSAPP': {
             if (contact.phone) {
+              // Resolve a instância configurada para o fluxo ou nó
+              let wppInstanceId = (config as any).whatsappInstanceId;
+              if (!wppInstanceId && enrollment.automation) {
+                wppInstanceId = (enrollment.automation as any).whatsappInstanceId;
+                if (!wppInstanceId && enrollment.automation.triggerConfig) {
+                  try {
+                    const parsedTrigger = typeof enrollment.automation.triggerConfig === 'string'
+                      ? JSON.parse(enrollment.automation.triggerConfig)
+                      : enrollment.automation.triggerConfig;
+                    wppInstanceId = parsedTrigger?.whatsappInstanceId;
+                  } catch {}
+                }
+              }
+
+              // REGRA ESTRITA: O ÚNICO número permitido para disparar na automação deve ser o número configurado nela.
+              // Se não houver número configurado ou se o configurado estiver desconectado, pausa o fluxo imediatamente!
+              if (!wppInstanceId) {
+                const errReason = 'Nenhum número de WhatsApp configurado neste fluxo. Disparo bloqueado.';
+                console.warn(`[Engine] 🛑 ${errReason} Pausando automação ${enrollment.automationId}.`);
+                await this.pauseAutomationDueToDisconnectedWhatsapp(enrollment.automationId, tenantId, errReason);
+                return;
+              }
+
+              const configuredInst = await prisma.whatsappInstance.findFirst({
+                where: { id: wppInstanceId, ...(tenantId ? { tenantId } : {}) },
+                select: { id: true, status: true, name: true, phone: true },
+              }).catch(() => null);
+
+              if (!configuredInst || configuredInst.status !== 'CONNECTED') {
+                const discReason = `O número configurado ("${configuredInst?.name || configuredInst?.phone || wppInstanceId}") está desconectado.`;
+                console.warn(`[Engine] 🛑 ${discReason} Pausando automação ${enrollment.automationId} imediatamente.`);
+                await this.pauseAutomationDueToDisconnectedWhatsapp(enrollment.automationId, tenantId, discReason);
+                return;
+              }
+
               const firstName = contact.name ? contact.name.trim().split(/\s+/)[0] : '';
               const blocks = (config.blocks as any[]) || [];
               if (Array.isArray(blocks) && blocks.length > 0) {
@@ -306,7 +341,7 @@ export class AutomationEngine {
                     tenantId,
                     contactId: contact.id,
                     phone: contact.phone,
-                    whatsappInstanceId: (config as any).whatsappInstanceId,
+                    whatsappInstanceId: wppInstanceId,
                     text: isMedia ? (b.caption || '') : (b.text || ''),
                     messageType: (['image', 'video', 'audio'].includes(b.type) ? b.type : (isMedia ? 'image' : 'text')) as any,
                     mediaUrl: isMedia ? b.mediaUrl : undefined,
@@ -333,7 +368,7 @@ export class AutomationEngine {
                   tenantId,
                   contactId: contact.id,
                   phone: contact.phone,
-                  whatsappInstanceId: (config as any).whatsappInstanceId,
+                  whatsappInstanceId: wppInstanceId,
                   templateName: config.templateName,
                   text: config.text || config.message || `Olá ${contact.name}!`,
                   messageType: config.messageType || (config.mediaUrl ? 'image' : 'text'),
@@ -1239,17 +1274,29 @@ export class AutomationEngine {
             } catch {}
           }
 
-          // Fallback resiliente: se ainda não houver instância definida, busca a primeira conectada do tenant
+          // REGRA ESTRITA: O ÚNICO número permitido para disparar na automação deve ser o número configurado nela.
+          // Se não houver número configurado ou se o configurado estiver desconectado, pausa o fluxo imediatamente!
           if (!wppInstanceId) {
-            try {
-              const defaultInst = await prisma.whatsappInstance.findFirst({
-                where: { tenantId, status: 'CONNECTED' },
-                orderBy: [{ isDefault: 'desc' }, { createdAt: 'desc' }],
-              });
-              if (defaultInst) {
-                wppInstanceId = defaultInst.id;
-              }
-            } catch {}
+            const errReason = 'Nenhum número de WhatsApp configurado neste fluxo. Disparo bloqueado.';
+            console.warn(`[Engine] 🛑 ${errReason} Pausando automação ${autoId}.`);
+            if (autoId) {
+              await this.pauseAutomationDueToDisconnectedWhatsapp(autoId, tenantId, errReason);
+            }
+            return;
+          }
+
+          const configuredInst = await prisma.whatsappInstance.findFirst({
+            where: { id: wppInstanceId, ...(tenantId ? { tenantId } : {}) },
+            select: { id: true, status: true, name: true, phone: true },
+          }).catch(() => null);
+
+          if (!configuredInst || configuredInst.status !== 'CONNECTED') {
+            const discReason = `O número de WhatsApp configurado para este fluxo ("${configuredInst?.name || configuredInst?.phone || wppInstanceId}") está desconectado.`;
+            console.warn(`[Engine] 🛑 ${discReason} Pausando automação ${autoId} imediatamente.`);
+            if (autoId) {
+              await this.pauseAutomationDueToDisconnectedWhatsapp(autoId, tenantId, discReason);
+            }
+            return;
           }
 
           // Enfileira na Fila Persistente do WhatsApp com controle de cadência entre contatos
@@ -2696,17 +2743,33 @@ export class AutomationEngine {
         }
       } catch {}
 
-      // Seleção inteligente da instância: prioriza a instância do grupo se estiver conectada
+      // REGRA ESTRITA: O ÚNICO número permitido para disparar na automação deve ser o número configurado nela.
       let targetInstanceId =
         config.whatsappInstanceId ||
         (automation as any).flowWhatsappInstanceId ||
-        (automation as any).whatsappInstanceId;
+        (automation as any).whatsappInstanceId ||
+        group.whatsappInstanceId;
 
-      if (!targetInstanceId || (group.whatsappInstanceId && group.whatsappInstance?.status === 'CONNECTED')) {
-        targetInstanceId = group.whatsappInstanceId || targetInstanceId;
+      if (!targetInstanceId) {
+        const discReason = 'Nenhum número de WhatsApp configurado para este fluxo de grupos. Disparo bloqueado.';
+        console.warn(`[GroupEngine] 🛑 ${discReason} Pausando automação ${automation.id}.`);
+        await this.pauseAutomationDueToDisconnectedWhatsapp(automation.id, tenantId, discReason);
+        return;
       }
 
-      // Validação de elegibilidade (com fallback automático para a instância conectada do grupo)
+      const configuredInst = await prisma.whatsappInstance.findFirst({
+        where: { id: targetInstanceId, ...(tenantId ? { tenantId } : {}) },
+        select: { id: true, status: true, name: true, phone: true },
+      }).catch(() => null);
+
+      if (!configuredInst || configuredInst.status !== 'CONNECTED') {
+        const discReason = `O número configurado ("${configuredInst?.name || configuredInst?.phone || targetInstanceId}") está desconectado.`;
+        console.warn(`[GroupEngine] 🛑 ${discReason} Pausando automação ${automation.id} imediatamente.`);
+        await this.pauseAutomationDueToDisconnectedWhatsapp(automation.id, tenantId, discReason);
+        return;
+      }
+
+      // Validação de elegibilidade (apenas com a instância configurada, sem troca de número)
       const check = await whatsappGroupService.verifyGroupEligibility(
         tenantId,
         group.jid,
@@ -2732,11 +2795,6 @@ export class AutomationEngine {
           data: { status: 'FAILED' },
         });
         return;
-      }
-
-      // Se a validação descobriu uma instância conectada e elegível diferente, adota-a
-      if (check.instance?.id) {
-        targetInstanceId = check.instance.id;
       }
 
       // Cria log em status QUEUED
@@ -3370,6 +3428,137 @@ export class AutomationEngine {
     } catch (err: any) {
       console.warn('[AutomationEngine] Erro ao sincronizar automações ativas:', err.message);
       return 0;
+    }
+  }
+
+  /**
+   * REGRA DE OURO DO USUÁRIO:
+   * Pausa imediatamente a automação quando seu WhatsApp configurado é desconectado ou indisponível.
+   * Cancela todos os jobs e itens de fila pendentes e congela os enrollments.
+   */
+  async pauseAutomationDueToDisconnectedWhatsapp(
+    automationId: string,
+    tenantId?: string | null,
+    reason?: string
+  ): Promise<void> {
+    try {
+      console.warn(`[AutomationEngine] 🛑 Pausando automação ${automationId} por WhatsApp desconectado: ${reason}`);
+
+      // 1. Atualiza status da automação para PAUSED
+      await prisma.automation.update({
+        where: { id: automationId },
+        data: {
+          status: 'PAUSED',
+          updatedAt: new Date(),
+        },
+      }).catch(() => null);
+
+      // 2. Cancela ScheduledJobs pendentes
+      await prisma.scheduledJob.updateMany({
+        where: {
+          automationId,
+          status: { in: ['PENDING', 'RUNNING'] },
+        },
+        data: {
+          status: 'CANCELLED',
+          lastError: `Automação pausada: ${reason || 'WhatsApp desconectado'}`,
+        },
+      }).catch(() => null);
+
+      // 3. Cancela itens da whatsapp_queue vinculados
+      await prisma.$executeRawUnsafe(`
+        UPDATE whatsapp_queue
+        SET status = 'CANCELLED', error_message = ?, updated_at = CURRENT_TIMESTAMP
+        WHERE status IN ('PENDING', 'PROCESSING')
+          AND (
+            automation_id = ? 
+            OR enrollment_id IN (SELECT id FROM "AutomationEnrollment" WHERE "automationId" = ?)
+            OR enrollment_id IN (SELECT id FROM "AutomationGroupEnrollment" WHERE "automationId" = ?)
+          )
+      `, `Cancelado: ${reason || 'WhatsApp configurado desconectado'}`, automationId, automationId, automationId).catch(() => {});
+
+      // 4. Pausa todos os enrollments individuais ativos
+      await prisma.automationEnrollment.updateMany({
+        where: {
+          automationId,
+          status: { in: ['ACTIVE', 'WAITING'] },
+        },
+        data: {
+          status: 'PAUSED',
+        },
+      }).catch(() => null);
+
+      // 5. Pausa group enrollments
+      await prisma.automationGroupEnrollment.updateMany({
+        where: {
+          automationId,
+          status: { in: ['ACTIVE', 'WAITING'] },
+        },
+        data: {
+          status: 'PAUSED',
+        },
+      }).catch(() => null);
+    } catch (err) {
+      console.error(`[AutomationEngine] Erro ao pausar automação ${automationId}:`, err);
+    }
+  }
+
+  /**
+   * Monitor contínuo de saúde:
+   * Varre periodicamente automações ATIVAS e verifica se a instância de WhatsApp configurada nelas
+   * continua conectada. Caso tenha sido desconectada ou removida, pausa a automação imediatamente.
+   */
+  async checkActiveAutomationsWhatsappHealth(): Promise<void> {
+    try {
+      const activeAutos = await prisma.automation.findMany({
+        where: { status: 'ACTIVE' },
+        select: {
+          id: true,
+          name: true,
+          tenantId: true,
+          whatsappInstanceId: true,
+          triggerConfig: true,
+          nodes: true,
+        },
+      });
+
+      for (const auto of activeAutos) {
+        let wppId = auto.whatsappInstanceId;
+        if (!wppId && auto.triggerConfig) {
+          try {
+            const trg = typeof auto.triggerConfig === 'string' ? JSON.parse(auto.triggerConfig) : auto.triggerConfig;
+            wppId = trg?.whatsappInstanceId;
+          } catch {}
+        }
+        if (!wppId && auto.nodes) {
+          try {
+            const nodes = typeof auto.nodes === 'string' ? JSON.parse(auto.nodes) : auto.nodes;
+            if (Array.isArray(nodes)) {
+              for (const n of nodes) {
+                if (n.data?.whatsappInstanceId) {
+                  wppId = n.data.whatsappInstanceId;
+                  break;
+                }
+              }
+            }
+          } catch {}
+        }
+
+        if (wppId) {
+          const inst = await prisma.whatsappInstance.findUnique({
+            where: { id: wppId },
+            select: { id: true, status: true, name: true, phone: true },
+          }).catch(() => null);
+
+          if (!inst || inst.status !== 'CONNECTED') {
+            const discReason = `Número de WhatsApp configurado ("${inst?.name || inst?.phone || wppId}") está desconectado.`;
+            console.warn(`[AutomationHealth] 🛑 ${discReason} Pausando automação "${auto.name}" (${auto.id}).`);
+            await this.pauseAutomationDueToDisconnectedWhatsapp(auto.id, auto.tenantId, discReason);
+          }
+        }
+      }
+    } catch (err) {
+      console.error('[AutomationHealth] Erro ao verificar saúde do WhatsApp em automações ativas:', err);
     }
   }
 }

@@ -1008,41 +1008,55 @@ export class EvolutionApiService {
           ],
         },
       });
-    }
 
-    // 1.1. Se for envio para grupo e a instância informada não estiver conectada, usa a instância nativa do grupo
-    const isTargetGroup = (params.phone || '').includes('@g.us');
-    if (isTargetGroup && (!instance || instance.status !== 'CONNECTED')) {
-      const groupRecord = await prisma.whatsappGroup.findFirst({
-        where: {
-          OR: [{ jid: params.phone }, { id: params.phone }],
-          ...(params.tenantId ? { tenantId: params.tenantId } : {}),
-        },
-        include: { whatsappInstance: true },
-      });
-      if (groupRecord?.whatsappInstance && groupRecord.whatsappInstance.status === 'CONNECTED') {
-        instance = groupRecord.whatsappInstance;
+      // REGRA ESTRITA: O ÚNICO número permitido para disparar na automação deve ser o número configurado dentro dela.
+      // Mesmo que existam outros números na plataforma, NUNCA usar outro número se o configurado estiver desconectado!
+      if (!instance || instance.status !== 'CONNECTED') {
+        const errorMsg = `O número de WhatsApp configurado para este fluxo ("${instance?.name || instance?.phone || params.whatsappInstanceId}") está desconectado ou não foi encontrado. Disparo bloqueado.`;
+        console.warn(`[EvolutionAPI] 🛑 ${errorMsg}`);
+        return {
+          success: false,
+          messageId: '',
+          provider: 'EVOLUTION_API',
+          status: 'FAILED',
+          error: errorMsg,
+        };
       }
-    }
+    } else {
+      // 2. Apenas para envios manuais/diretos onde NENHUM número específico foi configurado:
+      const isTargetGroup = (params.phone || '').includes('@g.us');
+      if (isTargetGroup) {
+        const groupRecord = await prisma.whatsappGroup.findFirst({
+          where: {
+            OR: [{ jid: params.phone }, { id: params.phone }],
+            ...(params.tenantId ? { tenantId: params.tenantId } : {}),
+          },
+          include: { whatsappInstance: true },
+        });
+        if (groupRecord?.whatsappInstance && groupRecord.whatsappInstance.status === 'CONNECTED') {
+          instance = groupRecord.whatsappInstance;
+        }
+      }
 
-    // 2. Busca por número do remetente caso informado (estritamente dentro do tenant)
-    if ((!instance || instance.status !== 'CONNECTED') && params.senderPhone && params.tenantId) {
-      const cleanSender = params.senderPhone.replace(/\D/g, '');
-      instance = await prisma.whatsappInstance.findFirst({
-        where: {
-          tenantId: params.tenantId,
-          phone: { contains: cleanSender.slice(-8) },
-          status: 'CONNECTED',
-        },
-      });
-    }
+      // 2.1. Busca por número do remetente caso informado (estritamente dentro do tenant)
+      if ((!instance || instance.status !== 'CONNECTED') && params.senderPhone && params.tenantId) {
+        const cleanSender = params.senderPhone.replace(/\D/g, '');
+        instance = await prisma.whatsappInstance.findFirst({
+          where: {
+            tenantId: params.tenantId,
+            phone: { contains: cleanSender.slice(-8) },
+            status: 'CONNECTED',
+          },
+        });
+      }
 
-    // 3. Busca a instância conectada padrão ou mais recente do tenant vinculado
-    if ((!instance || instance.status !== 'CONNECTED') && params.tenantId) {
-      instance = await prisma.whatsappInstance.findFirst({
-        where: { tenantId: params.tenantId, status: 'CONNECTED' },
-        orderBy: [{ isDefault: 'desc' }, { createdAt: 'desc' }],
-      });
+      // 2.2. Busca a instância conectada padrão ou mais recente do tenant vinculado
+      if ((!instance || instance.status !== 'CONNECTED') && params.tenantId) {
+        instance = await prisma.whatsappInstance.findFirst({
+          where: { tenantId: params.tenantId, status: 'CONNECTED' },
+          orderBy: [{ isDefault: 'desc' }, { createdAt: 'desc' }],
+        });
+      }
     }
 
     // NUNCA fazer fallback global para instâncias de outros tenants. Isolamento total!
