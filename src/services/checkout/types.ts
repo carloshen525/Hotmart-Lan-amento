@@ -239,6 +239,20 @@ export const PLATFORM_PRESETS: PlatformPresetInfo[] = [
     tokenLabel: 'Chave de Postback Braip',
     tokenHint: 'Token de autenticação gerado na aba Postback da Braip.',
   },
+  // Cakto
+  {
+    id: 'CAKTO',
+    name: 'Cakto',
+    category: 'PAYMENT',
+    description: 'Plataforma completa de pagamentos e checkout para infoprodutos e e-commerce.',
+    badgeColor: 'from-emerald-600 to-green-700',
+    iconName: 'Zap',
+    iconBg: '#2e9e5b',
+    iconLetter: '🌵',
+    iconColor: '#ffffff',
+    tokenLabel: 'Token de Webhook Cakto',
+    tokenHint: 'Token de autenticação gerado nas configurações de Webhook da sua conta Cakto.',
+  },
   // 7. Digital Guru
   {
     id: 'DIGITAL_GURU',

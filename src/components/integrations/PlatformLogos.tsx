@@ -799,14 +799,21 @@ export function PlatformLogo({ platformId, size = 40, className = '' }: Platform
     );
   }
 
-  // 47. CAKTO (Laranja/Coral com C)
+  // 47. CAKTO (Logo oficial Cakto - Fundo verde com o cacto branco característico)
   if (p === 'CAKTO') {
     return (
       <div
         style={{ width: s, height: s }}
-        className={`rounded-full bg-[#FF5A1F] flex items-center justify-center shrink-0 shadow-xs ${className}`}
+        className={`rounded-full overflow-hidden bg-gradient-to-b from-[#48a065] to-[#2e7d32] flex items-center justify-center shrink-0 shadow-xs ${className}`}
       >
-        <span className="text-white font-black text-sm">C</span>
+        <img
+          src="/uploads/cakto.webp"
+          alt="Cakto"
+          className="w-full h-full object-cover"
+          onError={(e) => {
+            e.currentTarget.style.display = 'none';
+          }}
+        />
       </div>
     );
   }

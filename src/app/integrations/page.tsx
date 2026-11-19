@@ -563,7 +563,7 @@ export default function IntegrationsPage() {
               Central de Integrações & Webhooks
             </h1>
             <span className="px-2.5 py-0.5 rounded-full text-[11px] font-bold bg-indigo-50 text-indigo-700 border border-indigo-200">
-              67 Plataformas Disponíveis
+              {PLATFORM_PRESETS.length} Plataformas Disponíveis
             </span>
           </div>
           <p className="text-sm text-slate-500 mt-1">
