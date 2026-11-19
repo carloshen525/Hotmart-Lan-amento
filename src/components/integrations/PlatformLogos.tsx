@@ -120,19 +120,18 @@ export function PlatformLogo({ platformId, size = 40, className = '' }: Platform
     );
   }
 
-  // 6. PEPPER (Círculo vermelho com chama/pimenta branca estilizada)
+  // 6. PEPPER (Logo oficial Pepper - Fundo escuro com laço vermelho estilizado)
   if (p === 'PEPPER') {
     return (
       <div
         style={{ width: s, height: s }}
-        className={`rounded-full bg-[#E51E2B] flex items-center justify-center shrink-0 shadow-xs ${className}`}
+        className={`rounded-full overflow-hidden bg-[#181a20] flex items-center justify-center shrink-0 shadow-xs ${className}`}
       >
-        <svg width={size * 0.58} height={size * 0.58} viewBox="0 0 24 24" fill="none">
-          <path
-            d="M12 2C8.5 6 6 9.5 6 13.5C6 17.5 9 21 12.5 21C16.5 21 19 17.5 19 13.5C19 9 16 5 12 2ZM12.5 18C10.5 18 9 16.5 9 14.5C9 12 11 9.5 12.5 8C14 9.5 15.5 12 15.5 14.5C15.5 16.5 14.5 18 12.5 18Z"
-            fill="white"
-          />
-        </svg>
+        <img
+          src="/uploads/pepper.png"
+          alt="Pepper"
+          className="w-full h-full object-cover"
+        />
       </div>
     );
   }
