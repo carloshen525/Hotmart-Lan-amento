@@ -26,6 +26,10 @@ import {
   Copy,
   Lock,
   Globe,
+  HelpCircle,
+  ChevronDown,
+  ChevronUp,
+  BookOpen,
 } from 'lucide-react';
 
 interface WhatsAppInstanceItem {
@@ -139,6 +143,7 @@ export default function WhatsAppPage() {
   const [metaConnecting, setMetaConnecting] = useState(false);
   const [metaError, setMetaError] = useState<string | null>(null);
   const [metaCopiedField, setMetaCopiedField] = useState<string | null>(null);
+  const [showMetaTutorial, setShowMetaTutorial] = useState(false);
 
   // Modal de Visualização de Templates da Meta
   const [isTemplatesModalOpen, setIsTemplatesModalOpen] = useState(false);
@@ -1480,15 +1485,15 @@ export default function WhatsAppPage() {
       {/* MODAL PARA CONECTAR META WHATSAPP BUSINESS CLOUD API OFICIAL */}
       {isMetaModalOpen && (
         <div className="fixed inset-0 bg-black/60 backdrop-blur-sm z-50 flex items-center justify-center p-4">
-          <div className="bg-white rounded-2xl shadow-2xl border border-slate-200 max-w-lg w-full p-6 text-xs text-slate-800 relative max-h-[90vh] overflow-y-auto">
+          <div className="bg-white rounded-2xl shadow-2xl border border-slate-200 max-w-2xl w-full p-6 text-xs text-slate-800 relative max-h-[92vh] overflow-y-auto">
             <div className="flex items-center justify-between pb-3 border-b border-slate-100">
               <div className="flex items-center gap-2">
                 <div className="w-8 h-8 rounded-lg bg-blue-100 text-blue-700 flex items-center justify-center font-bold">
                   <ShieldCheck className="w-5 h-5" />
                 </div>
                 <div>
-                  <h3 className="font-bold text-slate-900 text-sm">Conectar WhatsApp Cloud API Oficial</h3>
-                  <p className="text-[11px] text-slate-400">Meta for Developers (API Oficial do WhatsApp)</p>
+                  <h3 className="font-bold text-slate-900 text-sm">Conectar WhatsApp Cloud API Oficial (Meta)</h3>
+                  <p className="text-[11px] text-slate-400">Integração oficial sem risco de banimento de número</p>
                 </div>
               </div>
               <button
@@ -1497,6 +1502,119 @@ export default function WhatsAppPage() {
               >
                 <X className="w-4 h-4" />
               </button>
+            </div>
+
+            {/* Painel de Atalhos Rápidos e Tutorial para Leigos */}
+            <div className="mt-4 bg-gradient-to-r from-blue-50/90 via-indigo-50/60 to-blue-50/90 border border-blue-200/90 rounded-xl p-3.5 space-y-2.5">
+              <div className="flex items-center justify-between">
+                <div className="flex items-center gap-1.5 text-blue-950 font-bold text-xs">
+                  <BookOpen className="w-4 h-4 text-blue-600" />
+                  <span>Onde pegar as credenciais na Meta? (Atalhos Oficiais)</span>
+                </div>
+                <button
+                  type="button"
+                  onClick={() => setShowMetaTutorial(!showMetaTutorial)}
+                  className="text-[11px] font-semibold text-blue-700 hover:text-blue-900 flex items-center gap-1 cursor-pointer bg-white/90 hover:bg-white px-2.5 py-1 rounded-lg border border-blue-200 shadow-xs transition-colors"
+                >
+                  {showMetaTutorial ? (
+                    <>
+                      <span>Ocultar Instruções</span>
+                      <ChevronUp className="w-3.5 h-3.5 text-blue-600" />
+                    </>
+                  ) : (
+                    <>
+                      <span>Guia Passo a Passo (Leigos)</span>
+                      <ChevronDown className="w-3.5 h-3.5 text-blue-600" />
+                    </>
+                  )}
+                </button>
+              </div>
+
+              {/* 3 Botões de Atalho com 1 Clique */}
+              <div className="grid grid-cols-1 sm:grid-cols-3 gap-2 pt-0.5">
+                <a
+                  href="https://developers.facebook.com/apps/"
+                  target="_blank"
+                  rel="noopener noreferrer"
+                  className="p-2.5 bg-white hover:bg-blue-50 border border-blue-200 hover:border-blue-400 rounded-lg flex items-center justify-between gap-1 text-[11px] font-semibold text-blue-900 shadow-xs transition-all group"
+                  title="Abre o painel Meta Developers para pegar o Phone Number ID e configurar o Webhook"
+                >
+                  <div className="flex flex-col min-w-0">
+                    <span className="truncate">1. Meta Developers</span>
+                    <span className="text-[10px] text-slate-400 font-normal truncate">Phone ID e Webhook</span>
+                  </div>
+                  <ExternalLink className="w-3.5 h-3.5 text-blue-500 group-hover:translate-x-0.5 group-hover:-translate-y-0.5 transition-transform shrink-0" />
+                </a>
+
+                <a
+                  href="https://business.facebook.com/settings/system-users"
+                  target="_blank"
+                  rel="noopener noreferrer"
+                  className="p-2.5 bg-white hover:bg-blue-50 border border-blue-200 hover:border-blue-400 rounded-lg flex items-center justify-between gap-1 text-[11px] font-semibold text-blue-900 shadow-xs transition-all group"
+                  title="Abre direto Usuários do Sistema para gerar o Token Permanente que nunca expira"
+                >
+                  <div className="flex flex-col min-w-0">
+                    <span className="truncate">2. Usuários do Sistema</span>
+                    <span className="text-[10px] text-slate-400 font-normal truncate">Token Permanente</span>
+                  </div>
+                  <ExternalLink className="w-3.5 h-3.5 text-blue-500 group-hover:translate-x-0.5 group-hover:-translate-y-0.5 transition-transform shrink-0" />
+                </a>
+
+                <a
+                  href="https://business.facebook.com/wa/manage/phone-numbers/"
+                  target="_blank"
+                  rel="noopener noreferrer"
+                  className="p-2.5 bg-white hover:bg-blue-50 border border-blue-200 hover:border-blue-400 rounded-lg flex items-center justify-between gap-1 text-[11px] font-semibold text-blue-900 shadow-xs transition-all group"
+                  title="Abre o WhatsApp Manager para conferir seus números ativos e o WABA ID"
+                >
+                  <div className="flex flex-col min-w-0">
+                    <span className="truncate">3. WhatsApp Manager</span>
+                    <span className="text-[10px] text-slate-400 font-normal truncate">WABA ID e Números</span>
+                  </div>
+                  <ExternalLink className="w-3.5 h-3.5 text-blue-500 group-hover:translate-x-0.5 group-hover:-translate-y-0.5 transition-transform shrink-0" />
+                </a>
+              </div>
+
+              {/* Guia Didático Detalhado */}
+              {showMetaTutorial && (
+                <div className="mt-2 pt-2.5 border-t border-blue-200/70 space-y-2.5 text-[11px] text-slate-700 bg-white/70 p-3 rounded-lg animate-in fade-in duration-200">
+                  <div>
+                    <span className="font-bold text-blue-950 flex items-center gap-1">
+                      <span>📌</span>
+                      <span>Passo 1: Phone Number ID e WABA ID (Meta Developers)</span>
+                    </span>
+                    <ol className="list-decimal list-inside space-y-0.5 text-slate-600 pl-1 mt-0.5">
+                      <li>Abra <a href="https://developers.facebook.com/apps/" target="_blank" rel="noopener noreferrer" className="text-blue-600 font-semibold underline">developers.facebook.com/apps</a> e clique no seu App.</li>
+                      <li>No menu lateral esquerdo, clique em <strong>WhatsApp &gt; Configuração da API</strong> (ou <em>API Setup</em>).</li>
+                      <li>Copie o <strong>Identificador do número de telefone (Phone Number ID)</strong> e a <strong>Identificação da conta (WABA ID)</strong>.</li>
+                    </ol>
+                  </div>
+
+                  <div>
+                    <span className="font-bold text-blue-950 flex items-center gap-1">
+                      <span>🔑</span>
+                      <span>Passo 2: Gerar o Access Token Permanente (Que nunca expira)</span>
+                    </span>
+                    <ol className="list-decimal list-inside space-y-0.5 text-slate-600 pl-1 mt-0.5">
+                      <li>Abra <a href="https://business.facebook.com/settings/system-users" target="_blank" rel="noopener noreferrer" className="text-blue-600 font-semibold underline">business.facebook.com/settings/system-users</a>.</li>
+                      <li>Crie ou selecione um <strong>Usuário do Sistema</strong> com função <strong>Administrador</strong>.</li>
+                      <li>Clique em <strong>Atribuir ativos</strong>, selecione seu aplicativo do WhatsApp e marque <em>Controle Total</em>.</li>
+                      <li>Clique em <strong>Gerar novo token</strong>, selecione seu App, coloque a expiração em <strong>Nunca</strong> e marque as duas permissões: <code className="bg-blue-100 text-blue-800 px-1 py-0.2 rounded font-mono">whatsapp_business_messaging</code> e <code className="bg-blue-100 text-blue-800 px-1 py-0.2 rounded font-mono">whatsapp_business_management</code>.</li>
+                      <li>Clique em <strong>Gerar Token</strong>, copie o código longo que começa com <code className="font-mono">EAAB...</code> e cole no campo de Access Token abaixo.</li>
+                    </ol>
+                  </div>
+
+                  <div>
+                    <span className="font-bold text-blue-950 flex items-center gap-1">
+                      <span>🌐</span>
+                      <span>Passo 3: Configurar o Webhook da Meta</span>
+                    </span>
+                    <p className="text-slate-600 pl-1 mt-0.5">
+                      No painel da Meta (<a href="https://developers.facebook.com/apps/" target="_blank" rel="noopener noreferrer" className="text-blue-600 font-semibold underline">developers.facebook.com/apps</a>), acesse <strong>WhatsApp &gt; Configuração</strong>. Na caixinha <strong>Webhook</strong>, clique em <strong>Editar</strong>, cole a URL de Retorno e o Token de Verificação fornecidos no bloco azul desta janela e salve. Depois clique em <strong>Gerenciar campos</strong> e ative o campo <strong>messages</strong>.
+                    </p>
+                  </div>
+                </div>
+              )}
             </div>
 
             <form onSubmit={handleConnectMetaCloud} className="mt-4 space-y-4">
@@ -1522,9 +1640,21 @@ export default function WhatsAppPage() {
 
               <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
                 <div className="space-y-1.5">
-                  <label className="block text-slate-700 font-bold text-xs">
-                    Phone Number ID <span className="text-red-500">*</span>
-                  </label>
+                  <div className="flex items-center justify-between">
+                    <label className="text-slate-700 font-bold text-xs">
+                      Phone Number ID <span className="text-red-500">*</span>
+                    </label>
+                    <a
+                      href="https://developers.facebook.com/apps/"
+                      target="_blank"
+                      rel="noopener noreferrer"
+                      className="text-[10px] text-blue-600 hover:text-blue-800 hover:underline inline-flex items-center gap-0.5"
+                      title="Abre o painel da Meta para localizar seu Phone Number ID"
+                    >
+                      <span>Onde pegar?</span>
+                      <ExternalLink className="w-2.5 h-2.5" />
+                    </a>
+                  </div>
                   <input
                     type="text"
                     required
@@ -1533,13 +1663,25 @@ export default function WhatsAppPage() {
                     onChange={(e) => setMetaPhoneNumberId(e.target.value)}
                     className="w-full px-3.5 py-2.5 bg-slate-50 border border-slate-200 rounded-xl text-xs font-mono text-slate-900 focus:outline-none focus:border-blue-500 focus:bg-white"
                   />
-                  <span className="text-[10px] text-slate-400 block">ID do número gerado na Meta</span>
+                  <span className="text-[10px] text-slate-400 block">ID do número gerado na Meta (Configuração da API)</span>
                 </div>
 
                 <div className="space-y-1.5">
-                  <label className="block text-slate-700 font-bold text-xs">
-                    WABA ID (WhatsApp Account ID)
-                  </label>
+                  <div className="flex items-center justify-between">
+                    <label className="text-slate-700 font-bold text-xs">
+                      WABA ID (WhatsApp Account ID)
+                    </label>
+                    <a
+                      href="https://business.facebook.com/wa/manage/phone-numbers/"
+                      target="_blank"
+                      rel="noopener noreferrer"
+                      className="text-[10px] text-blue-600 hover:text-blue-800 hover:underline inline-flex items-center gap-0.5"
+                      title="Abre o WhatsApp Manager para conferir seu WABA ID"
+                    >
+                      <span>Ver no Gerenciador</span>
+                      <ExternalLink className="w-2.5 h-2.5" />
+                    </a>
+                  </div>
                   <input
                     type="text"
                     placeholder="Ex: 102938475619283"
@@ -1547,14 +1689,26 @@ export default function WhatsAppPage() {
                     onChange={(e) => setMetaWabaId(e.target.value)}
                     className="w-full px-3.5 py-2.5 bg-slate-50 border border-slate-200 rounded-xl text-xs font-mono text-slate-900 focus:outline-none focus:border-blue-500 focus:bg-white"
                   />
-                  <span className="text-[10px] text-slate-400 block">Necessário para listar templates</span>
+                  <span className="text-[10px] text-slate-400 block">Necessário para listar templates aprovados</span>
                 </div>
               </div>
 
               <div className="space-y-1.5">
-                <label className="block text-slate-700 font-bold text-xs">
-                  Access Token Permanente da Meta <span className="text-red-500">*</span>
-                </label>
+                <div className="flex items-center justify-between">
+                  <label className="text-slate-700 font-bold text-xs">
+                    Access Token Permanente da Meta <span className="text-red-500">*</span>
+                  </label>
+                  <a
+                    href="https://business.facebook.com/settings/system-users"
+                    target="_blank"
+                    rel="noopener noreferrer"
+                    className="text-[10px] text-blue-600 hover:text-blue-800 hover:underline inline-flex items-center gap-0.5 font-semibold"
+                    title="Abre direto a tela de Usuários do Sistema no Gerenciador de Negócios"
+                  >
+                    <span>Gerar no Gerenciador de Negócios</span>
+                    <ExternalLink className="w-2.5 h-2.5" />
+                  </a>
+                </div>
                 <div className="relative">
                   <input
                     type="password"
@@ -1572,9 +1726,21 @@ export default function WhatsAppPage() {
               </div>
 
               <div className="space-y-1.5">
-                <label className="block text-slate-700 font-bold text-xs">
-                  Business Account ID (Opcional)
-                </label>
+                <div className="flex items-center justify-between">
+                  <label className="text-slate-700 font-bold text-xs">
+                    Business Account ID (Opcional)
+                  </label>
+                  <a
+                    href="https://business.facebook.com/settings/"
+                    target="_blank"
+                    rel="noopener noreferrer"
+                    className="text-[10px] text-slate-500 hover:text-slate-700 hover:underline inline-flex items-center gap-0.5"
+                    title="Abre as Configurações do Negócio na Meta"
+                  >
+                    <span>Ver no Gerenciador</span>
+                    <ExternalLink className="w-2.5 h-2.5" />
+                  </a>
+                </div>
                 <input
                   type="text"
                   placeholder="Ex: 987654321098765"
