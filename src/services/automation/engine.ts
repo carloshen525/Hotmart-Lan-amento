@@ -708,15 +708,8 @@ export class AutomationEngine {
       );
       if (!matchesTrigger) return false;
 
-      const matchMode: 'ALL' | 'ANY' = cfg.matchMode || 'ALL';
-
-      if (matchMode === 'ALL') {
-        // Para o lead entrar, deve possuir TODAS as tags de entrada simultaneamente
-        return tagList.every((t) => currentTags.has(t.toLowerCase().trim()));
-      } else {
-        // Qualquer uma basta
-        return true;
-      }
+      // Para o lead entrar nesta etapa, deve possuir TODAS as tags de entrada simultaneamente (AND estrito)
+      return tagList.every((t) => currentTags.has(t.toLowerCase().trim()));
     };
 
     // Função auxiliar para identificar em qual SequenceLeadNode o enrollment está ativo no momento
@@ -1846,6 +1839,7 @@ export class AutomationEngine {
       (tn) => !edges.some((e) => e.target === tn.id && nodes.some((sn) => sn.id === e.source && sn.type === 'sequence_lead'))
     );
     let totalEnrolled = 0;
+    const processedContactIdsInActivation = new Set<string>();
 
     for (const tagNode of entryTagNodes) {
       const cfg = tagNode?.data?.config || {};
@@ -1867,17 +1861,40 @@ export class AutomationEngine {
 
       if (targetNodes.length === 0) continue;
 
+      const tagAndConditions = tagList.map((t) => {
+        const trimmed = t.trim();
+        const clean = trimmed.replace(/^#/, '');
+        const variations = Array.from(
+          new Set([
+            trimmed,
+            clean,
+            trimmed.toLowerCase(),
+            trimmed.toUpperCase(),
+            clean.toLowerCase(),
+            clean.toUpperCase(),
+            `#${clean}`,
+          ])
+        );
+
+        return {
+          tags: {
+            some: {
+              tag: {
+                OR: [
+                  { id: trimmed },
+                  ...variations.map((v) => ({ name: v })),
+                ],
+              },
+            },
+          },
+        };
+      });
+
       const contactsWithTag = await prisma.contact.findMany({
         where: {
           tenantId,
           status: { not: 'UNSUBSCRIBED' },
-          tags: {
-            some: {
-              tag: {
-                name: { in: tagList },
-              },
-            },
-          },
+          AND: tagAndConditions,
         },
         include: {
           tags: { include: { tag: true } },
@@ -1885,7 +1902,15 @@ export class AutomationEngine {
       });
 
       for (const contact of contactsWithTag) {
+        if (processedContactIdsInActivation.has(contact.id)) {
+          continue;
+        }
+
         const contactTagNames = new Set(contact.tags.map((t) => t.tag.name.toLowerCase().trim()));
+
+        // Validação estrita de modo de entrada: TODAS as tags simultâneas (AND)
+        const hasAll = tagList.every((tn) => contactTagNames.has(tn.toLowerCase().trim()));
+        if (!hasAll) continue;
 
         // Validação de exclusão
         const exclusionList: string[] = cfg.exclusionTags || [];
@@ -1894,12 +1919,7 @@ export class AutomationEngine {
           if (hasExclusion) continue;
         }
 
-        // Validação de modo de entrada: ALL vs ANY
-        const matchMode: 'ALL' | 'ANY' = cfg.matchMode || 'ALL';
-        if (matchMode === 'ALL') {
-          const hasAll = tagList.every((tn) => contactTagNames.has(tn.toLowerCase().trim()));
-          if (!hasAll) continue;
-        }
+        processedContactIdsInActivation.add(contact.id);
 
         for (const targetNode of targetNodes) {
           const isSequence = targetNode.type === 'sequence_lead';

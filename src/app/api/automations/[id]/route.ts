@@ -163,23 +163,34 @@ export async function GET(request: Request, { params }: { params: { id: string }
       pendingJobs = schedJobs;
     }
 
-    // 1. Identifica todas as tags de entrada válidas configuradas no fluxo
-    const allAutoTagNames = new Set<string>();
+    // 1. Identifica todos os nós de tags de entrada do fluxo e suas tags obrigatórias
+    const entryTagConfigs: Array<{ tags: string[] }> = [];
     for (const pn of parsedNodes) {
       if (pn.type === 'tag' || pn.type === 'trigger') {
-        const cfg = pn.data?.config || {};
-        const tList: string[] =
-          cfg.entryTags || cfg.tagNames || (cfg.tagName ? [cfg.tagName] : (pn.data as any)?.tagName ? [(pn.data as any).tagName] : []) || [];
-        tList.forEach((t) => allAutoTagNames.add(t.toLowerCase().trim()));
+        const isExitTag = parsedEdges.some(
+          (e) => e.target === pn.id && parsedNodes.some((sn) => sn.id === e.source && sn.type === 'sequence_lead')
+        );
+        if (!isExitTag) {
+          const cfg = pn.data?.config || {};
+          const tList: string[] =
+            cfg.entryTags || cfg.tagNames || (cfg.tagName ? [cfg.tagName] : (pn.data as any)?.tagName ? [(pn.data as any).tagName] : []) || [];
+          const cleaned = tList.map((t) => t.trim()).filter(Boolean);
+          if (cleaned.length > 0) {
+            entryTagConfigs.push({ tags: cleaned });
+          }
+        }
       }
     }
 
     // 2. Filtra inscrições de leads para estatísticas sem deletar dados do banco
     let validEnrollments = allEnrollments;
-    if (!isGroupMode && allAutoTagNames.size > 0) {
+    if (!isGroupMode && entryTagConfigs.length > 0) {
       validEnrollments = allEnrollments.filter((e) => {
-        const cTags = e.contact?.tags?.map((t: any) => t.tag?.name?.toLowerCase().trim()) || [];
-        return cTags.some((ct: string) => allAutoTagNames.has(ct));
+        const cTags = new Set(e.contact?.tags?.map((t: any) => t.tag?.name?.toLowerCase().trim()) || []);
+        // Para cada nó de entrada, o lead deve possuir TODAS as tags daquele nó (interseção AND estrita)
+        return entryTagConfigs.some((nodeCfg) =>
+          nodeCfg.tags.every((t) => cTags.has(t.toLowerCase().trim()))
+        );
       });
       if (validEnrollments.length === 0 && allEnrollments.length > 0) {
         validEnrollments = allEnrollments;
@@ -330,27 +341,41 @@ export async function GET(request: Request, { params }: { params: { id: string }
         const tags: string[] =
           cfg.entryTags || cfg.tagNames || (cfg.tagName ? [cfg.tagName] : (n.data as any)?.tagName ? [(n.data as any).tagName] : []) || [];
         if (tags.length > 0) {
+          const tagAndConditions = tags.map((t) => {
+            const trimmed = t.trim();
+            const clean = trimmed.replace(/^#/, '');
+            const variations = Array.from(
+              new Set([
+                trimmed,
+                clean,
+                trimmed.toLowerCase(),
+                trimmed.toUpperCase(),
+                clean.toLowerCase(),
+                clean.toUpperCase(),
+                `#${clean}`,
+              ])
+            );
+
+            return {
+              tags: {
+                some: {
+                  tag: {
+                    OR: [
+                      { id: trimmed },
+                      ...variations.map((v) => ({ name: v })),
+                    ],
+                  },
+                },
+              },
+            };
+          });
+
           if (automation.targetType === 'GROUP') {
             const count = await prisma.whatsappGroup.count({
               where: {
                 tenantId,
                 status: { not: 'LEFT' },
-                tags: {
-                  some: {
-                    tag: {
-                      OR: [
-                        { name: { in: tags } },
-                        { id: { in: tags } },
-                        ...tags.map((t) => ({ name: t.toLowerCase() })),
-                        ...tags.map((t) => ({ name: t.toUpperCase() })),
-                        ...tags.map((t) => ({ name: t.replace(/^#/, '') })),
-                        ...tags.map((t) => ({ name: `#${t.replace(/^#/, '')}` })),
-                        ...tags.map((t) => ({ name: t.replace(/^#/, '').toLowerCase() })),
-                        ...tags.map((t) => ({ name: t.replace(/^#/, '').toUpperCase() })),
-                      ],
-                    },
-                  },
-                },
+                AND: tagAndConditions,
               },
             });
             tagStat.leadsCount = count;
@@ -359,11 +384,7 @@ export async function GET(request: Request, { params }: { params: { id: string }
               where: {
                 tenantId,
                 status: { not: 'UNSUBSCRIBED' },
-                tags: {
-                  some: {
-                    tag: { name: { in: tags } },
-                  },
-                },
+                AND: tagAndConditions,
               },
             });
             tagStat.leadsCount = count;
@@ -385,14 +406,17 @@ export async function GET(request: Request, { params }: { params: { id: string }
           (pn) => (pn.type === 'tag' || pn.type === 'trigger') && incomingEdges.some((e) => e.source === pn.id)
         );
 
-        const sourceTagNames = new Set<string>();
+        const sourceTagNodesList: Array<{ tags: string[] }> = [];
         let targetTagLeadsCap = Infinity;
 
         sourceTagNodes.forEach((tn) => {
           const cfg = tn.data?.config || {};
           const tList: string[] =
             cfg.entryTags || cfg.tagNames || (cfg.tagName ? [cfg.tagName] : (tn.data as any)?.tagName ? [(tn.data as any).tagName] : []) || [];
-          tList.forEach((t) => sourceTagNames.add(t.toLowerCase().trim()));
+          const cleaned = tList.map((t) => t.trim()).filter(Boolean);
+          if (cleaned.length > 0) {
+            sourceTagNodesList.push({ tags: cleaned });
+          }
 
           const tnStat = getNodeStat(tn.id);
           if (tnStat.leadsCount !== undefined && tnStat.leadsCount < targetTagLeadsCap) {
@@ -400,12 +424,14 @@ export async function GET(request: Request, { params }: { params: { id: string }
           }
         });
 
-        // Filtra os leads que realmente possuem as tags de entrada desta sequência
-        const seqEnrollments = sourceTagNames.size > 0
+        // Filtra os leads que realmente possuem as tags de entrada desta sequência (AND estrito)
+        const seqEnrollments = sourceTagNodesList.length > 0
           ? distinctEnrollments.filter((e) => {
               if (!e.contact || e.contact.status === 'UNSUBSCRIBED') return false;
-              const cTags = e.contact.tags?.map((t: any) => t.tag?.name?.toLowerCase().trim()) || [];
-              return cTags.some((ct: string) => sourceTagNames.has(ct));
+              const cTags = new Set(e.contact.tags?.map((t: any) => t.tag?.name?.toLowerCase().trim()) || []);
+              return sourceTagNodesList.some((stn) =>
+                stn.tags.every((t) => cTags.has(t.toLowerCase().trim()))
+              );
             })
           : distinctEnrollments.filter((e) => e.contact && e.contact.status !== 'UNSUBSCRIBED');
 

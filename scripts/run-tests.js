@@ -8,7 +8,7 @@ async function runTestSuite() {
   console.log('=====================================================\n');
 
   let passed = 0;
-  let total = 59;
+  let total = 60;
 
   // Setup de tenant de teste limpo
   const testTenant = await prisma.tenant.upsert({
@@ -8117,6 +8117,335 @@ async function runTestSuite() {
     await prisma.tag.delete({ where: { id: tag59.id } });
 
     console.log('✔ PASSOU: Adição de nova sequência em fluxo já ativo avançou o lead existente para a nova etapa com 100% de sucesso.');
+    passed++;
+
+    // =========================================================================
+    // TESTE 60: Filtro de Tags de Entrada com Múltiplas Tags Obrigatórias (Interseção AND Estrita)
+    // =========================================================================
+    console.log('\n[TESTE 60] Testando filtro de Tags de Entrada com múltiplas tags obrigatórias (Interseção AND estrita e leads únicos)...');
+
+    // Pre-limpeza de segurança
+    const prevTest60Contacts = await prisma.contact.findMany({ where: { name: { contains: 'Teste 60' }, tenantId: testTenant.id } });
+    if (prevTest60Contacts.length > 0) {
+      await prisma.contactTag.deleteMany({ where: { contactId: { in: prevTest60Contacts.map(c => c.id) } } });
+      await prisma.contact.deleteMany({ where: { id: { in: prevTest60Contacts.map(c => c.id) } } });
+    }
+
+    // 1. Cria 3 tags de teste
+    const tagCliente60 = await prisma.tag.upsert({
+      where: { tenantId_name: { tenantId: testTenant.id, name: 'Cliente_Test60' } },
+      update: {},
+      create: { tenantId: testTenant.id, name: 'Cliente_Test60', color: '#10b981' },
+    });
+    const tagInteressado60 = await prisma.tag.upsert({
+      where: { tenantId_name: { tenantId: testTenant.id, name: 'Interessado_Test60' } },
+      update: {},
+      create: { tenantId: testTenant.id, name: 'Interessado_Test60', color: '#6366f1' },
+    });
+    const tagWhatsApp60 = await prisma.tag.upsert({
+      where: { tenantId_name: { tenantId: testTenant.id, name: 'WhatsApp_Test60' } },
+      update: {},
+      create: { tenantId: testTenant.id, name: 'WhatsApp_Test60', color: '#22c55e' },
+    });
+
+    // 2. Cria os 4 leads descritos pelo usuário:
+    // João -> Cliente + Interessado + WhatsApp (Elegível ✅)
+    const leadJoao = await prisma.contact.create({
+      data: {
+        tenantId: testTenant.id,
+        name: 'João Teste 60',
+        email: `joao_${Date.now()}@teste.com`,
+        phone: '5511999990001',
+        status: 'SUBSCRIBED',
+      },
+    });
+    await prisma.contactTag.createMany({
+      data: [
+        { contactId: leadJoao.id, tagId: tagCliente60.id },
+        { contactId: leadJoao.id, tagId: tagInteressado60.id },
+        { contactId: leadJoao.id, tagId: tagWhatsApp60.id },
+      ],
+    });
+
+    // Maria -> Cliente + Interessado (Falta WhatsApp ❌)
+    const leadMaria = await prisma.contact.create({
+      data: {
+        tenantId: testTenant.id,
+        name: 'Maria Teste 60',
+        email: `maria_${Date.now()}@teste.com`,
+        phone: '5511999990002',
+        status: 'SUBSCRIBED',
+      },
+    });
+    await prisma.contactTag.createMany({
+      data: [
+        { contactId: leadMaria.id, tagId: tagCliente60.id },
+        { contactId: leadMaria.id, tagId: tagInteressado60.id },
+      ],
+    });
+
+    // Pedro -> Cliente + WhatsApp (Falta Interessado ❌)
+    const leadPedro = await prisma.contact.create({
+      data: {
+        tenantId: testTenant.id,
+        name: 'Pedro Teste 60',
+        email: `pedro_${Date.now()}@teste.com`,
+        phone: '5511999990003',
+        status: 'SUBSCRIBED',
+      },
+    });
+    await prisma.contactTag.createMany({
+      data: [
+        { contactId: leadPedro.id, tagId: tagCliente60.id },
+        { contactId: leadPedro.id, tagId: tagWhatsApp60.id },
+      ],
+    });
+
+    // Ana -> Interessado + WhatsApp (Falta Cliente ❌)
+    const leadAna = await prisma.contact.create({
+      data: {
+        tenantId: testTenant.id,
+        name: 'Ana Teste 60',
+        email: `ana_${Date.now()}@teste.com`,
+        phone: '5511999990004',
+        status: 'SUBSCRIBED',
+      },
+    });
+    await prisma.contactTag.createMany({
+      data: [
+        { contactId: leadAna.id, tagId: tagInteressado60.id },
+        { contactId: leadAna.id, tagId: tagWhatsApp60.id },
+      ],
+    });
+
+    // 3. Monta fluxo com Nó de Tag exigindo as 3 tags simultaneamente
+    const tagListTest60 = ['Cliente_Test60', 'Interessado_Test60', 'WhatsApp_Test60'];
+    const nodeTag60Id = 'tag_entry_60';
+    const nodeSeq60Id = 'seq_lead_60';
+
+    const tagAndConditionsTest60 = tagListTest60.map((t) => {
+      const trimmed = t.trim();
+      const clean = trimmed.replace(/^#/, '');
+      const variations = Array.from(
+        new Set([
+          trimmed,
+          clean,
+          trimmed.toLowerCase(),
+          trimmed.toUpperCase(),
+          clean.toLowerCase(),
+          clean.toUpperCase(),
+          `#${clean}`,
+        ])
+      );
+      return {
+        tags: {
+          some: {
+            tag: {
+              OR: [
+                { id: trimmed },
+                ...variations.map((v) => ({ name: v })),
+              ],
+            },
+          },
+        },
+      };
+    });
+
+    // Valida a consulta direta com AND no banco: deve retornar estritamente 1 (apenas João)
+    const andIntersectionCount = await prisma.contact.count({
+      where: {
+        tenantId: testTenant.id,
+        status: { not: 'UNSUBSCRIBED' },
+        AND: tagAndConditionsTest60,
+      },
+    });
+    assert.strictEqual(
+      andIntersectionCount,
+      1,
+      `Consulta AND deve retornar apenas 1 lead único que possui as 3 tags, mas retornou ${andIntersectionCount}`
+    );
+
+    // 4. Cria e ativa a automação
+    const auto60 = await prisma.automation.create({
+      data: {
+        tenantId: testTenant.id,
+        name: 'Automação Teste 60 - Multi-Tags AND',
+        status: 'ACTIVE',
+        targetType: 'INDIVIDUAL',
+        nodes: JSON.stringify([
+          {
+            id: nodeTag60Id,
+            type: 'tag',
+            data: {
+              label: 'Tags Obrigatórias',
+              config: {
+                entryTags: tagListTest60,
+                tagNames: tagListTest60,
+                matchMode: 'ALL',
+              },
+            },
+          },
+          {
+            id: nodeSeq60Id,
+            type: 'sequence_lead',
+            data: {
+              label: 'Sequência Boas-Vindas',
+              subflow: { nodes: [{ id: 'sub_msg_1', type: 'whatsapp', data: { label: 'Msg 1' } }] },
+            },
+          },
+        ]),
+        edges: JSON.stringify([
+          { id: 'e60_1', source: nodeTag60Id, target: nodeSeq60Id },
+        ]),
+      },
+    });
+
+    // 5. Executa a sincronização de leads existentes com o filtro estrito AND
+    async function testSyncExistingLeadsWithAndFilter(automationId, tenantId) {
+      const auto = await prisma.automation.findFirst({ where: { id: automationId, tenantId } });
+      if (!auto || auto.status !== 'ACTIVE') return 0;
+      const nodes = JSON.parse(auto.nodes || '[]');
+      const edges = JSON.parse(auto.edges || '[]');
+      const allTagNodes = nodes.filter((n) => n.type === 'tag' || n.type === 'trigger');
+      const entryTagNodes = allTagNodes.filter(
+        (tn) => !edges.some((e) => e.target === tn.id && nodes.some((sn) => sn.id === e.source && sn.type === 'sequence_lead'))
+      );
+
+      const processed = new Set();
+      for (const tn of entryTagNodes) {
+        const cfg = tn.data?.config || {};
+        const tagList = cfg.entryTags || cfg.tagNames || [];
+        if (tagList.length === 0) continue;
+
+        const outgoingEdges = edges.filter((e) => e.source === tn.id);
+        const targetNodes = nodes.filter((n) => outgoingEdges.some((edge) => edge.target === n.id));
+        if (targetNodes.length === 0) continue;
+
+        const tagAndConditions = tagList.map((t) => ({
+          tags: {
+            some: {
+              tag: {
+                OR: [
+                  { id: t },
+                  { name: t },
+                  { name: t.toLowerCase() },
+                  { name: t.toUpperCase() },
+                ],
+              },
+            },
+          },
+        }));
+
+        const contactsWithTag = await prisma.contact.findMany({
+          where: {
+            tenantId,
+            status: { not: 'UNSUBSCRIBED' },
+            AND: tagAndConditions,
+          },
+          include: { tags: { include: { tag: true } } },
+        });
+
+        for (const contact of contactsWithTag) {
+          if (processed.has(contact.id)) continue;
+          const cTagNames = new Set(contact.tags.map((t) => t.tag.name.toLowerCase().trim()));
+          const hasAll = tagList.every((t) => cTagNames.has(t.toLowerCase().trim()));
+          if (!hasAll) continue;
+
+          processed.add(contact.id);
+
+          for (const targetNode of targetNodes) {
+            const existingEnrollment = await prisma.automationEnrollment.findFirst({
+              where: { automationId, contactId: contact.id },
+            });
+            if (!existingEnrollment) {
+              await prisma.automationEnrollment.create({
+                data: {
+                  automationId,
+                  contactId: contact.id,
+                  status: 'ACTIVE',
+                  currentNodeId: targetNode.id,
+                },
+              });
+            }
+          }
+        }
+      }
+    }
+
+    await testSyncExistingLeadsWithAndFilter(auto60.id, testTenant.id);
+
+    // 6. Verificações rigorosas:
+    // - João deve estar inscrito
+    const enrJoao = await prisma.automationEnrollment.findFirst({
+      where: { automationId: auto60.id, contactId: leadJoao.id },
+    });
+    assert.ok(enrJoao, 'João DEVE estar inscrito pois possui as 3 tags');
+
+    // - Maria NÃO deve estar inscrita
+    const enrMaria = await prisma.automationEnrollment.findFirst({
+      where: { automationId: auto60.id, contactId: leadMaria.id },
+    });
+    assert.strictEqual(enrMaria, null, 'Maria NÃO deve estar inscrita (possui apenas 2 tags)');
+
+    // - Pedro NÃO deve estar inscrito
+    const enrPedro = await prisma.automationEnrollment.findFirst({
+      where: { automationId: auto60.id, contactId: leadPedro.id },
+    });
+    assert.strictEqual(enrPedro, null, 'Pedro NÃO deve estar inscrito (possui apenas 2 tags)');
+
+    // - Ana NÃO deve estar inscrita
+    const enrAna = await prisma.automationEnrollment.findFirst({
+      where: { automationId: auto60.id, contactId: leadAna.id },
+    });
+    assert.strictEqual(enrAna, null, 'Ana NÃO deve estar inscrita (possui apenas 2 tags)');
+
+    // - Total de inscrições na automação DEVE ser exatamente 1
+    const totalEnrollments60 = await prisma.automationEnrollment.count({
+      where: { automationId: auto60.id },
+    });
+    assert.strictEqual(
+      totalEnrollments60,
+      1,
+      `Total de inscrições deve ser exatamente 1 lead único, encontrado ${totalEnrollments60}`
+    );
+
+    // 7. Simula adicionar uma 4ª tag avulsa no João e verifica que não há duplicação
+    const tagBonus = await prisma.tag.upsert({
+      where: { tenantId_name: { tenantId: testTenant.id, name: 'TagBonus_Test60' } },
+      update: {},
+      create: { tenantId: testTenant.id, name: 'TagBonus_Test60' },
+    });
+    await prisma.contactTag.create({
+      data: { contactId: leadJoao.id, tagId: tagBonus.id },
+    });
+
+    await testHandleContactTagAddedEngine(leadJoao.id, 'TagBonus_Test60', testTenant.id);
+
+    const totalEnrollmentsAfterBonus = await prisma.automationEnrollment.count({
+      where: { automationId: auto60.id },
+    });
+    assert.strictEqual(
+      totalEnrollmentsAfterBonus,
+      1,
+      'Lead não pode ser duplicado ao receber novas tags'
+    );
+
+    // Limpeza 60
+    await prisma.scheduledJob.deleteMany({ where: { enrollment: { automationId: auto60.id } } });
+    await prisma.automationStepLog.deleteMany({ where: { enrollment: { automationId: auto60.id } } });
+    await prisma.automationEnrollment.deleteMany({ where: { automationId: auto60.id } });
+    await prisma.automation.delete({ where: { id: auto60.id } });
+    await prisma.contactTag.deleteMany({
+      where: { contactId: { in: [leadJoao.id, leadMaria.id, leadPedro.id, leadAna.id] } },
+    });
+    await prisma.contact.deleteMany({
+      where: { id: { in: [leadJoao.id, leadMaria.id, leadPedro.id, leadAna.id] } },
+    });
+    await prisma.tag.deleteMany({
+      where: { id: { in: [tagCliente60.id, tagInteressado60.id, tagWhatsApp60.id, tagBonus.id] } },
+    });
+
+    console.log('✔ PASSOU: Filtro de múltiplas tags obrigatórias (AND) validado com sucesso: apenas leads com todas as tags entram e são contabilizados como únicos.');
     passed++;
 
     console.log('\n=====================================================');

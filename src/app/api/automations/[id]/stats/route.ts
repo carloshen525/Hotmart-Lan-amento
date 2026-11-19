@@ -172,23 +172,34 @@ export async function GET(request: Request, { params }: { params: { id: string }
       pendingJobs = results[3];
     }
 
-    // 1. Identifica todas as tags de entrada válidas configuradas no fluxo
-    const allAutoTagNames = new Set<string>();
+    // 1. Identifica todos os nós de tags de entrada do fluxo e suas tags obrigatórias
+    const entryTagConfigs: Array<{ tags: string[] }> = [];
     for (const pn of parsedNodes) {
       if (pn.type === 'tag' || pn.type === 'trigger') {
-        const cfg = pn.data?.config || {};
-        const tList: string[] =
-          cfg.entryTags || cfg.tagNames || (cfg.tagName ? [cfg.tagName] : (pn.data as any)?.tagName ? [(pn.data as any).tagName] : []) || [];
-        tList.forEach((t) => allAutoTagNames.add(t.toLowerCase().trim()));
+        const isExitTag = parsedEdges.some(
+          (e) => e.target === pn.id && parsedNodes.some((sn) => sn.id === e.source && sn.type === 'sequence_lead')
+        );
+        if (!isExitTag) {
+          const cfg = pn.data?.config || {};
+          const tList: string[] =
+            cfg.entryTags || cfg.tagNames || (cfg.tagName ? [cfg.tagName] : (pn.data as any)?.tagName ? [(pn.data as any).tagName] : []) || [];
+          const cleaned = tList.map((t) => t.trim()).filter(Boolean);
+          if (cleaned.length > 0) {
+            entryTagConfigs.push({ tags: cleaned });
+          }
+        }
       }
     }
 
     // 2. Filtra inscrições de leads para estatísticas sem deletar dados do banco
     let validEnrollments = allEnrollments;
-    if (!isGroupMode && allAutoTagNames.size > 0) {
+    if (!isGroupMode && entryTagConfigs.length > 0) {
       validEnrollments = allEnrollments.filter((e) => {
-        const cTags = e.contact?.tags?.map((t: any) => t.tag?.name?.toLowerCase().trim()) || [];
-        return cTags.some((ct: string) => allAutoTagNames.has(ct));
+        const cTags = new Set(e.contact?.tags?.map((t: any) => t.tag?.name?.toLowerCase().trim()) || []);
+        // Para cada nó de entrada, o lead deve possuir TODAS as tags daquele nó (interseção AND estrita)
+        return entryTagConfigs.some((nodeCfg) =>
+          nodeCfg.tags.every((t) => cTags.has(t.toLowerCase().trim()))
+        );
       });
       // Se todos foram filtrados por tags alteradas mas existem inscrições reais, preserva inscrições do fluxo
       if (validEnrollments.length === 0 && allEnrollments.length > 0) {
@@ -396,27 +407,41 @@ export async function GET(request: Request, { params }: { params: { id: string }
         } else {
           // TAG DE ENTRADA RAIZ: exibe contatos elegíveis na base para alimentar o início do funil
           if (tags.length > 0) {
+            const tagAndConditions = tags.map((t) => {
+              const trimmed = t.trim();
+              const clean = trimmed.replace(/^#/, '');
+              const variations = Array.from(
+                new Set([
+                  trimmed,
+                  clean,
+                  trimmed.toLowerCase(),
+                  trimmed.toUpperCase(),
+                  clean.toLowerCase(),
+                  clean.toUpperCase(),
+                  `#${clean}`,
+                ])
+              );
+
+              return {
+                tags: {
+                  some: {
+                    tag: {
+                      OR: [
+                        { id: trimmed },
+                        ...variations.map((v) => ({ name: v })),
+                      ],
+                    },
+                  },
+                },
+              };
+            });
+
             if (isGroupMode) {
               const count = await prisma.whatsappGroup.count({
                 where: {
                   tenantId,
                   status: { not: 'LEFT' },
-                  tags: {
-                    some: {
-                      tag: {
-                        OR: [
-                          { id: { in: tags } },
-                          { name: { in: tags } },
-                          ...tags.map((t) => ({ name: t.toLowerCase() })),
-                          ...tags.map((t) => ({ name: t.toUpperCase() })),
-                          ...tags.map((t) => ({ name: t.replace(/^#/, '') })),
-                          ...tags.map((t) => ({ name: `#${t.replace(/^#/, '')}` })),
-                          ...tags.map((t) => ({ name: t.replace(/^#/, '').toLowerCase() })),
-                          ...tags.map((t) => ({ name: t.replace(/^#/, '').toUpperCase() })),
-                        ],
-                      },
-                    },
-                  },
+                  AND: tagAndConditions,
                 },
               });
               tagStat.leadsCount = count;
@@ -425,11 +450,7 @@ export async function GET(request: Request, { params }: { params: { id: string }
                 where: {
                   tenantId,
                   status: { not: 'UNSUBSCRIBED' },
-                  tags: {
-                    some: {
-                      tag: { name: { in: tags } },
-                    },
-                  },
+                  AND: tagAndConditions,
                 },
               });
               tagStat.leadsCount = count;

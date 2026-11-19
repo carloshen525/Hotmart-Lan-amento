@@ -2072,7 +2072,7 @@ export default function AutomationCanvasPage() {
     }
   };
 
-  const handleSaveTagConfig = () => {
+  const handleSaveTagConfig = async () => {
     if (!selectedNode) return;
 
     if (status === 'ACTIVE') {
@@ -2083,9 +2083,33 @@ export default function AutomationCanvasPage() {
       handleSave('PAUSED');
     }
 
-    const count = availableTags
-      .filter((t) => tagEntryTags.includes(t.name))
-      .reduce((acc, t) => acc + (targetType === 'GROUP' ? (t._count?.groups || 0) : (t._count?.contacts || 0)), 0);
+    let count = 0;
+    if (tagEntryTags.length === 1) {
+      const tagObj = availableTags.find((t) => t.name === tagEntryTags[0]);
+      count = targetType === 'GROUP' ? (tagObj?._count?.groups || 0) : (tagObj?._count?.contacts || 0);
+    } else if (tagEntryTags.length > 1) {
+      try {
+        const res = await fetch(
+          `/api/tags/count?tags=${encodeURIComponent(tagEntryTags.join(','))}&targetType=${targetType}`
+        );
+        if (res.ok) {
+          const data = await res.json();
+          count = typeof data.count === 'number' ? data.count : 0;
+        } else {
+          const counts = tagEntryTags.map((name) => {
+            const tagObj = availableTags.find((t) => t.name === name);
+            return targetType === 'GROUP' ? (tagObj?._count?.groups || 0) : (tagObj?._count?.contacts || 0);
+          });
+          count = Math.min(...counts, 0);
+        }
+      } catch {
+        const counts = tagEntryTags.map((name) => {
+          const tagObj = availableTags.find((t) => t.name === name);
+          return targetType === 'GROUP' ? (tagObj?._count?.groups || 0) : (tagObj?._count?.contacts || 0);
+        });
+        count = Math.min(...counts, 0);
+      }
+    }
 
     const updatedCfg: any = {
       ...((selectedNode.data.config as object) || {}),
@@ -2121,6 +2145,11 @@ export default function AutomationCanvasPage() {
       )
     );
     setIsTagModalOpen(false);
+
+    // Dispara recarregamento em tempo real para sincronizar métricas
+    setTimeout(() => {
+      fetchRealtimeStats();
+    }, 100);
   };
 
   // Criação rápida de Tag (adapta para tag de contato ou tag de grupo/comunidade)
@@ -3784,6 +3813,16 @@ export default function AutomationCanvasPage() {
                         </span>
                       );
                     })}
+                  </div>
+                )}
+
+                {/* Indicação visual de regra AND estrita quando múltiplas tags */}
+                {tagEntryTags.length > 1 && (
+                  <div className="flex items-center gap-2 p-2.5 rounded-lg bg-purple-950/40 border border-purple-800/60 text-purple-200 text-xs">
+                    <CheckCircle2 className="w-4 h-4 text-purple-400 shrink-0" />
+                    <span>
+                      Regra <strong>AND (E)</strong>: O lead deve possuir <strong>todas as {tagEntryTags.length} tags simultaneamente</strong> para entrar nesta etapa. Leads repetidos são contabilizados apenas 1 vez.
+                    </span>
                   </div>
                 )}
               </div>
