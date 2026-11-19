@@ -30,6 +30,10 @@ import {
   ChevronDown,
   ChevronUp,
   BookOpen,
+  Key,
+  CheckCircle,
+  AlertTriangle,
+  Activity,
 } from 'lucide-react';
 
 interface WhatsAppInstanceItem {
@@ -144,6 +148,18 @@ export default function WhatsAppPage() {
   const [metaError, setMetaError] = useState<string | null>(null);
   const [metaCopiedField, setMetaCopiedField] = useState<string | null>(null);
   const [showMetaTutorial, setShowMetaTutorial] = useState(false);
+  const [editingInstanceId, setEditingInstanceId] = useState<string | null>(null);
+
+  // Gerenciador e Diagnóstico de Credenciais em Tempo Real
+  const [metaServerConfig, setMetaServerConfig] = useState<{
+    callbackUrl: string;
+    verifyToken: string;
+    acceptedTokens: string[];
+  } | null>(null);
+  const [testingCredentials, setTestingCredentials] = useState(false);
+  const [credentialsTestResult, setCredentialsTestResult] = useState<any | null>(null);
+  const [isDiagnosticModalOpen, setIsDiagnosticModalOpen] = useState(false);
+  const [activeDiagnosticChannel, setActiveDiagnosticChannel] = useState<WhatsAppInstanceItem | null>(null);
 
   // Modal de Visualização de Templates da Meta
   const [isTemplatesModalOpen, setIsTemplatesModalOpen] = useState(false);
@@ -324,9 +340,23 @@ export default function WhatsAppPage() {
     setLoading(false);
   };
 
+  const fetchMetaConfig = async () => {
+    try {
+      const res = await fetch(`/api/whatsapp/meta/config?_t=${Date.now()}`);
+      const data = await res.json();
+      if (data.success) {
+        setMetaServerConfig(data);
+        if (data.verifyToken) {
+          setMetaWebhookVerifyToken(data.verifyToken);
+        }
+      }
+    } catch {}
+  };
+
   useEffect(() => {
     fetchInstances();
     fetchQueueStats();
+    fetchMetaConfig();
 
     // Polling a cada 3.5 segundos para checar status em tempo real de todas as linhas e da fila
     const interval = setInterval(() => {
@@ -547,21 +577,84 @@ export default function WhatsAppPage() {
     }
   };
 
-  // Abertura do modal Meta Cloud API
+  // Abertura do modal Meta Cloud API (Nova Linha)
   const handleOpenMetaModal = () => {
+    setEditingInstanceId(null);
     setMetaChannelName('');
     setMetaPhoneNumberId('');
     setMetaWabaId('');
     setMetaAccessToken('');
     setMetaBusinessAccountId('');
     setMetaError(null);
+    setCredentialsTestResult(null);
+    fetchMetaConfig();
     setIsMetaModalOpen(true);
+  };
+
+  // Gerenciar / Editar Credenciais de Canal Existente
+  const handleEditMetaInstance = (inst: WhatsAppInstanceItem) => {
+    setEditingInstanceId(inst.id);
+    setMetaChannelName(inst.name || '');
+    setMetaPhoneNumberId(inst.phoneNumberId || '');
+    setMetaWabaId(inst.wabaId || '');
+    setMetaAccessToken('');
+    setMetaBusinessAccountId('');
+    setMetaError(null);
+    setCredentialsTestResult(null);
+    fetchMetaConfig();
+    setIsMetaModalOpen(true);
+  };
+
+  // Testar Credenciais em Tempo Real junto à Meta
+  const handleTestCredentialsNow = async (instanceId?: string) => {
+    setTestingCredentials(true);
+    setCredentialsTestResult(null);
+    setMetaError(null);
+
+    try {
+      const payload: any = instanceId
+        ? { instanceId }
+        : {
+            phoneNumberId: metaPhoneNumberId.trim(),
+            accessToken: metaAccessToken.trim(),
+            wabaId: metaWabaId.trim() || undefined,
+          };
+
+      const res = await fetch('/api/whatsapp/meta/verify', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(payload),
+      });
+
+      const data = await res.json();
+      setCredentialsTestResult(data);
+
+      if (!res.ok || !data.valid) {
+        throw new Error(data.error || 'Credenciais inválidas ou sem permissão na Meta.');
+      }
+
+      if (instanceId) {
+        fetchInstances();
+      }
+    } catch (err: any) {
+      setMetaError(err.message || 'Falha ao validar credenciais');
+    } finally {
+      setTestingCredentials(false);
+    }
+  };
+
+  // Abrir Modal de Diagnóstico Completo de Credenciais
+  const handleOpenDiagnosticModal = async (inst: WhatsAppInstanceItem) => {
+    setActiveDiagnosticChannel(inst);
+    setIsDiagnosticModalOpen(true);
+    setCredentialsTestResult(null);
+    await handleTestCredentialsNow(inst.id);
   };
 
   // Salvar conexão Meta Cloud API
   const handleConnectMetaCloud = async (e: React.FormEvent) => {
     e.preventDefault();
-    if (!metaPhoneNumberId.trim() || !metaAccessToken.trim()) {
+    if (!metaPhoneNumberId.trim() || (!editingInstanceId && !metaAccessToken.trim())) {
       setMetaError('O Phone Number ID e o Access Token permanente da Meta são obrigatórios.');
       return;
     }
@@ -589,7 +682,11 @@ export default function WhatsAppPage() {
       }
 
       setIsMetaModalOpen(false);
-      setActionMessage('Canal WhatsApp Business Cloud API Oficial conectado com sucesso!');
+      setActionMessage(
+        editingInstanceId
+          ? 'Credenciais atualizadas e validadas com sucesso!'
+          : 'Canal WhatsApp Business Cloud API Oficial conectado com sucesso!'
+      );
       fetchInstances();
     } catch (err: any) {
       setMetaError(err.message || 'Erro de conexão com a Meta');
@@ -936,21 +1033,28 @@ export default function WhatsAppPage() {
                     {inst.provider === 'META_CLOUD' ? (
                       <>
                         <button
+                          onClick={() => handleOpenDiagnosticModal(inst)}
+                          className="px-3 py-1.5 rounded-lg border border-emerald-200 dark:border-emerald-800 bg-emerald-50 dark:bg-emerald-950/60 text-emerald-700 dark:text-emerald-300 hover:bg-emerald-100 font-semibold text-xs flex items-center gap-1.5 transition-colors cursor-pointer"
+                          title="Diagnosticar e verificar em tempo real se o token e as permissões estão funcionando"
+                        >
+                          <Activity className="w-3.5 h-3.5 text-emerald-600 dark:text-emerald-400" />
+                          <span>Testar Credenciais</span>
+                        </button>
+                        <button
+                          onClick={() => handleEditMetaInstance(inst)}
+                          className="px-3 py-1.5 rounded-lg border border-slate-200 dark:border-slate-700 text-slate-700 dark:text-slate-200 hover:bg-slate-50 dark:hover:bg-slate-800 font-semibold text-xs flex items-center gap-1.5 transition-colors cursor-pointer"
+                          title="Atualizar Access Token Permanente ou IDs da Meta sem perder o histórico do canal"
+                        >
+                          <Key className="w-3.5 h-3.5 text-blue-500" />
+                          <span>Gerenciar Credenciais</span>
+                        </button>
+                        <button
                           onClick={() => handleOpenTemplates(inst)}
-                          className="px-3 py-1.5 rounded-lg border border-blue-200 bg-blue-50 text-blue-700 hover:bg-blue-100 font-semibold text-xs flex items-center gap-1.5 transition-colors cursor-pointer"
+                          className="px-3 py-1.5 rounded-lg border border-blue-200 dark:border-blue-900 bg-blue-50 dark:bg-blue-950/60 text-blue-700 dark:text-blue-300 hover:bg-blue-100 font-semibold text-xs flex items-center gap-1.5 transition-colors cursor-pointer"
                           title="Visualizar templates oficiais aprovados na Meta"
                         >
                           <FileText className="w-3.5 h-3.5 text-blue-600" />
                           <span>Templates Oficiais</span>
-                        </button>
-                        <button
-                          onClick={handleManualSync}
-                          disabled={actionLoading}
-                          className="px-3 py-1.5 rounded-lg border border-slate-200 text-slate-700 hover:bg-slate-50 font-semibold text-xs flex items-center gap-1.5 transition-colors cursor-pointer"
-                          title="Verificar status da conexão na Meta Graph API"
-                        >
-                          <RefreshCw className="w-3.5 h-3.5" />
-                          <span>Verificar Status</span>
                         </button>
                       </>
                     ) : (
@@ -1482,22 +1586,32 @@ export default function WhatsAppPage() {
         </div>
       )}
 
-      {/* MODAL PARA CONECTAR META WHATSAPP BUSINESS CLOUD API OFICIAL */}
+      {/* MODAL PARA CONECTAR / GERENCIAR META WHATSAPP BUSINESS CLOUD API OFICIAL */}
       {isMetaModalOpen && (
         <div className="fixed inset-0 bg-black/70 backdrop-blur-sm z-50 flex items-center justify-center p-4">
           <div className="bg-white dark:bg-[#0c1322] rounded-2xl shadow-2xl border border-slate-200 dark:border-slate-800 max-w-2xl w-full p-6 text-xs text-slate-800 dark:text-slate-200 relative max-h-[92vh] overflow-y-auto">
             <div className="flex items-center justify-between pb-3 border-b border-slate-100 dark:border-slate-800">
               <div className="flex items-center gap-2">
                 <div className="w-8 h-8 rounded-lg bg-blue-100 dark:bg-blue-950/80 text-blue-700 dark:text-blue-400 flex items-center justify-center font-bold">
-                  <ShieldCheck className="w-5 h-5" />
+                  {editingInstanceId ? <Key className="w-5 h-5 text-blue-600 dark:text-blue-400" /> : <ShieldCheck className="w-5 h-5" />}
                 </div>
                 <div>
-                  <h3 className="font-bold text-slate-900 dark:text-white text-sm">Conectar WhatsApp Cloud API Oficial (Meta)</h3>
-                  <p className="text-[11px] text-slate-500 dark:text-slate-400">Integração oficial sem risco de banimento de número</p>
+                  <h3 className="font-bold text-slate-900 dark:text-white text-sm">
+                    {editingInstanceId ? 'Gerenciar Credenciais da Meta (Editar Linha)' : 'Conectar WhatsApp Cloud API Oficial (Meta)'}
+                  </h3>
+                  <p className="text-[11px] text-slate-500 dark:text-slate-400">
+                    {editingInstanceId
+                      ? 'Atualize seu Access Token Permanente ou altere as credenciais sem perder as automações vinculadas'
+                      : 'Integração oficial sem risco de banimento de número'}
+                  </p>
                 </div>
               </div>
               <button
-                onClick={() => setIsMetaModalOpen(false)}
+                onClick={() => {
+                  setIsMetaModalOpen(false);
+                  setEditingInstanceId(null);
+                  setCredentialsTestResult(null);
+                }}
                 className="text-slate-400 hover:text-slate-600 dark:text-slate-400 dark:hover:text-slate-200 p-1 rounded-lg cursor-pointer transition-colors"
               >
                 <X className="w-4 h-4" />
@@ -1767,13 +1881,13 @@ export default function WhatsAppPage() {
                       <input
                         type="text"
                         readOnly
-                        value={typeof window !== 'undefined' ? `${window.location.origin}/api/webhooks/whatsapp/meta` : '/api/webhooks/whatsapp/meta'}
+                        value={metaServerConfig?.callbackUrl || (typeof window !== 'undefined' ? `${window.location.origin}/api/webhooks/whatsapp/meta` : '/api/webhooks/whatsapp/meta')}
                         className="flex-1 px-2.5 py-1.5 bg-white dark:bg-[#070c17] border border-blue-200 dark:border-slate-700 rounded-lg text-[11px] font-mono text-slate-800 dark:text-slate-100 select-all"
                       />
                       <button
                         type="button"
                         onClick={() => {
-                          const url = typeof window !== 'undefined' ? `${window.location.origin}/api/webhooks/whatsapp/meta` : '';
+                          const url = metaServerConfig?.callbackUrl || (typeof window !== 'undefined' ? `${window.location.origin}/api/webhooks/whatsapp/meta` : '');
                           navigator.clipboard.writeText(url);
                           setMetaCopiedField('url');
                           setTimeout(() => setMetaCopiedField(null), 2000);
@@ -1791,13 +1905,14 @@ export default function WhatsAppPage() {
                       <input
                         type="text"
                         readOnly
-                        value={metaWebhookVerifyToken}
+                        value={metaServerConfig?.verifyToken || metaWebhookVerifyToken || 'meta_webhook_verify_token_123'}
                         className="flex-1 px-2.5 py-1.5 bg-white dark:bg-[#070c17] border border-blue-200 dark:border-slate-700 rounded-lg text-[11px] font-mono text-slate-800 dark:text-slate-100 select-all"
                       />
                       <button
                         type="button"
                         onClick={() => {
-                          navigator.clipboard.writeText(metaWebhookVerifyToken);
+                          const tok = metaServerConfig?.verifyToken || metaWebhookVerifyToken || 'meta_webhook_verify_token_123';
+                          navigator.clipboard.writeText(tok);
                           setMetaCopiedField('token');
                           setTimeout(() => setMetaCopiedField(null), 2000);
                         }}
@@ -1808,39 +1923,259 @@ export default function WhatsAppPage() {
                     </div>
                   </div>
 
-                  <div className="text-[10px] text-blue-800 dark:text-blue-300 font-semibold pt-0.5">
-                    Campo a assinar no webhook da Meta: <code className="bg-blue-100 dark:bg-blue-950 text-blue-900 dark:text-blue-300 border border-blue-200/60 dark:border-blue-800/60 px-1 py-0.5 rounded font-mono">messages</code>
+                  <div className="flex flex-wrap items-center gap-2 pt-0.5 text-[10px]">
+                    <span className="text-blue-800 dark:text-blue-300 font-semibold">
+                      Campo a assinar: <code className="bg-blue-100 dark:bg-blue-950 text-blue-900 dark:text-blue-300 border border-blue-200/60 dark:border-blue-800/60 px-1 py-0.2 rounded font-mono">messages</code>
+                    </span>
+                    <span className="text-emerald-700 dark:text-emerald-400 font-semibold flex items-center gap-1">
+                      <CheckCircle className="w-3 h-3 text-emerald-600 dark:text-emerald-400 shrink-0" />
+                      <span>Aceito e pronto para validação</span>
+                    </span>
                   </div>
                 </div>
               </div>
 
-              <div className="flex items-center justify-end gap-2 pt-2 border-t border-slate-100 dark:border-slate-800">
+              {/* Resultado do Teste de Credenciais em Tempo Real */}
+              {credentialsTestResult && (
+                <div
+                  className={`p-3.5 rounded-xl border text-xs space-y-1.5 animate-in fade-in duration-200 ${
+                    credentialsTestResult.valid
+                      ? 'bg-emerald-50 dark:bg-emerald-950/60 border-emerald-200 dark:border-emerald-800 text-emerald-900 dark:text-emerald-200'
+                      : 'bg-red-50 dark:bg-red-950/60 border-red-200 dark:border-red-900 text-red-900 dark:text-red-200'
+                  }`}
+                >
+                  <div className="font-bold flex items-center gap-2 text-xs">
+                    {credentialsTestResult.valid ? (
+                      <>
+                        <CheckCircle className="w-4 h-4 text-emerald-600 dark:text-emerald-400 shrink-0" />
+                        <span>Credenciais Validadas com Sucesso na Meta!</span>
+                      </>
+                    ) : (
+                      <>
+                        <AlertCircle className="w-4 h-4 text-red-600 dark:text-red-400 shrink-0" />
+                        <span>Falha na Verificação das Credenciais</span>
+                      </>
+                    )}
+                  </div>
+
+                  {credentialsTestResult.valid ? (
+                    <div className="space-y-1 text-[11px] pt-1">
+                      <div>
+                        📱 <strong>Número Reconhecido:</strong> <span className="font-mono">{credentialsTestResult.phone}</span> ({credentialsTestResult.verifiedName})
+                      </div>
+                      <div>
+                        🔑 <strong>Tipo de Token:</strong> {credentialsTestResult.tokenExpiresIn}
+                      </div>
+                      <div>
+                        🛡️ <strong>Qualidade da Linha:</strong> <span className="font-semibold text-emerald-700 dark:text-emerald-400">{credentialsTestResult.qualityRating}</span>
+                      </div>
+                      {credentialsTestResult.warnings?.map((w: string, idx: number) => (
+                        <div key={idx} className="p-2 rounded bg-amber-50 dark:bg-amber-950/50 border border-amber-200 dark:border-amber-800 text-amber-800 dark:text-amber-200 text-[10px] flex items-center gap-1.5 mt-1">
+                          <AlertTriangle className="w-3.5 h-3.5 text-amber-600 shrink-0" />
+                          <span>{w}</span>
+                        </div>
+                      ))}
+                    </div>
+                  ) : (
+                    <p className="text-[11px] text-red-700 dark:text-red-300">
+                      {credentialsTestResult.error}
+                    </p>
+                  )}
+                </div>
+              )}
+
+              <div className="flex items-center justify-between gap-2 pt-2 border-t border-slate-100 dark:border-slate-800">
                 <button
                   type="button"
-                  onClick={() => setIsMetaModalOpen(false)}
-                  className="px-4 py-2 rounded-xl border border-slate-200 dark:border-slate-700 hover:bg-slate-50 dark:hover:bg-slate-800 font-semibold text-xs text-slate-700 dark:text-slate-300 cursor-pointer transition-colors"
+                  onClick={() => handleTestCredentialsNow()}
+                  disabled={testingCredentials || !metaPhoneNumberId.trim() || (!editingInstanceId && !metaAccessToken.trim())}
+                  className="px-4 py-2 rounded-xl border border-emerald-300 dark:border-emerald-700 bg-emerald-50 hover:bg-emerald-100 dark:bg-emerald-950/60 dark:hover:bg-emerald-900/60 text-emerald-800 dark:text-emerald-200 font-semibold text-xs flex items-center gap-1.5 cursor-pointer transition-colors disabled:opacity-50"
+                  title="Testa a validade do Token e do Phone Number ID com a Meta antes de salvar"
                 >
-                  Cancelar
-                </button>
-                <button
-                  type="submit"
-                  disabled={metaConnecting}
-                  className="px-5 py-2 rounded-xl bg-blue-600 hover:bg-blue-700 text-white font-semibold text-xs shadow-lg shadow-blue-600/20 flex items-center gap-2 cursor-pointer transition-all disabled:opacity-50"
-                >
-                  {metaConnecting ? (
+                  {testingCredentials ? (
                     <>
                       <RefreshCw className="w-3.5 h-3.5 animate-spin" />
-                      <span>Validando com a Meta...</span>
+                      <span>Testando com a Meta...</span>
                     </>
                   ) : (
                     <>
-                      <Check className="w-4 h-4" />
-                      <span>Testar e Conectar Canal Oficial</span>
+                      <Activity className="w-3.5 h-3.5 text-emerald-600 dark:text-emerald-400" />
+                      <span>Testar Credenciais Agora</span>
                     </>
                   )}
                 </button>
+
+                <div className="flex items-center gap-2">
+                  <button
+                    type="button"
+                    onClick={() => {
+                      setIsMetaModalOpen(false);
+                      setEditingInstanceId(null);
+                      setCredentialsTestResult(null);
+                    }}
+                    className="px-4 py-2 rounded-xl border border-slate-200 dark:border-slate-700 hover:bg-slate-50 dark:hover:bg-slate-800 font-semibold text-xs text-slate-700 dark:text-slate-300 cursor-pointer transition-colors"
+                  >
+                    Cancelar
+                  </button>
+                  <button
+                    type="submit"
+                    disabled={metaConnecting}
+                    className="px-5 py-2 rounded-xl bg-blue-600 hover:bg-blue-700 text-white font-semibold text-xs shadow-lg shadow-blue-600/20 flex items-center gap-2 cursor-pointer transition-all disabled:opacity-50"
+                  >
+                    {metaConnecting ? (
+                      <>
+                        <RefreshCw className="w-3.5 h-3.5 animate-spin" />
+                        <span>Salvando na Plataforma...</span>
+                      </>
+                    ) : (
+                      <>
+                        <Check className="w-4 h-4" />
+                        <span>{editingInstanceId ? 'Salvar Alterações de Credenciais' : 'Conectar Canal Oficial'}</span>
+                      </>
+                    )}
+                  </button>
+                </div>
               </div>
             </form>
+          </div>
+        </div>
+      )}
+
+      {/* MODAL DE DIAGNÓSTICO E SAÚDE DE CREDENCIAIS (TEMPO REAL) */}
+      {isDiagnosticModalOpen && (
+        <div className="fixed inset-0 bg-black/70 backdrop-blur-sm z-50 flex items-center justify-center p-4">
+          <div className="bg-white dark:bg-[#0c1322] rounded-2xl shadow-2xl border border-slate-200 dark:border-slate-800 max-w-lg w-full p-6 text-xs text-slate-800 dark:text-slate-200 relative max-h-[85vh] flex flex-col">
+            <div className="flex items-center justify-between pb-3 border-b border-slate-100 dark:border-slate-800">
+              <div className="flex items-center gap-2">
+                <div className="w-8 h-8 rounded-lg bg-emerald-100 dark:bg-emerald-950/80 text-emerald-700 dark:text-emerald-400 flex items-center justify-center font-bold">
+                  <Activity className="w-5 h-5" />
+                </div>
+                <div>
+                  <h3 className="font-bold text-slate-900 dark:text-white text-sm">
+                    Saúde das Credenciais: {activeDiagnosticChannel?.name || 'Meta'}
+                  </h3>
+                  <p className="text-[11px] text-slate-400">Verificação de conexão ao vivo com a Meta Graph API v21.0</p>
+                </div>
+              </div>
+              <button
+                onClick={() => setIsDiagnosticModalOpen(false)}
+                className="text-slate-400 hover:text-slate-600 dark:text-slate-400 dark:hover:text-slate-200 p-1 rounded-lg cursor-pointer transition-colors"
+              >
+                <X className="w-4 h-4" />
+              </button>
+            </div>
+
+            <div className="py-4 space-y-3 overflow-y-auto">
+              {testingCredentials ? (
+                <div className="py-8 text-center space-y-3">
+                  <RefreshCw className="w-8 h-8 animate-spin text-emerald-600 mx-auto" />
+                  <p className="font-semibold text-slate-800 dark:text-slate-200">
+                    Consultando servidores oficiais da Meta...
+                  </p>
+                  <p className="text-[11px] text-slate-400">
+                    Testando validade do Token, Phone Number ID e permissões da WABA.
+                  </p>
+                </div>
+              ) : credentialsTestResult ? (
+                <div className="space-y-3">
+                  <div
+                    className={`p-3.5 rounded-xl border flex items-center gap-3 ${
+                      credentialsTestResult.valid
+                        ? 'bg-emerald-50 dark:bg-emerald-950/60 border-emerald-200 dark:border-emerald-800 text-emerald-900 dark:text-emerald-200'
+                        : 'bg-red-50 dark:bg-red-950/60 border-red-200 dark:border-red-900 text-red-900 dark:text-red-200'
+                    }`}
+                  >
+                    {credentialsTestResult.valid ? (
+                      <CheckCircle className="w-6 h-6 text-emerald-600 shrink-0" />
+                    ) : (
+                      <AlertCircle className="w-6 h-6 text-red-600 shrink-0" />
+                    )}
+                    <div>
+                      <h4 className="font-bold text-xs">
+                        {credentialsTestResult.valid ? 'Credenciais 100% Operacionais e Ativas' : 'Problema Detectado nas Credenciais'}
+                      </h4>
+                      <p className="text-[11px] opacity-90">
+                        {credentialsTestResult.message || credentialsTestResult.error}
+                      </p>
+                    </div>
+                  </div>
+
+                  {credentialsTestResult.valid && (
+                    <div className="grid grid-cols-2 gap-2 text-[11px]">
+                      <div className="p-2.5 rounded-lg bg-slate-50 dark:bg-[#111927] border border-slate-200 dark:border-slate-800">
+                        <span className="text-[10px] text-slate-400 uppercase font-bold block mb-0.5">Telefone Verificado</span>
+                        <span className="font-bold text-slate-900 dark:text-white font-mono">{credentialsTestResult.phone}</span>
+                        <span className="text-[10px] text-emerald-600 block mt-0.5">✓ {credentialsTestResult.verifiedName}</span>
+                      </div>
+
+                      <div className="p-2.5 rounded-lg bg-slate-50 dark:bg-[#111927] border border-slate-200 dark:border-slate-800">
+                        <span className="text-[10px] text-slate-400 uppercase font-bold block mb-0.5">Qualidade da Linha</span>
+                        <span className="font-bold text-emerald-600 block">{credentialsTestResult.qualityRating}</span>
+                        <span className="text-[10px] text-slate-400 block mt-0.5">Status: {credentialsTestResult.status}</span>
+                      </div>
+
+                      <div className="p-2.5 rounded-lg bg-slate-50 dark:bg-[#111927] border border-slate-200 dark:border-slate-800 col-span-2">
+                        <span className="text-[10px] text-slate-400 uppercase font-bold block mb-0.5">Tipo do Access Token</span>
+                        <span className={`font-semibold block ${credentialsTestResult.isPermanent ? 'text-emerald-600' : 'text-amber-600'}`}>
+                          {credentialsTestResult.tokenExpiresIn}
+                        </span>
+                      </div>
+
+                      <div className="p-2.5 rounded-lg bg-slate-50 dark:bg-[#111927] border border-slate-200 dark:border-slate-800 col-span-2">
+                        <span className="text-[10px] text-slate-400 uppercase font-bold block mb-0.5">Templates Aprovados</span>
+                        <span className="font-semibold text-slate-800 dark:text-slate-200 block">
+                          {credentialsTestResult.templatesAccess
+                            ? `✓ Permissão concedida (${credentialsTestResult.templatesCount} templates encontrados)`
+                            : 'WABA não vinculada ou sem permissão para listar templates'}
+                        </span>
+                      </div>
+                    </div>
+                  )}
+
+                  {credentialsTestResult.warnings?.map((w: string, idx: number) => (
+                    <div key={idx} className="p-3 rounded-lg bg-amber-50 dark:bg-amber-950/50 border border-amber-200 dark:border-amber-800 text-amber-800 dark:text-amber-200 text-[11px] flex items-start gap-2">
+                      <AlertTriangle className="w-4 h-4 text-amber-600 shrink-0 mt-0.5" />
+                      <span>{w}</span>
+                    </div>
+                  ))}
+                </div>
+              ) : null}
+            </div>
+
+            <div className="flex items-center justify-between gap-2 pt-3 border-t border-slate-100 dark:border-slate-800 mt-auto">
+              <button
+                type="button"
+                onClick={() => {
+                  if (activeDiagnosticChannel) {
+                    setIsDiagnosticModalOpen(false);
+                    handleEditMetaInstance(activeDiagnosticChannel);
+                  }
+                }}
+                className="px-3.5 py-2 rounded-xl border border-slate-200 dark:border-slate-700 hover:bg-slate-50 dark:hover:bg-slate-800 text-slate-700 dark:text-slate-200 font-semibold text-xs flex items-center gap-1.5 transition-colors cursor-pointer"
+              >
+                <Key className="w-3.5 h-3.5 text-blue-500" />
+                <span>Atualizar / Trocar Token</span>
+              </button>
+
+              <div className="flex items-center gap-2">
+                <button
+                  type="button"
+                  onClick={() => activeDiagnosticChannel && handleTestCredentialsNow(activeDiagnosticChannel.id)}
+                  disabled={testingCredentials}
+                  className="px-3.5 py-2 rounded-xl bg-slate-100 hover:bg-slate-200 dark:bg-slate-800 dark:hover:bg-slate-700 text-slate-800 dark:text-slate-200 font-semibold text-xs flex items-center gap-1.5 transition-colors cursor-pointer"
+                >
+                  <RefreshCw className={`w-3.5 h-3.5 ${testingCredentials ? 'animate-spin' : ''}`} />
+                  <span>Re-testar</span>
+                </button>
+                <button
+                  type="button"
+                  onClick={() => setIsDiagnosticModalOpen(false)}
+                  className="px-4 py-2 rounded-xl bg-emerald-600 hover:bg-emerald-700 text-white font-semibold text-xs transition-colors cursor-pointer"
+                >
+                  Fechar
+                </button>
+              </div>
+            </div>
           </div>
         </div>
       )}
