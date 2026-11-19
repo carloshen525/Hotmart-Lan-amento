@@ -560,8 +560,12 @@ export async function PUT(request: Request, { params }: { params: { id: string }
       return NextResponse.json({ error: 'Automação não encontrada' }, { status: 404 });
     }
 
-    // Regra 1: Validação no backend - Impedir salvar datas no passado
-    if (body.nodes !== undefined) {
+    const targetStatus = body.status !== undefined ? body.status : existing.status;
+    const isActivating = body.status === 'ACTIVE' || body.forceActivate === true;
+
+    // Regra 1: Validação no backend - Impedir salvar datas no passado APENAS quando ativando o fluxo
+    // (Permite pausar ou salvar rascunho sem bloquear por timers que já passaram no tempo real)
+    if (body.nodes !== undefined && targetStatus === 'ACTIVE') {
       const timerValidationError = validateTimerNodes(body.nodes);
       if (timerValidationError) {
         return NextResponse.json({ error: timerValidationError }, { status: 400 });
@@ -573,9 +577,6 @@ export async function PUT(request: Request, { params }: { params: { id: string }
       body.edges !== undefined ||
       body.triggerConfig !== undefined ||
       body.triggerType !== undefined;
-
-    const targetStatus = body.status !== undefined ? body.status : existing.status;
-    const isActivating = body.status === 'ACTIVE' || body.forceActivate === true;
 
     // Regra: Toda edição dentro do fluxo só pode ser feita com ele pausado/desativado.
     // Se a automação estiver ATIVA no banco e o usuário tentar salvar alterações estruturais sem pausar:
@@ -731,6 +732,50 @@ export async function PUT(request: Request, { params }: { params: { id: string }
           console.error('[Automation Engine] Background sync error:', err);
         });
       }
+    } else if (automation.status === 'PAUSED' || automation.status === 'INACTIVE') {
+      // INTERRUPÇÃO IMEDIATA E ABSOLUTA AO PAUSAR O FLUXO:
+      // 1. Cancela todos os timers agendados pendentes vinculados a esta automação
+      await prisma.scheduledJob.updateMany({
+        where: {
+          enrollment: { automationId: params.id },
+          status: { in: ['PENDING', 'PROCESSING'] },
+        },
+        data: {
+          status: 'CANCELLED',
+          lastError: 'Cancelado automaticamente: automação pausada pelo usuário',
+        },
+      }).catch(() => {});
+
+      // 2. Cancela mensagens pendentes na fila de WhatsApp desta automação
+      await prisma.$executeRawUnsafe(`
+        UPDATE whatsapp_queue
+        SET status = 'CANCELLED', error_message = 'Cancelado automaticamente: automação pausada pelo usuário', updated_at = CURRENT_TIMESTAMP
+        WHERE automation_id = ? AND status IN ('PENDING', 'PROCESSING')
+      `, params.id).catch(() => {});
+
+      // 3. Cancela mensagens pendentes na fila de E-mails desta automação
+      await prisma.$executeRawUnsafe(`
+        UPDATE email_queue
+        SET status = 'CANCELLED', error_message = 'Cancelado automaticamente: automação pausada pelo usuário', updated_at = CURRENT_TIMESTAMP
+        WHERE automation_id = ? AND status IN ('PENDING', 'PROCESSING')
+      `, params.id).catch(() => {});
+
+      // 4. Pausa todas as inscrições ativas e em espera
+      await prisma.automationEnrollment.updateMany({
+        where: {
+          automationId: params.id,
+          status: { in: ['WAITING', 'ACTIVE'] },
+        },
+        data: { status: 'PAUSED' },
+      }).catch(() => {});
+
+      await prisma.automationGroupEnrollment.updateMany({
+        where: {
+          automationId: params.id,
+          status: { in: ['WAITING', 'ACTIVE'] },
+        },
+        data: { status: 'PAUSED' },
+      }).catch(() => {});
     }
 
     return NextResponse.json({ success: true, automation });

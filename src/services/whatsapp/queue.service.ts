@@ -565,6 +565,40 @@ export class WhatsappQueueService {
    * Envia fisicamente a mensagem e conclui a etapa na automação
    */
   private static async dispatchItem(item: any): Promise<void> {
+    // Guarda Absoluta de Automação Ativa: Se o disparo pertence a uma automação, verifica se ela continua ATIVA
+    const autoId = item.automationId || item.automation_id;
+    if (autoId) {
+      const parentAuto = await prisma.automation.findUnique({
+        where: { id: autoId },
+        select: { id: true, name: true, status: true },
+      }).catch(() => null);
+
+      if (parentAuto && parentAuto.status !== 'ACTIVE') {
+        console.warn(
+          `[WhatsappQueueService] 🛑 DISPARO BLOQUEADO: Automação "${parentAuto.name}" está ${parentAuto.status}. Cancelando item ${item.id}.`
+        );
+        try {
+          if ((prisma as any).whatsappQueue) {
+            await (prisma as any).whatsappQueue.update({
+              where: { id: item.id },
+              data: {
+                status: 'CANCELLED',
+                errorMessage: `Cancelado: automação está ${parentAuto.status}`,
+              },
+            });
+          }
+        } catch {}
+
+        await prisma.$executeRawUnsafe(`
+          UPDATE whatsapp_queue
+          SET status = 'CANCELLED', error_message = 'Cancelado: automação pausada pelo usuário', updated_at = CURRENT_TIMESTAMP
+          WHERE id = ?
+        `, item.id).catch(() => {});
+
+        return; // Interrompe o envio imediatamente!
+      }
+    }
+
     const rawBlocks = item.blocks ? (typeof item.blocks === 'string' ? JSON.parse(item.blocks) : item.blocks) : null;
     const rawVars = item.variables ? (typeof item.variables === 'string' ? JSON.parse(item.variables) : item.variables) : {};
 
@@ -781,9 +815,22 @@ export class WhatsappQueueService {
             },
           });
 
-          // Avança dinamicamente para os próximos nós conectados no fluxo
-          const { automationEngine } = await import('@/services/automation/engine');
-          await automationEngine.advanceFromSubflowNode(enrollmentId, nodeId, tenantId, automationId);
+          // Só avança para os próximos nós se a automação continuar estritamente ATIVA
+          let shouldAdvance = true;
+          if (automationId) {
+            const checkAuto = await prisma.automation.findUnique({
+              where: { id: automationId },
+              select: { status: true },
+            }).catch(() => null);
+            if (!checkAuto || checkAuto.status !== 'ACTIVE') {
+              shouldAdvance = false;
+            }
+          }
+
+          if (shouldAdvance) {
+            const { automationEngine } = await import('@/services/automation/engine');
+            await automationEngine.advanceFromSubflowNode(enrollmentId, nodeId, tenantId, automationId);
+          }
         } catch (advErr: any) {
           console.error('[WhatsappQueueService] Erro ao avançar automação após envio:', advErr.message);
         }
@@ -807,9 +854,22 @@ export class WhatsappQueueService {
             },
           });
 
-          // Avança dinamicamente para os próximos nós conectados no fluxo de grupo
-          const { automationEngine } = await import('@/services/automation/engine');
-          await automationEngine.advanceGroupNode(groupEnrollmentId, nodeId, tenantId, automationId);
+          // Só avança para os próximos nós se a automação de grupo continuar estritamente ATIVA
+          let shouldAdvanceGroup = true;
+          if (automationId) {
+            const checkAuto = await prisma.automation.findUnique({
+              where: { id: automationId },
+              select: { status: true },
+            }).catch(() => null);
+            if (!checkAuto || checkAuto.status !== 'ACTIVE') {
+              shouldAdvanceGroup = false;
+            }
+          }
+
+          if (shouldAdvanceGroup) {
+            const { automationEngine } = await import('@/services/automation/engine');
+            await automationEngine.advanceGroupNode(groupEnrollmentId, nodeId, tenantId, automationId);
+          }
         } catch (advErr: any) {
           console.error('[WhatsappQueueService] Erro ao avançar automação de grupo após envio:', advErr.message);
         }

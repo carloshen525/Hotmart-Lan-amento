@@ -31,6 +31,15 @@ async function runTestSuite() {
     },
   });
 
+  // Limpeza preventiva antes de iniciar os testes para evitar acúmulo de fluxos de teste
+  try {
+    const testTenantIds = [testTenant.id, otherTenant.id];
+    await prisma.scheduledJob.deleteMany({ where: { tenantId: { in: testTenantIds } } });
+    await prisma.automationEnrollment.deleteMany({ where: { tenantId: { in: testTenantIds } } });
+    await prisma.automationGroupEnrollment.deleteMany({ where: { tenantId: { in: testTenantIds } } });
+    await prisma.automation.deleteMany({ where: { tenantId: { in: testTenantIds } } });
+  } catch {}
+
   try {
     // -------------------------------------------------------------
     // TESTE 1: Cadastro e edição de contatos
@@ -8117,6 +8126,13 @@ async function runTestSuite() {
     console.error('❌ ERRO NO TESTE:', err);
     process.exit(1);
   } finally {
+    try {
+      const testTenantIds = [testTenant.id, otherTenant.id];
+      await prisma.scheduledJob.deleteMany({ where: { tenantId: { in: testTenantIds } } });
+      await prisma.automationEnrollment.deleteMany({ where: { tenantId: { in: testTenantIds } } });
+      await prisma.automationGroupEnrollment.deleteMany({ where: { tenantId: { in: testTenantIds } } });
+      await prisma.automation.deleteMany({ where: { tenantId: { in: testTenantIds } } });
+    } catch {}
     await prisma.$disconnect();
   }
 }

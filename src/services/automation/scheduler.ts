@@ -17,7 +17,7 @@ export class AutomationScheduler {
       },
       include: {
         contact: { include: { tags: { include: { tag: true } } } },
-        enrollment: true,
+        enrollment: { include: { automation: true } },
       },
       take: 50, // Limite seguro por lote para evitar contenção
     });
@@ -78,11 +78,23 @@ export class AutomationScheduler {
           }
         }
 
-        // 2. Se a inscrição foi cancelada externamente
-        if (job.enrollment && job.enrollment.status === 'CANCELLED') {
+        // 2. Se a inscrição ou a automação foram canceladas/pausadas
+        if (job.enrollment && (job.enrollment.status === 'CANCELLED' || job.enrollment.status === 'PAUSED')) {
           await prisma.scheduledJob.update({
             where: { id: job.id },
-            data: { status: 'CANCELLED', lastError: 'Inscrição cancelada' },
+            data: { status: 'CANCELLED', lastError: `Inscrição ${job.enrollment.status}` },
+          });
+          cancelled++;
+          continue;
+        }
+
+        if (job.enrollment?.automation && job.enrollment.automation.status !== 'ACTIVE') {
+          console.warn(
+            `[AutomationScheduler] 🛑 CANCELANDO JOB ${job.id}: Automação "${job.enrollment.automation.name}" está ${job.enrollment.automation.status}.`
+          );
+          await prisma.scheduledJob.update({
+            where: { id: job.id },
+            data: { status: 'CANCELLED', lastError: `Automação está ${job.enrollment.automation.status}` },
           });
           cancelled++;
           continue;

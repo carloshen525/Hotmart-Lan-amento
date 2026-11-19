@@ -163,7 +163,12 @@ export class AutomationEngine {
       },
     });
 
-    if (!enrollment || enrollment.status === 'CANCELLED') {
+    if (
+      !enrollment ||
+      enrollment.status === 'CANCELLED' ||
+      enrollment.status === 'PAUSED' ||
+      enrollment.automation?.status !== 'ACTIVE'
+    ) {
       return;
     }
 
@@ -1093,6 +1098,17 @@ export class AutomationEngine {
       autoId = enr?.automationId || '';
     }
 
+    // Guarda Absoluta: Se a automação estiver PAUSADA ou INATIVA, aborta imediatamente
+    if (autoId) {
+      const parentAuto = await prisma.automation.findUnique({
+        where: { id: autoId },
+        select: { status: true },
+      });
+      if (!parentAuto || parentAuto.status !== 'ACTIVE') {
+        return;
+      }
+    }
+
     const execKey = `${contact.id}_${node.id}`;
     if (this.executingNodes.has(execKey)) {
       return; // Prevenção de concorrência: nó já em execução ativa para este contato
@@ -1629,7 +1645,13 @@ export class AutomationEngine {
       include: { contact: true, automation: true },
     });
 
-    if (!enrollment || enrollment.status === 'COMPLETED' || enrollment.status === 'CANCELLED') {
+    if (
+      !enrollment ||
+      enrollment.status === 'COMPLETED' ||
+      enrollment.status === 'CANCELLED' ||
+      enrollment.status === 'PAUSED' ||
+      enrollment.automation?.status !== 'ACTIVE'
+    ) {
       return;
     }
 
@@ -2323,7 +2345,12 @@ export class AutomationEngine {
       },
     });
 
-    if (!enrollment || enrollment.status === 'CANCELLED') {
+    if (
+      !enrollment ||
+      enrollment.status === 'CANCELLED' ||
+      enrollment.status === 'PAUSED' ||
+      enrollment.automation?.status !== 'ACTIVE'
+    ) {
       return;
     }
 
@@ -3095,7 +3122,14 @@ export class AutomationEngine {
       include: { automation: true },
     });
 
-    if (!enrollment || enrollment.status === 'CANCELLED') return;
+    if (
+      !enrollment ||
+      enrollment.status === 'CANCELLED' ||
+      enrollment.status === 'PAUSED' ||
+      enrollment.automation?.status !== 'ACTIVE'
+    ) {
+      return;
+    }
 
     const automation = enrollment.automation;
     const edges: WorkflowEdge[] = JSON.parse(automation.edges || '[]');
