@@ -137,21 +137,18 @@ export function PlatformLogo({ platformId, size = 40, className = '' }: Platform
     );
   }
 
-  // 7. PERFECT PAY (Fundo branco com "P" geométrico verde e seta de alta)
+  // 7. PERFECT PAY (Logo oficial Perfect Pay - Fundo verde-petróleo com P geométrico e seta)
   if (p === 'PERFECTPAY') {
     return (
       <div
         style={{ width: s, height: s }}
-        className={`rounded-full bg-white border border-slate-200 flex items-center justify-center shrink-0 shadow-xs ${className}`}
+        className={`rounded-full overflow-hidden bg-[#00a896] flex items-center justify-center shrink-0 shadow-xs ${className}`}
       >
-        <svg width={size * 0.62} height={size * 0.62} viewBox="0 0 28 28" fill="none">
-          <path
-            d="M7 6H16.5C19.5 6 22 8.5 22 11.5C22 14.5 19.5 17 16.5 17H11.5V23H7V6Z"
-            fill="#00A86B"
-          />
-          <polygon points="12,10 16,10 16,13 12,13" fill="white" />
-          <polygon points="21,5 24,8 21,11 21,8.5 18,8.5 18,7.5 21,7.5" fill="#00A86B" />
-        </svg>
+        <img
+          src="/uploads/perfectpay.png"
+          alt="Perfect Pay"
+          className="w-full h-full object-cover"
+        />
       </div>
     );
   }
@@ -219,16 +216,18 @@ export function PlatformLogo({ platformId, size = 40, className = '' }: Platform
     );
   }
 
-  // 11. SELLFLUX (Escuro com SFx. em branco)
+  // 11. SELLFLUX (Logo oficial SellFlux - Quadrados ciano e roxo com seta branca)
   if (p === 'SELLFLUX') {
     return (
       <div
         style={{ width: s, height: s }}
-        className={`rounded-full bg-[#0B0E14] border border-zinc-700/80 flex items-center justify-center shrink-0 shadow-xs ${className}`}
+        className={`rounded-full overflow-hidden bg-white flex items-center justify-center shrink-0 shadow-xs ${className}`}
       >
-        <span className="text-white font-extrabold text-[11px] tracking-tight">
-          SF<span className="text-blue-400 font-bold">x</span>.
-        </span>
+        <img
+          src="/uploads/sellflux.webp"
+          alt="SellFlux"
+          className="w-full h-full object-cover"
+        />
       </div>
     );
   }
@@ -254,25 +253,18 @@ export function PlatformLogo({ platformId, size = 40, className = '' }: Platform
     );
   }
 
-  // 13. TICTO & TICTO V2 (Fundo roxo escuro com brasão estilizado 'T' trirradiado)
+  // 13. TICTO & TICTO V2 (Logo oficial Ticto com T branco e entalhe angular)
   if (p.includes('TICTO')) {
     return (
       <div
         style={{ width: s, height: s }}
-        className={`rounded-full bg-[#320838] border border-purple-500/50 flex items-center justify-center shrink-0 shadow-xs ${className}`}
+        className={`rounded-full overflow-hidden bg-black flex items-center justify-center shrink-0 shadow-xs ${className}`}
       >
-        <svg width={size * 0.6} height={size * 0.6} viewBox="0 0 24 24" fill="none">
-          <path
-            d="M12 4C8 4 6 6 6 8C6 11 10 12 12 15C14 12 18 11 18 8C18 6 16 4 12 4Z"
-            fill="white"
-          />
-          <path
-            d="M12 15V20"
-            stroke="white"
-            strokeWidth="2.5"
-            strokeLinecap="round"
-          />
-        </svg>
+        <img
+          src="/uploads/ticto.png"
+          alt="Ticto"
+          className="w-full h-full object-cover"
+        />
       </div>
     );
   }
@@ -374,23 +366,18 @@ export function PlatformLogo({ platformId, size = 40, className = '' }: Platform
     );
   }
 
-  // 20. WORDPRESS (Azul oficial com anel e 'W' clássico)
+  // 20. WORDPRESS (Logo oficial WordPress)
   if (p === 'WORDPRESS') {
     return (
       <div
         style={{ width: s, height: s }}
-        className={`rounded-full bg-[#21759B] flex items-center justify-center shrink-0 shadow-xs ${className}`}
+        className={`rounded-full overflow-hidden bg-[#21759B] flex items-center justify-center shrink-0 shadow-xs ${className}`}
       >
-        <svg width={size * 0.68} height={size * 0.68} viewBox="0 0 24 24" fill="none">
-          <circle cx="12" cy="12" r="10" stroke="white" strokeWidth="1.2" />
-          <path
-            d="M3.5 12C3.5 14.5 4.6 16.8 6.4 18.3L10.2 7.5L7 7.5M12 7.5L8.5 18.8C9.6 19.2 10.8 19.5 12 19.5C13.1 19.5 14.2 19.2 15.2 18.8L12.5 11M14.5 7.5L13.2 11.2L17.2 18.4C19 16.9 20.2 14.6 20.2 12C20.2 9.8 19.2 7.8 17.7 6.5"
-            stroke="white"
-            strokeWidth="1.2"
-            strokeLinecap="round"
-            strokeLinejoin="round"
-          />
-        </svg>
+        <img
+          src="/uploads/wordpress.avif"
+          alt="WordPress"
+          className="w-full h-full object-cover"
+        />
       </div>
     );
   }
@@ -525,27 +512,18 @@ export function PlatformLogo({ platformId, size = 40, className = '' }: Platform
     );
   }
 
-  // 29. KIWIFY (Verde com fatia de kiwi autêntica)
+  // 29. KIWIFY (Logo oficial Kiwify - Fundo verde com fatia de kiwi branca)
   if (p === 'KIWIFY') {
     return (
       <div
         style={{ width: s, height: s }}
-        className={`rounded-full bg-[#00A868] flex items-center justify-center shrink-0 shadow-xs ${className}`}
+        className={`rounded-full overflow-hidden bg-[#10b981] flex items-center justify-center shrink-0 shadow-xs ${className}`}
       >
-        <svg width={size * 0.65} height={size * 0.65} viewBox="0 0 24 24" fill="none">
-          <circle cx="12" cy="12" r="9.5" fill="#10B981" />
-          <circle cx="12" cy="12" r="4" fill="#D1FAE5" />
-          <circle cx="12" cy="12" r="2" fill="#E6FFFA" />
-          {/* Sementes do Kiwi */}
-          <circle cx="12" cy="7" r="0.7" fill="#18181b" />
-          <circle cx="12" cy="17" r="0.7" fill="#18181b" />
-          <circle cx="7" cy="12" r="0.7" fill="#18181b" />
-          <circle cx="17" cy="12" r="0.7" fill="#18181b" />
-          <circle cx="8.5" cy="8.5" r="0.7" fill="#18181b" />
-          <circle cx="15.5" cy="8.5" r="0.7" fill="#18181b" />
-          <circle cx="8.5" cy="15.5" r="0.7" fill="#18181b" />
-          <circle cx="15.5" cy="15.5" r="0.7" fill="#18181b" />
-        </svg>
+        <img
+          src="/uploads/kiwify.webp"
+          alt="Kiwify"
+          className="w-full h-full object-cover"
+        />
       </div>
     );
   }
@@ -636,28 +614,18 @@ export function PlatformLogo({ platformId, size = 40, className = '' }: Platform
     );
   }
 
-  // 35. MONETIZZE (Azul com emblema circular '$ / M')
+  // 35. MONETIZZE (Logo oficial Monetizze - Azul com emblema $ branco em loop)
   if (p === 'MONETIZZE') {
     return (
       <div
         style={{ width: s, height: s }}
-        className={`rounded-full bg-[#0B5C9E] flex items-center justify-center shrink-0 shadow-xs ${className}`}
+        className={`rounded-full overflow-hidden bg-[#0050ff] flex items-center justify-center shrink-0 shadow-xs ${className}`}
       >
-        <svg width={size * 0.68} height={size * 0.68} viewBox="0 0 24 24" fill="none">
-          <circle cx="12" cy="12" r="9" stroke="white" strokeWidth="1.8" />
-          <circle cx="12" cy="12" r="6" stroke="white" strokeWidth="1.2" strokeDasharray="3 2" />
-          <text
-            x="12"
-            y="15.5"
-            textAnchor="middle"
-            fill="white"
-            fontSize="10"
-            fontWeight="bold"
-            fontFamily="sans-serif"
-          >
-            $
-          </text>
-        </svg>
+        <img
+          src="/uploads/monetizze.webp"
+          alt="Monetizze"
+          className="w-full h-full object-cover"
+        />
       </div>
     );
   }
@@ -726,14 +694,18 @@ export function PlatformLogo({ platformId, size = 40, className = '' }: Platform
     );
   }
 
-  // 41. BRAIP & BRAIP STATUS ENTREGUE (Roxo vibrante com '3')
+  // 41. BRAIP & BRAIP STATUS ENTREGUE (Logo oficial Braip - Fundo roxo com tipografia oficial)
   if (p.includes('BRAIP')) {
     return (
       <div
         style={{ width: s, height: s }}
-        className={`rounded-full bg-[#7C3AED] flex items-center justify-center shrink-0 shadow-xs ${className}`}
+        className={`rounded-full overflow-hidden bg-[#6C2BD9] flex items-center justify-center shrink-0 shadow-xs ${className}`}
       >
-        <span className="text-white font-black text-sm">3</span>
+        <img
+          src="/uploads/braip.jpg"
+          alt="Braip"
+          className="w-full h-full object-cover"
+        />
       </div>
     );
   }
@@ -750,26 +722,34 @@ export function PlatformLogo({ platformId, size = 40, className = '' }: Platform
     );
   }
 
-  // 43. DOPPUS (Laranja com 'd')
+  // 43. DOPPUS (Logo oficial Doppus - Laranja com d branco)
   if (p.includes('DOPPUS')) {
     return (
       <div
         style={{ width: s, height: s }}
-        className={`rounded-full bg-[#FF6600] flex items-center justify-center shrink-0 shadow-xs ${className}`}
+        className={`rounded-full overflow-hidden bg-[#FF5B00] flex items-center justify-center shrink-0 shadow-xs ${className}`}
       >
-        <span className="text-white font-black text-sm">d</span>
+        <img
+          src="/uploads/doppus.png"
+          alt="Doppus"
+          className="w-full h-full object-cover"
+        />
       </div>
     );
   }
 
-  // 44. EDUZZ (Amarelo ouro com 'E' Eduzz)
+  // 44. EDUZZ (Logo oficial Eduzz - Azul marinho com moeda/sol dourado)
   if (p === 'EDUZZ') {
     return (
       <div
         style={{ width: s, height: s }}
-        className={`rounded-full bg-[#FFC107] flex items-center justify-center shrink-0 shadow-xs ${className}`}
+        className={`rounded-full overflow-hidden bg-[#0B1B3D] flex items-center justify-center shrink-0 shadow-xs ${className}`}
       >
-        <span className="text-slate-900 font-black text-sm">E</span>
+        <img
+          src="/uploads/eduzz.png"
+          alt="Eduzz"
+          className="w-full h-full object-cover"
+        />
       </div>
     );
   }
