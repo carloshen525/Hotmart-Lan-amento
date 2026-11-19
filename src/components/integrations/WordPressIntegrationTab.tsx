@@ -502,31 +502,31 @@ export function WordPressIntegrationTab({
       </div>
 
       {/* Banner Passo a Passo: Elementor Pro */}
-      <div className="p-4 rounded-2xl bg-gradient-to-r from-sky-50 via-indigo-50/60 to-purple-50/40 border border-sky-200/80 shadow-xs">
+      <div className="p-4 rounded-2xl bg-gradient-to-r from-sky-50 via-indigo-50/60 to-purple-50/40 dark:from-sky-950/40 dark:via-indigo-950/30 dark:to-purple-950/20 border border-sky-200/80 dark:border-sky-500/30 shadow-xs">
         <div className="flex items-start gap-3.5">
           <div className="w-9 h-9 rounded-xl bg-sky-600 text-white flex items-center justify-center shrink-0 shadow-sm">
             <Globe className="w-5 h-5" />
           </div>
           <div className="flex-1 text-xs">
-            <h4 className="font-bold text-slate-900 text-sm">
+            <h4 className="font-bold text-slate-900 dark:text-white text-sm">
               Como conectar seu formulário do Elementor Pro em 3 passos rápidos:
             </h4>
             <div className="grid grid-cols-1 md:grid-cols-3 gap-3 mt-2.5">
-              <div className="p-2.5 bg-white/80 rounded-xl border border-sky-200/60">
-                <span className="font-bold text-sky-700 block mb-0.5">1. Crie a Integração</span>
-                <p className="text-slate-600 text-[11px]">
+              <div className="p-2.5 bg-white/80 dark:bg-slate-900/80 rounded-xl border border-sky-200/60 dark:border-sky-500/30">
+                <span className="font-bold text-sky-700 dark:text-sky-300 block mb-0.5">1. Crie a Integração</span>
+                <p className="text-slate-600 dark:text-slate-300 text-[11px]">
                   Clique em <strong>+ Nova Integração</strong>, defina as tags e copie a URL exclusiva do Webhook.
                 </p>
               </div>
-              <div className="p-2.5 bg-white/80 rounded-xl border border-sky-200/60">
-                <span className="font-bold text-sky-700 block mb-0.5">2. Configure no Elementor</span>
-                <p className="text-slate-600 text-[11px]">
+              <div className="p-2.5 bg-white/80 dark:bg-slate-900/80 rounded-xl border border-sky-200/60 dark:border-sky-500/30">
+                <span className="font-bold text-sky-700 dark:text-sky-300 block mb-0.5">2. Configure no Elementor</span>
+                <p className="text-slate-600 dark:text-slate-300 text-[11px]">
                   No Elementor Pro, acesse <strong>Ações Após o Envio (Actions After Submit)</strong> e adicione <strong>Webhook</strong>.
                 </p>
               </div>
-              <div className="p-2.5 bg-white/80 rounded-xl border border-sky-200/60">
-                <span className="font-bold text-sky-700 block mb-0.5">3. Cole a URL e Salve</span>
-                <p className="text-slate-600 text-[11px]">
+              <div className="p-2.5 bg-white/80 dark:bg-slate-900/80 rounded-xl border border-sky-200/60 dark:border-sky-500/30">
+                <span className="font-bold text-sky-700 dark:text-sky-300 block mb-0.5">3. Cole a URL e Salve</span>
+                <p className="text-slate-600 dark:text-slate-300 text-[11px]">
                   Cole a URL fornecida no campo <strong>URL do Webhook</strong> e publique a página. Pronto!
                 </p>
               </div>

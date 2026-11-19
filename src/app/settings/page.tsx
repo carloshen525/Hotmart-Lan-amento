@@ -328,25 +328,25 @@ export default function SettingsPage() {
                 {/* Atalho para Módulo de Plataformas de Checkout */}
                 <Link
                   href="/integrations"
-                  className="p-3.5 rounded-xl border border-indigo-200 bg-gradient-to-r from-indigo-50/60 to-purple-50/60 flex items-center justify-between hover:border-indigo-400 transition-all group"
+                  className="p-3.5 rounded-xl border border-indigo-200 dark:border-indigo-500/30 bg-gradient-to-r from-indigo-50/60 to-purple-50/60 dark:from-indigo-950/40 dark:to-purple-950/30 flex items-center justify-between hover:border-indigo-400 dark:hover:border-indigo-500 transition-all group"
                 >
                   <div className="flex items-center gap-2.5">
                     <div className="w-8 h-8 rounded-lg bg-indigo-600 text-white flex items-center justify-center shadow-xs">
                       <Plug className="w-4 h-4" />
                     </div>
                     <div>
-                      <strong className="block text-xs font-bold text-slate-900 group-hover:text-indigo-600 transition-colors">
+                      <strong className="block text-xs font-bold text-slate-900 dark:text-white group-hover:text-indigo-600 dark:group-hover:text-indigo-400 transition-colors">
                         Plataformas de Checkout (Vendas)
                       </strong>
-                      <span className="text-[11px] text-slate-500">
+                      <span className="text-[11px] text-slate-500 dark:text-slate-400">
                         Hotmart, Kiwify, Cakto, Monetizze, PerfectPay, Eduzz, Braip e Webhooks
                       </span>
                     </div>
                   </div>
-                  <ArrowRight className="w-4 h-4 text-slate-400 group-hover:text-indigo-600 group-hover:translate-x-0.5 transition-all" />
+                  <ArrowRight className="w-4 h-4 text-slate-400 group-hover:text-indigo-600 dark:group-hover:text-indigo-400 group-hover:translate-x-0.5 transition-all" />
                 </Link>
 
-                <div className="p-4 rounded-xl bg-indigo-50/60 border border-indigo-100 text-indigo-950 space-y-2 mt-4">
+                <div className="p-4 rounded-xl bg-indigo-50/60 dark:bg-indigo-950/30 border border-indigo-100 dark:border-indigo-500/30 text-indigo-950 dark:text-indigo-200 space-y-2 mt-4">
                   <div className="flex items-center gap-2 font-bold text-xs text-indigo-700">
                     <ShieldCheck className="w-4 h-4" />
                     <span>Conformidade com a LGPD e Segurança de Dados</span>

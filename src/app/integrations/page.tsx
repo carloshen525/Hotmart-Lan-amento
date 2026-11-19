@@ -767,32 +767,32 @@ export default function IntegrationsPage() {
       {activeTab === 'checkout' && (
         <div className="space-y-6">
           {/* BANNER OFICIAL: WEBHOOK RÁPIDO PARA COPIAR E COLAR NA HOTMART */}
-          <div className="p-5 rounded-2xl bg-gradient-to-r from-orange-50 via-amber-50/70 to-orange-50/50 border border-orange-200/90 shadow-2xs flex flex-col lg:flex-row lg:items-center justify-between gap-4">
+          <div className="p-5 rounded-2xl bg-gradient-to-r from-orange-50 via-amber-50/70 to-orange-50/50 dark:from-orange-950/40 dark:via-amber-950/25 dark:to-orange-950/20 border border-orange-200/90 dark:border-orange-500/30 shadow-2xs flex flex-col lg:flex-row lg:items-center justify-between gap-4">
             <div className="flex items-center gap-3.5">
               <div className="w-11 h-11 rounded-2xl bg-gradient-to-tr from-orange-500 to-amber-500 text-white flex items-center justify-center shadow-md shadow-orange-500/20 shrink-0">
                 <Flame className="w-6 h-6 fill-white" />
               </div>
               <div>
                 <div className="flex items-center gap-2">
-                  <h3 className="font-bold text-slate-900 text-sm sm:text-base">
+                  <h3 className="font-bold text-slate-900 dark:text-white text-sm sm:text-base">
                     URL para envio de dados na Hotmart (Webhook)
                   </h3>
-                  <span className="px-2 py-0.5 rounded-full text-[10px] font-bold bg-orange-100 text-orange-800 border border-orange-200">
+                  <span className="px-2 py-0.5 rounded-full text-[10px] font-bold bg-orange-100 dark:bg-orange-500/20 text-orange-800 dark:text-orange-300 border border-orange-200 dark:border-orange-500/30">
                     Oficial 2.0
                   </span>
                 </div>
-                <p className="text-xs text-slate-600 mt-0.5 leading-relaxed">
+                <p className="text-xs text-slate-600 dark:text-slate-300 mt-0.5 leading-relaxed">
                   Copie esta URL e cole diretamente no campo <strong>&quot;URL para envio de dados&quot;</strong> na tela de Webhooks da Hotmart.
                 </p>
               </div>
             </div>
 
-            <div className="flex items-center gap-2 bg-white p-2 rounded-xl border border-orange-200 shrink-0 shadow-2xs">
+            <div className="flex items-center gap-2 bg-white dark:bg-slate-900/90 p-2 rounded-xl border border-orange-200 dark:border-orange-500/30 shrink-0 shadow-2xs">
               <input
                 type="text"
                 readOnly
                 value={getDirectWebhookUrl()}
-                className="text-xs font-mono text-slate-800 bg-transparent w-48 sm:w-72 focus:outline-none select-all"
+                className="text-xs font-mono text-slate-800 dark:text-orange-200 bg-transparent w-48 sm:w-72 focus:outline-none select-all"
               />
               <button
                 type="button"
