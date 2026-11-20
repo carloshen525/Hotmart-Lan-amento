@@ -329,7 +329,32 @@ export class AutomationEngine {
 
               const firstName = contact.name ? contact.name.trim().split(/\s+/)[0] : '';
               const blocks = (config.blocks as any[]) || [];
-              if (Array.isArray(blocks) && blocks.length > 0) {
+              const effectiveTemplateName = config.templateName || config.metaTemplateName;
+
+              if (effectiveTemplateName) {
+                // Modo Template Oficial da Meta (fura janela de 24h e entrega em massa com segurança)
+                const res = await messageManager.sendWhatsApp({
+                  tenantId,
+                  contactId: contact.id,
+                  phone: contact.phone,
+                  whatsappInstanceId: wppInstanceId,
+                  templateName: effectiveTemplateName,
+                  languageCode: config.templateLanguage || config.metaTemplateLanguage || 'pt_BR',
+                  text: config.text || config.message || `[Template: ${effectiveTemplateName}]`,
+                  variables: {
+                    nome: contact.name || '',
+                    primeiro_nome: firstName || contact.name || '',
+                    email: contact.email || '',
+                    telefone: contact.phone || '',
+                  },
+                });
+                stepDetails = {
+                  whatsappSent: res.success,
+                  templateSent: effectiveTemplateName,
+                  messageId: res.messageId,
+                  provider: res.provider,
+                };
+              } else if (Array.isArray(blocks) && blocks.length > 0) {
                 let lastRes: any = null;
                 for (let i = 0; i < blocks.length; i++) {
                   const b = blocks[i];

@@ -212,6 +212,37 @@ export default function AutomationCanvasPage() {
   const [isFlowWppModalOpen, setIsFlowWppModalOpen] = useState(false);
   const [propagateWppToAllNodes, setPropagateWppToAllNodes] = useState(true);
 
+  // Meta Cloud API - Gerenciador de Templates Oficiais
+  const [metaTemplates, setMetaTemplates] = useState<any[]>([]);
+  const [loadingTemplates, setLoadingTemplates] = useState(false);
+  const [templateFetchError, setTemplateFetchError] = useState<string | null>(null);
+  const [useMetaTemplate, setUseMetaTemplate] = useState(false);
+  const [selectedTemplateName, setSelectedTemplateName] = useState('');
+  const [selectedTemplateLang, setSelectedTemplateLang] = useState('pt_BR');
+
+  const fetchMetaTemplates = async (instanceId?: string) => {
+    const targetInstId = instanceId || selectedWppInstanceId || flowWhatsappInstanceId;
+    if (!targetInstId) return;
+    const inst = availableWppInstances.find((i) => i.id === targetInstId);
+    if (!inst || (inst.provider !== 'META_CLOUD' && inst.provider !== 'WHATSAPP_CLOUD')) return;
+
+    setLoadingTemplates(true);
+    setTemplateFetchError(null);
+    try {
+      const res = await fetch(`/api/whatsapp/meta/templates?instanceId=${targetInstId}`);
+      const data = await res.json();
+      if (data.templates && Array.isArray(data.templates)) {
+        setMetaTemplates(data.templates);
+      } else {
+        setTemplateFetchError(data.error || 'Nenhum template retornado pela Meta');
+      }
+    } catch (e: any) {
+      setTemplateFetchError(e.message || 'Erro ao buscar templates da Meta');
+    } finally {
+      setLoadingTemplates(false);
+    }
+  };
+
   // Modalidade de Automação (Individual vs Grupo) e Gerenciamento de Grupos
   const [targetType, setTargetType] = useState<'INDIVIDUAL' | 'GROUP'>('INDIVIDUAL');
   const [isGroupPanelOpen, setIsGroupPanelOpen] = useState(false);
@@ -2398,6 +2429,16 @@ export default function AutomationCanvasPage() {
       }
       setWppUploadError(null);
       setShowAddBlockMenu(false);
+
+      const effTemplate = cfg.templateName || cfg.metaTemplateName || '';
+      setUseMetaTemplate(Boolean(effTemplate || cfg.useMetaTemplate));
+      setSelectedTemplateName(effTemplate);
+      setSelectedTemplateLang(cfg.templateLanguage || cfg.metaTemplateLanguage || 'pt_BR');
+
+      const foundInst = availableWppInstances.find((i) => i.id === (instId || ''));
+      if (foundInst && (foundInst.provider === 'META_CLOUD' || foundInst.provider === 'WHATSAPP_CLOUD')) {
+        fetchMetaTemplates(foundInst.id);
+      }
     }
     setIsMessageDrawerOpen(true);
   };
@@ -2618,11 +2659,18 @@ export default function AutomationCanvasPage() {
         const firstMedia = sanitizedBlocks.find((b) => b.type !== 'text');
         const firstText = sanitizedBlocks.find((b) => b.type === 'text');
 
+        const isMetaProvider = selectedInst?.provider === 'META_CLOUD' || selectedInst?.provider === 'WHATSAPP_CLOUD';
+
         const nextCfg: any = {
           ...((n.data.config as object) || {}),
           whatsappInstanceId: effectiveWppId || undefined,
           whatsappInstanceName: instName,
           whatsappPhone: instPhone,
+          useMetaTemplate: isMetaProvider && useMetaTemplate,
+          templateName: isMetaProvider && useMetaTemplate ? selectedTemplateName : undefined,
+          templateLanguage: isMetaProvider && useMetaTemplate ? selectedTemplateLang : undefined,
+          metaTemplateName: isMetaProvider && useMetaTemplate ? selectedTemplateName : undefined,
+          metaTemplateLanguage: isMetaProvider && useMetaTemplate ? selectedTemplateLang : undefined,
           blocks: sanitizedBlocks,
           messageType: firstMedia ? firstMedia.type : 'text',
           mediaUrl: firstMedia?.mediaUrl,
@@ -4249,6 +4297,180 @@ export default function AutomationCanvasPage() {
                     </p>
                   </div>
 
+                  {/* SELEÇÃO E BUSCA DE TEMPLATES OFICIAIS DA META (QUANDO PROVEDOR FOR META CLOUD API) */}
+                  {(() => {
+                    const effId = selectedWppInstanceId || flowWhatsappInstanceId;
+                    const inst = availableWppInstances.find((i) => i.id === effId);
+                    const isMeta = inst && (inst.provider === 'META_CLOUD' || inst.provider === 'WHATSAPP_CLOUD');
+                    if (!isMeta) return null;
+
+                    return (
+                      <div className="bg-gradient-to-r from-blue-950/40 via-[#131b2e] to-indigo-950/40 border border-blue-500/30 rounded-xl p-3.5 space-y-3 shadow-lg shadow-blue-950/30">
+                        <div className="flex items-center justify-between">
+                          <div className="flex items-center gap-2">
+                            <span className="w-2.5 h-2.5 rounded-full bg-blue-400 animate-pulse"></span>
+                            <span className="text-xs font-bold text-blue-200">
+                              WhatsApp Cloud API Oficial (Meta)
+                            </span>
+                          </div>
+                          <button
+                            type="button"
+                            onClick={() => fetchMetaTemplates(inst.id)}
+                            disabled={loadingTemplates}
+                            className="px-2.5 py-1 text-[11px] bg-blue-600/20 hover:bg-blue-600/30 text-blue-300 border border-blue-500/40 rounded-lg flex items-center gap-1.5 transition-colors disabled:opacity-50 cursor-pointer"
+                            title="Buscar templates aprovados na conta da Meta"
+                          >
+                            <RefreshCw className={`w-3 h-3 ${loadingTemplates ? 'animate-spin' : ''}`} />
+                            <span>{loadingTemplates ? 'Buscando...' : 'Buscar Templates'}</span>
+                          </button>
+                        </div>
+
+                        {/* Seletor de Modo: Template vs Mensagem Livre */}
+                        <div className="grid grid-cols-2 gap-2 bg-[#0c1017] p-1 rounded-lg border border-slate-800">
+                          <button
+                            type="button"
+                            onClick={() => setUseMetaTemplate(true)}
+                            className={`py-2 px-2.5 text-[11px] font-semibold rounded-md flex items-center justify-center gap-1.5 transition-all cursor-pointer ${
+                              useMetaTemplate
+                                ? 'bg-blue-600 text-white shadow-md shadow-blue-500/20 font-bold'
+                                : 'text-slate-400 hover:text-white hover:bg-slate-800/50'
+                            }`}
+                          >
+                            <CheckCircle2 className="w-3.5 h-3.5" />
+                            <span>Template Oficial Aprovado</span>
+                          </button>
+
+                          <button
+                            type="button"
+                            onClick={() => setUseMetaTemplate(false)}
+                            className={`py-2 px-2.5 text-[11px] font-semibold rounded-md flex items-center justify-center gap-1.5 transition-all cursor-pointer ${
+                              !useMetaTemplate
+                                ? 'bg-slate-700 text-white shadow-md font-bold'
+                                : 'text-slate-400 hover:text-white hover:bg-slate-800/50'
+                            }`}
+                          >
+                            <span>Mensagem Livre (Janela 24h)</span>
+                          </button>
+                        </div>
+
+                        {useMetaTemplate ? (
+                          <div className="space-y-2.5 pt-1">
+                            <div className="flex items-center justify-between">
+                              <label className="text-[11px] font-semibold text-slate-300">
+                                Selecione o Template Aprovado da Meta:
+                              </label>
+                              <a
+                                href="https://business.facebook.com/latest/whatsapp_manager/message_templates/"
+                                target="_blank"
+                                rel="noopener noreferrer"
+                                className="text-[11px] text-blue-400 hover:text-blue-300 hover:underline flex items-center gap-1"
+                              >
+                                <span>Criar novo no WhatsApp Manager</span>
+                                <ExternalLink className="w-3 h-3" />
+                              </a>
+                            </div>
+
+                            {metaTemplates.length > 0 ? (
+                              <select
+                                value={selectedTemplateName}
+                                onChange={(e) => {
+                                  const name = e.target.value;
+                                  setSelectedTemplateName(name);
+                                  const found = metaTemplates.find((t) => t.name === name);
+                                  if (found?.language) setSelectedTemplateLang(found.language);
+                                }}
+                                className="w-full bg-[#181c25] border border-blue-500/40 rounded-xl px-3 py-2 text-xs text-white focus:outline-none focus:border-blue-400 font-medium cursor-pointer"
+                              >
+                                <option value="">-- Selecione um template aprovado da Meta --</option>
+                                {metaTemplates.map((tpl) => (
+                                  <option key={tpl.id || tpl.name} value={tpl.name}>
+                                    {tpl.name} ({tpl.language || 'pt_BR'}) - [{tpl.status || 'APPROVED'}]
+                                  </option>
+                                ))}
+                              </select>
+                            ) : (
+                              <div className="p-3 rounded-xl bg-amber-950/40 border border-amber-500/30 text-amber-200 text-xs space-y-1.5">
+                                <div className="font-semibold flex items-center gap-1.5">
+                                  <AlertCircle className="w-4 h-4 text-amber-400" />
+                                  <span>Nenhum template aprovado listado ainda</span>
+                                </div>
+                                <p className="text-[11px] text-amber-300/80">
+                                  Clique em "Buscar Templates" acima ou crie um modelo no Gerenciador do WhatsApp para disparos em massa.
+                                </p>
+                                <a
+                                  href="https://business.facebook.com/latest/whatsapp_manager/message_templates/"
+                                  target="_blank"
+                                  rel="noopener noreferrer"
+                                  className="inline-flex items-center gap-1 font-semibold text-blue-400 hover:underline pt-1"
+                                >
+                                  <span>Abrir Gerenciador de Modelos da Meta</span>
+                                  <ExternalLink className="w-3 h-3" />
+                                </a>
+                              </div>
+                            )}
+
+                            {/* Preview do Template Selecionado */}
+                            {selectedTemplateName && (() => {
+                              const tpl = metaTemplates.find((t) => t.name === selectedTemplateName);
+                              const bodyComp = (tpl?.components || []).find((c: any) => c.type?.toUpperCase() === 'BODY');
+                              return (
+                                <div className="bg-[#0f1420] border border-blue-500/30 rounded-xl p-3 space-y-2">
+                                  <div className="flex items-center justify-between text-[11px] text-slate-400">
+                                    <span className="font-bold text-blue-300">Prévia do Template na Meta:</span>
+                                    <span className="px-1.5 py-0.5 rounded bg-emerald-950/60 text-emerald-400 border border-emerald-500/30 font-medium">
+                                      Status: {tpl?.status || 'APPROVED'}
+                                    </span>
+                                  </div>
+                                  <p className="text-xs text-slate-200 whitespace-pre-line leading-relaxed font-sans bg-black/30 p-2.5 rounded-lg border border-slate-800">
+                                    {bodyComp?.text || `[Template: ${selectedTemplateName}]`}
+                                  </p>
+                                  <p className="text-[10px] text-emerald-400 font-medium flex items-center gap-1">
+                                    <CheckCircle2 className="w-3 h-3" />
+                                    <span>Este modelo oficial fura a janela de 24h e entrega para 100% dos leads selecionados.</span>
+                                  </p>
+                                </div>
+                              );
+                            })()}
+                          </div>
+                        ) : (
+                          <div className="p-2.5 bg-amber-950/30 border border-amber-500/20 rounded-lg text-amber-300/90 text-[11px] flex items-start gap-2">
+                            <AlertCircle className="w-4 h-4 shrink-0 text-amber-400 mt-0.5" />
+                            <span>
+                              Atenção: Mensagens livres só chegam aos leads que interagiram com o seu WhatsApp nas últimas 24h. Para disparos em massa e listas frias, selecione <strong>Template Oficial Aprovado</strong>.
+                            </span>
+                          </div>
+                        )}
+                      </div>
+                    );
+                  })()}
+
+                  {(() => {
+                    const effId = selectedWppInstanceId || flowWhatsappInstanceId;
+                    const inst = availableWppInstances.find((i) => i.id === effId);
+                    const isMeta = inst && (inst.provider === 'META_CLOUD' || inst.provider === 'WHATSAPP_CLOUD');
+                    if (isMeta && useMetaTemplate) {
+                      return (
+                        <div className="p-4 rounded-xl bg-blue-950/20 border border-blue-500/20 text-center space-y-1.5 my-2">
+                          <p className="text-xs text-blue-200 font-semibold flex items-center justify-center gap-1.5">
+                            <CheckCircle2 className="w-4 h-4 text-emerald-400" />
+                            <span>
+                              {selectedTemplateName ? `Template Oficial "${selectedTemplateName}" ativo para este nó.` : 'Selecione um Template no menu acima.'}
+                            </span>
+                          </p>
+                          <p className="text-[11px] text-slate-400 max-w-sm mx-auto">
+                            O envio do Template Oficial da Meta garante a entrega para 100% dos contatos, inclusive novos leads ou contatos fora da janela de 24h. Os blocos de texto livre ficam desativados neste modo.
+                          </p>
+                        </div>
+                      );
+                    }
+                    return null;
+                  })()}
+
+                  {!(Boolean(
+                    availableWppInstances.find((i) => i.id === (selectedWppInstanceId || flowWhatsappInstanceId))?.provider === 'META_CLOUD' ||
+                    availableWppInstances.find((i) => i.id === (selectedWppInstanceId || flowWhatsappInstanceId))?.provider === 'WHATSAPP_CLOUD'
+                  ) && useMetaTemplate) && (
+                    <>
                   <div className="flex items-center justify-between">
                     <label className="text-slate-200 font-bold text-sm flex items-center gap-2">
                       Mensagem
@@ -4572,6 +4794,8 @@ export default function AutomationCanvasPage() {
                       )}
                     </div>
                   </div>
+                    </>
+                  )}
                 </div>
               )}
 
@@ -4692,12 +4916,21 @@ export default function AutomationCanvasPage() {
                   type="button"
                   onClick={() => {
                     if (selectedNode.type === 'whatsapp') {
-                      const incompleteMedia = wppBlocks.find(
-                        (b) => b.type !== 'text' && !b.mediaUrl && !b.mediaBase64
-                      );
-                      if (incompleteMedia) {
-                        alert('Por favor, selecione um arquivo para o bloco de arquivo ou remova o bloco antes de salvar.');
+                      const effId = selectedWppInstanceId || flowWhatsappInstanceId;
+                      const inst = availableWppInstances.find((i) => i.id === effId);
+                      const isMeta = inst && (inst.provider === 'META_CLOUD' || inst.provider === 'WHATSAPP_CLOUD');
+                      if (isMeta && useMetaTemplate && !selectedTemplateName) {
+                        alert('Por favor, selecione um Template aprovado da Meta para salvar este bloco, ou mude para o modo Mensagem Livre.');
                         return;
+                      }
+                      if (!useMetaTemplate) {
+                        const incompleteMedia = wppBlocks.find(
+                          (b) => b.type !== 'text' && !b.mediaUrl && !b.mediaBase64
+                        );
+                        if (incompleteMedia) {
+                          alert('Por favor, selecione um arquivo para o bloco de arquivo ou remova o bloco antes de salvar.');
+                          return;
+                        }
                       }
                       handleSaveMessage();
                     } else {

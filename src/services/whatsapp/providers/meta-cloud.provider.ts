@@ -21,6 +21,7 @@ export class MetaCloudProvider implements IWhatsAppProvider {
   private accessToken: string;
   private businessAccountId?: string;
   private baseUrl = 'https://graph.facebook.com/v21.0';
+  private static templateCache = new Map<string, { templates: WhatsAppTemplateItem[]; expiresAt: number }>();
 
   constructor(instance: {
     id: string;
@@ -313,19 +314,60 @@ export class MetaCloudProvider implements IWhatsAppProvider {
 
     const cleanPhone = this.cleanPhone(params.phone);
 
+    let targetLanguage = params.languageCode || 'pt_BR';
+    let expectedParamCount = -1; // -1 significa que não inspecionamos o template ainda
+
+    try {
+      const cached = this.wabaId ? MetaCloudProvider.templateCache.get(this.wabaId) : null;
+      let tplList = cached?.templates;
+      if (!tplList && this.wabaId) {
+        tplList = await this.getTemplates();
+      }
+      const foundTpl = tplList?.find((t) => t.name === params.templateName);
+      if (foundTpl) {
+        if (foundTpl.language) targetLanguage = foundTpl.language;
+        const bodyComp = (foundTpl.components || []).find((c: any) => c.type?.toUpperCase() === 'BODY');
+        if (bodyComp?.text) {
+          const matches = bodyComp.text.match(/\{\{(\d+)\}\}/g) || [];
+          expectedParamCount = matches.length;
+        } else {
+          expectedParamCount = 0;
+        }
+      }
+    } catch {}
+
     let components = params.components;
     if (!components && params.variables) {
-      const paramList = Object.values(params.variables).map((val) => ({
-        type: 'text' as const,
-        text: String(val ?? ''),
-      }));
-      if (paramList.length > 0) {
-        components = [
-          {
-            type: 'body',
-            parameters: paramList,
-          },
-        ];
+      if (expectedParamCount === 0) {
+        // Se o modelo é 100% estático sem variáveis {{1}}, não deve enviar parâmetros de body
+        components = undefined;
+      } else {
+        const orderedValues: string[] = [];
+        if (params.variables.nome || params.variables.primeiro_nome) {
+          orderedValues.push(params.variables.primeiro_nome || params.variables.nome || '');
+        }
+        if (params.variables.email) orderedValues.push(params.variables.email);
+        if (params.variables.telefone) orderedValues.push(params.variables.telefone);
+        for (const v of Object.values(params.variables)) {
+          if (!orderedValues.includes(String(v))) orderedValues.push(String(v));
+        }
+
+        const countToSend = expectedParamCount > 0 ? expectedParamCount : orderedValues.length;
+        const finalParams = orderedValues.slice(0, countToSend).map((val) => ({
+          type: 'text' as const,
+          text: String(val ?? ''),
+        }));
+
+        if (finalParams.length > 0) {
+          components = [
+            {
+              type: 'body',
+              parameters: finalParams,
+            },
+          ];
+        } else {
+          components = undefined;
+        }
       }
     }
 
@@ -336,7 +378,7 @@ export class MetaCloudProvider implements IWhatsAppProvider {
       type: 'template',
       template: {
         name: params.templateName,
-        language: { code: params.languageCode || 'pt_BR' },
+        language: { code: targetLanguage },
         components: components && components.length > 0 ? components : undefined,
       },
     };
@@ -445,7 +487,7 @@ export class MetaCloudProvider implements IWhatsAppProvider {
       const data = await response.json();
       const list = data?.data || [];
 
-      return list.map((item: any) => ({
+      const parsed: WhatsAppTemplateItem[] = list.map((item: any) => ({
         id: item.id || item.name,
         name: item.name,
         status: item.status, // APPROVED, PENDING, REJECTED
@@ -453,6 +495,13 @@ export class MetaCloudProvider implements IWhatsAppProvider {
         language: item.language,
         components: item.components || [],
       }));
+
+      MetaCloudProvider.templateCache.set(this.wabaId, {
+        templates: parsed,
+        expiresAt: Date.now() + 5 * 60 * 1000,
+      });
+
+      return parsed;
     } catch {
       return [];
     }
